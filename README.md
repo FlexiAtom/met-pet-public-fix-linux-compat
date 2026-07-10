@@ -10,14 +10,16 @@
 
 **Windows 用户** → 双击 **`启动桌宠.bat`**
 
-它会自动帮你搞定**一切**：
+它会自动帮你搞定大部分事情：
 
 | 阶段 | 自动做什么 | 需要你做什么 |
 |------|-----------|------------|
-| ① 找 Python | 检测系统是否已安装，没有就**自动下载便携版**到 `_python\` 目录 | 等一两分钟 |
-| ② 装依赖 | 自动 `pip install` PyQt5、PyTorch、Live2D、VITS 等所有需要的库 | 等几分钟 |
-| ③ 配置向导 | 弹出图形化设置窗口 | 选 AI 大脑、设语音 |
-| ④ 启动桌宠 | 自动运行 pet.py | 🐱 开玩 |
+| ① 装依赖 | 自动 pip install PyQt5 等 | 等几分钟 |
+| ② 配置向导 | 弹出图形化设置窗口 | 选 AI 大脑、设语音 |
+| ③ 启动桌宠 | 自动运行 pet.py | 🐱 开玩 |
+
+> ⚠️ Python 需要自行安装（启动脚本检测不到时会提示下载）。  
+> 推荐 [python.org](https://www.python.org/downloads/) 下载 Python 3.10~3.12，安装时勾选"Add Python to PATH"。
 
 > 所有下载都用**清华镜像**，国内用户下载飞快。如果哪天镜像挂了会自动切官方源。
 
@@ -26,9 +28,10 @@
 1. **AI 大脑** — 推荐选「Ollama」（免费，不需要任何 Key）
    - 向导可以帮你下载安装 Ollama + 拉取模型
    - 对话用 `qwen2.5:7b`，识图用 `minicpm-v`
-2. **语音** — 开/关，选中文还是日语
-   - **VITS 引擎**：轻量便携，模型已打包，开箱即用
-   - **GPT-SoVITS 引擎**：高表现力，需额外下载整合包
+2. **语音** — 开/关
+   - 语音引擎使用 **GPT-SoVITS** 本地推理
+   - 梅尔说日语（中文回复会自动翻译成日语后合成）
+   - 如果没装语音环境，向导会教你装
 
 > 不想用图形界面？复制 `config.example.json` 为 `config.json` 后手动编辑也一样。
 
@@ -42,18 +45,15 @@
 
 | 功能 | 说明 |
 |------|------|
-| 💬 **聊天** | 双击桌宠打开 Galgame 风格输入框，AI 会回复你。支持 Ollama / DeepSeek 两种后端 |
-| 🎤 **语音合成** | 文字回复会合成语音读出来，中/日双语可选。支持 **VITS**（轻量便携）和 **GPT-SoVITS**（高表现力）双引擎 |
-| 👀 **屏幕观察** | 定时截图 + 视觉 AI 分析你在干嘛，三层决策（场景摘要→策略评估→回复），偶尔主动吐槽 |
-| 🌐 **搜索辅助** | 发现屏幕上不认识的词会自行搜索后再吐槽，不做无根据的评论 |
-| 🖱️ **摸头互动** | 鼠标在头部区域左右拖拽，会触发摸头反应 |
-| 🎭 **换表情** | 右键菜单切换心情，立绘会变。**18 种表情 + 眨眼动画**，横跨 5 套服装 × 2 朝向 = **180+ 张差分立绘** |
-| 🎨 **双渲染引擎** | **Live2D 动态模型**（Cubism 3+，WebGL 渲染）或 **PNG 差分立绘**（高性能），右键一键切换 |
-| 📝 **记忆养成** | 记住你和它说过的话，好感度分 7 个等级（陌生人→挚友），每天有获取上限 |
-| 📊 **养成面板** | 右键打开半透明面板，看好感度、心情、回忆统计、背景 CG |
-| 😴 **待机模式** | 右键设待机，它会闭眼睡觉，窗口鼠标穿透 |
-| 💬 **对话气泡** | 角色头顶显示 Galgame 风格半透明姓名牌 + 文字气泡，淡入淡出动画 |
-| 📦 **离线安装** | 把 PyTorch 的 `.whl` 放进 `wheels\` 目录，自动跳过下载 |
+| 💬 **聊天** | 双击桌宠打开输入框，AI 会回复你。支持 Ollama / DeepSeek 两种后端 |
+| 🎤 **说话** | 文字回复会合成日语语音读出来（模型已打包，中文会自动翻译后合成） |
+| 👀 **偷看屏幕** | 它会定时看看你在干嘛，偶尔吐槽一句 |
+| 🖱️ **摸头** | 鼠标在头部左右拖拽，会有反应 |
+| 🎭 **换表情** | 右键菜单切换心情，立绘会变 |
+| 📝 **记性** | 它记得你和它说过的话，好感度会涨 |
+| 📊 **养成面板** | 右键打开面板，看好感度、心情、回忆 |
+| 😴 **待机** | 右键设待机，它会闭眼睡觉，鼠标穿透 |
+| 🔄 **双渲染** | Live2D 动态模型 或 PNG 差分立绘，右键切换 |
 
 ### 屏幕观察的聪明之处
 
@@ -67,53 +67,38 @@
 
 ## 📋 配置
 
-编辑 `config.json`：
+编辑 `config.json`（完整字段请参考 `config.example.json`）：
 
 ```json
 {
   "llm": {
-    "backend": "deepseek",        // "ollama" 或 "deepseek"
-    "host": "http://127.0.0.1:11434",  // Ollama 地址
-    "model": "deepseek-v4-flash",      // 对话模型名
-    "api_key": "sk-xxx",               // DeepSeek API Key
-    "api_base": "https://api.deepseek.com",  // API 地址（可换中转）
-    "temperature": 0.7,
-    "bridge_url": "http://127.0.0.1:18888"  // CC Switch 中转地址
+    "backend": "ollama",
+    "host": "http://127.0.0.1:11434",
+    "model": "qwen2.5:7b",
+    "api_key": "",
+    "api_base": "https://api.deepseek.com"
   },
   "vision": {
-    "model": "minicpm-v"           // 屏幕观察的视觉模型
+    "model": "minicpm-v"
   },
   "tts": {
+    "engine": "gpt_sovits",
     "enabled": true,
-    "engine": "vits",              // "vits" 或 "gpt_sovits"
-    "gpt_weights_dir": "./models/GPT_weights",
-    "sovits_weights_dir": "./models/SoVITS_weights",
-    "gpt_model": "mea_pro-e50.ckpt",
-    "sovits_model": "mea_pro_e24_s13704.pth",
-    "ref_dir": "./GPT-Sovits",
-    "top_k": 15, "top_p": 0.8, "temperature": 0.6, "speed": 1.0,
-    "translate_to_jp": true,       // 中文回复→日语语音
-    "voice_lang": "jp",
-    "translate_api_key": "",
-    "translate_model": "deepseek-chat"
-  },
-  "display": {
-    "scale": 0.5,                  // 窗口缩放
-    "fps": 30                      // 帧率
+    "translate_api_key": "your-api-key-here"
   },
   "character": {
     "name": "梅尔",
-    "default_outfit": "01",        // 默认服装编号
-    "default_direction": "A"       // 默认朝向 A/B
-  },
-  "sprite_dir": "./sprites",
-  "live2d": {
-    "model_dir": "./live2d/model/mea_live2d",
-    "enabled": true,               // true=Live2D, false=PNG
-    "scale": 0.15
+    "default_outfit": "01",
+    "default_direction": "A"
   }
 }
 ```
+
+**环境变量**（可选）：
+
+| 变量 | 用途 |
+|------|------|
+| `GSV_PYTHON` | GPT-SoVITS conda 环境的 python.exe 路径 |
 
 ### 运行
 
@@ -146,24 +131,23 @@ python pet.py
 | # | 配置项 / 环境变量 | 所属功能 | 是否需要 | 用途说明 |
 |---|------------------|---------|---------|---------|
 | 1 | `config.json` → `llm.api_key` | **AI 对话**（DeepSeek 后端） | 可选 | LLM 对话密钥。如果 `backend` 设为 `"deepseek"` 则需要；设为 `"ollama"` 则不需要 |
-| 2 | `config.json` → `tts.translate_api_key` | **TTS 日语翻译** | 可选 | 将中文回复翻译成日语再合成语音时使用。如果 AI 后端本身就是 DeepSeek，则自动共用同一个 Key |
+| 2 | `config.json` → `tts.translate_api_key` | **TTS 日语翻译** | 可选 | 将 AI 回复翻译成日语再合成语音时使用。如果 AI 后端本身就是 DeepSeek，则自动共用同一个 Key，无需额外填写 |
 | 3 | `config.json` → `llm.api_base` | **AI 对话** | 可选 | API 地址。默认 `https://api.deepseek.com/v1`，可改为其他 OpenAI 兼容 API |
 
 | 后端模式 | `config.json` 设置 | 需要什么 | 说明 |
 |---------|-------------------|---------|------|
-| **Ollama**（本地免费） | `"backend": "ollama"` | 不需要 API Key | 本地运行，免费，推荐 |
-| **DeepSeek API** | `"backend": "deepseek"` | DeepSeek API Key | 需要 `api_key`，填入 `config.json` |
+| **Ollama**（默认） | `"backend": "ollama"` | 不需要 API Key | 本地运行，免费，推荐 |
+| **DeepSeek API** | `"backend": "deepseek"` | DeepSeek API Key | 需要 `api_key`，填入 `config.json` 或设置环境变量 |
 
 > 👀 **关于屏幕识图**：偷看屏幕功能**始终使用 Ollama**（需要视觉模型如 minicpm-v），与 LLM 后端无关。即使 AI 对话选了 DeepSeek，想要识图功能也需要安装 Ollama + 视觉模型。
 
 ### 快速判断
 
 ```
-只用 Ollama（本地）+ 中文语音     → 不需要任何 API Key ✅
+只用 Ollama（本地）+ 不开语音     → 不需要任何 API Key ✅
 只用 Ollama（本地）+ 日语语音     → 只需要 translate_api_key（翻译用）
-用 DeepSeek 对话 + 中文语音       → 只需要 DEEPSEEK_API_KEY
+用 DeepSeek 对话 + 不开语音       → 只需要 DEEPSEEK_API_KEY
 用 DeepSeek 对话 + 日语语音       → 只需要 DEEPSEEK_API_KEY（翻译自动共用）
-只用 Ollama，不开语音             → 不需要任何 API Key ✅
 
 👀 屏幕识图功能：无论选什么后端，都需要 Ollama + 视觉模型（minicpm-v）
 ```
@@ -186,46 +170,34 @@ python pet.py
 
 ```
 mea-pet/
-├── 启动桌宠.bat            # 🎯 一键启动（自动装 Python + 依赖）
-├── setup_wizard.py          # 🎯 可视化配置向导（选后端、语音、装环境）
-├── pet.py                   # 主程序入口（透明窗口 + 对话气泡 + 事件循环）
-├── config.json              # 用户配置（已加入 .gitignore）
-├── config.example.json      # 配置模板（含所有可配置项）
-│
-├── chat.py                  # LLM 对话引擎（Ollama / DeepSeek 双后端）
-├── memory.py                # SQLite 记忆与养成系统（好感度 7 级 + 心情）
-├── status_panel.py          # 养成状态面板（半透明 CG 背景）
-├── chat_input.py            # Galgame 风格聊天输入框
-│
-├── renderer.py              # PNG 差分立绘渲染（18 种表情映射）
-├── live2d_widget.py         # Live2D OpenGL 渲染（Cubism 3+）
-│
-├── tts.py                   # 语音合成调度器（VITS / GPT-SoVITS 双引擎）
-├── vits_infer.py            # VITS 推理脚本
-├── vits_core/               # VITS 模型核心代码（monotonic_align / text / ...）
-├── vits_models/             # VITS 语音模型（已打包 G_latest.pth）
-├── vits_requirements.txt    # VITS 依赖清单
+├── setup_wizard.py          # 🎯 一键配置向导（推荐先运行）
+├── pet.py                   # 主程序入口
+├── config.json              # 用户配置（不会提交到 Git）
+├── config.example.json      # 配置模板
+├── chat.py                  # LLM 对话引擎（Ollama / DeepSeek）
+├── tts.py                   # GPT-SoVITS 语音合成
 ├── gsv_infer.py             # GPT-SoVITS 推理子进程
-│
-├── watcher.py               # 屏幕观察模块（三层决策系统）
-├── utils.py                 # 工具函数（安全 print、日志、UTF-8 兼容）
-│
-├── sprites/                 # 📸 PNG 差分立绘（5 套服装 × 2 朝向 × 多表情）
-│   ├── mea01A_001.png       # 服装01-朝向A-表情001
-│   ├── mea01B_002.png       # 服装01-朝向B-表情002
-│   └── ...
-├── live2d/                  # Live2D 模型与资源
-│   └── model/mea_live2d/   # 默认 Live2D 模型
-├── GPT-Sovits/              # GPT-SoVITS 参考音频
-│   ├── clam/
-│   ├── normal/
-│   └── soft/
-│
-├── voice_cache/             # 语音缓存（运行时自动生成）
-├── audio_cache/             # 临时音频文件
-├── wheels/                  # 📦 可选的离线 .whl 安装包（放进这里自动用）
-├── _python/                 # 🆕 便携版 Python（自动下载到这里）
-└── mea_memory.db            # SQLite 记忆数据库（运行时自动创建）
+├── live2d_widget.py         # Live2D OpenGL 渲染
+├── pet_live2d.py            # Live2D WebEngine 版
+├── renderer.py              # PNG 差分立绘渲染
+├── memory.py                # SQLite 记忆与养成系统
+├── watcher.py               # 屏幕观察模块
+├── status_panel.py          # 养成状态面板
+├── chat_input.py            # Galgame 风格输入框
+├── utils.py                 # 工具函数
+├── precache_interactions.py # 预生成互动语音缓存
+├── pre_render_voices.py     # 预合成语音
+├── weight.json              # TTS 模型权重注册表
+├── live2d/                  # Live2D 模型与 JS 资源
+│   ├── index.html
+│   ├── model/mea_live2d/    # 默认 Live2D 模型
+│   └── js/                  # Cubism SDK 与渲染库
+├── models/                  # TTS 模型权重
+│   ├── GPT_weights/         # GPT 模型（mea_pro-e50.ckpt）
+│   └── SoVITS_weights/      # SoVITS 模型（mea_pro_e24_s13704.pth）
+├── GPT-Sovits/              # TTS 参考音频（日语，normal/clam/soft 三种情绪）
+├── sprites/                 # PNG 差分立绘（已包含梅尔全套）
+└── .gitignore
 ```
 
 ---
@@ -398,10 +370,7 @@ mea-pet/
 
 ## 🙏 致谢
 
-- [Live2D Cubism](https://www.live2d.com/) — Live2D 渲染引擎
-- [GPT-SoVITS-CPUFast](https://github.com/baicai-1145/GPT-SoVITS-CPUFast) — 推理加速引擎
-- [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) — 语音合成
-- [VITS-fast-fine-tuning](https://github.com/Plachtaa/VITS-fast-fine-tuning) — VITS 训练框架
-- [Ollama](https://ollama.ai/) — 本地 LLM 运行
-- [DeepSeek](https://deepseek.com/) — 对话 API
-- [Sakura](https://github.com/Rvosy/sakura) — 主动搭话 prompt 架构参考
+- [Live2D Cubism](https://www.live2d.com/) - Live2D 渲染引擎
+- [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) - 语音合成
+- [Ollama](https://ollama.ai/) - 本地 LLM 运行
+- [DeepSeek](https://deepseek.com/) - 对话 API
