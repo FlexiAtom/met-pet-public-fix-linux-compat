@@ -152,7 +152,7 @@ window-rule {
 ```
 
 如果你使用Fcitx5
-````
+```
 QT_PLUGIN_PATH=/usr/lib/qt/plugins
 # 实际位置视优先级决定
 ```
