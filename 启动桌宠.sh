@@ -80,20 +80,41 @@ if ! $PY_CMD -m pip --version &>/dev/null; then
     }
 fi
 
-# ======== 4. 安装基础依赖 ========
+# ======== 4. 选择 pip 镜像 ========
+MIRROR_URL=""
+MIRROR_CHOICE="1"
+if [[ -t 0 ]]; then
+    echo ""
+    echo "请选择 pip 安装源:"
+    echo "  1) PyPI 默认源 (国际)"
+    echo "  2) 清华 TUNA 镜像 (国内)"
+    echo "  3) 跳过依赖安装"
+    read -r -p "请输入选项 [1-3] (默认: 1): " MIRROR_CHOICE
+    MIRROR_CHOICE="${MIRROR_CHOICE:-1}"
+    case "$MIRROR_CHOICE" in
+        2) MIRROR_URL="https://pypi.tuna.tsinghua.edu.cn/simple" ;;
+        3) echo "[MeaPet] ⏭️  跳过依赖安装"; ;;
+        *) MIRROR_URL="" ;;
+    esac
+fi
+
+# ======== 5. 安装基础依赖 ========
 REQ_FILE="$SCRIPT_DIR/linux_requirements.txt"
 if [[ ! -f "$REQ_FILE" ]]; then
     echo "[MeaPet] ⚠️  未找到 linux_requirements.txt，尝试使用 requirements.txt ..."
     REQ_FILE="$SCRIPT_DIR/requirements.txt"
 fi
 
-if [[ -f "$REQ_FILE" ]]; then
+if [[ "$MIRROR_CHOICE" == "3" ]]; then
+    echo "[MeaPet] 跳过依赖安装"
+elif [[ -f "$REQ_FILE" ]]; then
     echo "[MeaPet] 正在安装基础依赖 ..."
     echo "[MeaPet] 💡 Live2D 模型支持需手动配置，下载地址及说明请参阅项目 README"
-    $PY_CMD -m pip install -r "$REQ_FILE" \
-        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-        --trusted-host pypi.tuna.tsinghua.edu.cn \
-        -q || {
+    PIP_ARGS=(-r "$REQ_FILE" -q)
+    if [[ -n "$MIRROR_URL" ]]; then
+        PIP_ARGS+=(--index-url "$MIRROR_URL" --trusted-host pypi.tuna.tsinghua.edu.cn)
+    fi
+    $PY_CMD -m pip install "${PIP_ARGS[@]}" || {
         echo "[MeaPet] ❌ 基础依赖安装失败"
         exit 1
     }
@@ -101,7 +122,23 @@ else
     echo "[MeaPet] ⚠️  未找到任何 requirements 文件，跳过依赖安装"
 fi
 
-# ======== 5. 启动 ========
+# ======== 6. 检查 Qt 平台插件 ========
+if ! $PY_CMD -c "from PyQt5.QtCore import QT_VERSION_STR; print(QT_VERSION_STR)" 2>/dev/null; then
+    echo "[MeaPet] ⚠️  PyQt5 未安装或 Qt 库缺失"
+    echo "    Ubuntu/Debian: sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libegl1 libgl1 libopengl0"
+    echo "    Fedora:        sudo dnf install libxcb xcb-util-cursor libxkbcommon-x11 libglvnd-glx"
+    echo "    Arch:          sudo pacman -S libxcb xcb-util-cursor libxkbcommon libglvnd"
+fi
+
+# ======== 7. 启动 ========
 if [[ ! -f "$SCRIPT_DIR/config.json" ]]; then
     echo "[MeaPet] 首次运行，启动配置向导 ..."
-    $
+    QT_QPA_PLATFORM=xcb "$PY_CMD" "$SCRIPT_DIR/setup_wizard.py"
+    if [[ ! -f "$SCRIPT_DIR/config.json" ]]; then
+        echo "[MeaPet] 配置未完成，退出。"
+        exit 0
+    fi
+fi
+
+echo "[MeaPet] 启动桌宠 ..."
+QT_QPA_PLATFORM=xcb "$PY_CMD" "$SCRIPT_DIR/pet.py"
