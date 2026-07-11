@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mea-pet"
+description = "梅尔桌宠 — 一个会说话、会吐槽、会记住你的桌面宠物"
+version = "1.0.0"
+license = "MIT"
+authors = [
+    { name = "祘Il", email = "3132190387@qq.com" },
+    { name = "FlexiAtom", email = "3685587367@qq.com" },
+]
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+keywords = [
+    "desktop-pet",
+    "live2d",
+    "ai-chat",
+    "tts",
+    "pyqt5",
+    "ollama",
+    "gpt-sovits",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Environment :: X11 Applications :: Qt",
+    "Topic :: Games/Entertainment",
+    "Topic :: Desktop Environment",
+]
+
+dependencies = [
+    "PyQt5>=5.15",
+    "Pillow>=10.0",
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+opengl = [
+    "PyOpenGL>=3.1",
+]
+vits = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "soundfile",
+    "numpy<2",
+    "scipy",
+    "librosa",
+    "Cython",
+    "pyopenjtalk-prebuilt",
+    "unidecode",
+    "jamo",
+    "pypinyin",
+    "jieba",
+    "cn2an",
+    "inflect",
+    "eng_to_ipa",
+    "ko_pron",
+    "opencc",
+    "indic_transliteration",
+    "num_thai",
+    "setuptools==69.5.1",
+]
+webengine = [
+    "PyQtWebEngine>=5.15",
+]
+win32 = [
+    "pywin32>=305 ; platform_system == 'Windows'",
+]
+linux = [
+    "pillow==12.3.0",
+    "PyOpenGL==3.1.10",
+    "PyQt5==5.15.11",
+]
+all = [
+    "mea-pet[opengl,vits,webengine,win32,linux]",
+]
+
+[project.urls]
+Homepage = "https://github.com/suan-11/mea-pet-public"
+Repository = "https://github.com/suan-11/mea-pet-public"
+Issues = "https://github.com/suan-11/mea-pet-public/issues"
+
+[tool.setuptools]
+packages = []
+
+[tool.setuptools.package-data]
+"*" = ["*.png", "*.wav", "*.json", "*.ckpt", "*.pth"]

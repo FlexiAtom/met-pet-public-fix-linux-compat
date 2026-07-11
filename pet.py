@@ -31,7 +31,16 @@ from utils import safe_print, log_error, ensure_utf8_stdout
 ensure_utf8_stdout()
 
 from renderer import SpriteRenderer, MOOD_TO_EXPRESSION
-from live2d_widget import Live2DModel, Live2DWidget, init_live2d, dispose_live2d
+
+try:
+    from live2d_widget import Live2DModel, Live2DWidget, init_live2d, dispose_live2d
+except (ImportError, ModuleNotFoundError):
+    Live2DModel = None
+    Live2DWidget = None
+    init_live2d = lambda: None
+    dispose_live2d = lambda: None
+    safe_print("[pet] live2d-py 未安装，将使用 PNG 立绘")
+
 from chat import ChatEngine, create_engine_from_config, SYSTEM_PROMPT
 from memory import MeaMemory
 from status_panel import StatusPanel
@@ -712,7 +721,11 @@ class MeaPet(QWidget):
     # ========================
 
     def _init_live2d(self):
-    # 初始化 Live2D widget 替代 PNG 立绘
+        """初始化 Live2D widget 替代 PNG 立绘"""
+        if Live2DModel is None:
+            safe_print("[pet] Live2D 不可用，跳过初始化")
+            self._use_live2d = False
+            return
         l2d_cfg = self.config.get("live2d", {})
         model_dir = l2d_cfg.get("model_dir", "")
         safe_print(f"[live2d] 开始初始化，model_dir={model_dir}")
