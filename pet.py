@@ -475,6 +475,11 @@ class MeaPet(QWidget):
     def __init__(self, config_path: str = "config.json"):
         super().__init__()
         self.config = self._load_config(config_path)
+        # 在 __init__ 中，self.config = self._load_config(config_path) 之后添加
+        from config_checker import check_config_lines
+        if not check_config_lines(config_path):
+            self._show_bubble("配置文件坏了喵", 5000)
+
         self._settings = self._load_settings()
         safe_print(f"[settings] 加载配置: "
            f"bubble_default={self._settings['bubble_duration_ms']['default']}, "
@@ -530,10 +535,14 @@ class MeaPet(QWidget):
             "tts": {
                 "sync_with_audio": False
             },
-            "display": {  # ← 新增
+            "display": {
                 "scale": 1.0, # 基础缩放，默认 1.0（代码内会乘 1.25）
                 "size_factor": 1.0 # 额外倍率
-            }
+            },
+            "watcher_interval": {
+                "min_ms": 60000,          # 3 分钟
+                "max_ms": 600000           # 6 分钟
+            },
         }
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_settings.json")
         try:
@@ -1650,10 +1659,15 @@ class MeaPet(QWidget):
     # 屏幕观察（截屏吐槽）
     # ========================
     def _start_watcher_timer(self):
-        """随机间隔 3~6 分钟"""
-        import random as r
-        ms = r.randint(180_000, 360_000)  # 3-6 分钟
+        """随机间隔，从配置读取范围"""
+        interval = self._settings.get("watcher_interval", {"min_ms": 60000, "max_ms": 600000})
+        min_ms = interval.get("min_ms", 60000)
+        max_ms = interval.get("max_ms", 600000)
+        if min_ms > max_ms:
+            min_ms, max_ms = max_ms, min_ms  # 保证最小值不大于最大值
+        ms = random.randint(min_ms, max_ms)
         self._watcher_timer.start(ms)
+
 
     def _do_screen_watch(self, force: bool = False):
         """截屏 + 视觉吐槽（含冷落感知）"""

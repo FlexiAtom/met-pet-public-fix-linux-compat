@@ -13,4 +13,8 @@
     "scale": 1.0,
     "size_factor": 0.77
   }
+  "watcher_interval": {
+      "min_ms": 180000,
+      "max_ms": 360000
+  }
 }
