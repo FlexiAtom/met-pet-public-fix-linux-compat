@@ -22,4 +22,4 @@ Thumbs.db
 # IDE 配置
 .vscode/
 .idea/ 
- 
+ tts_debug.log
