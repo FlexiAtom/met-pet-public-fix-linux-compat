@@ -529,6 +529,10 @@ class MeaPet(QWidget):
             },
             "tts": {
                 "sync_with_audio": False
+            },
+            "display": {  # ← 新增
+                "scale": 1.0, # 基础缩放，默认 1.0（代码内会乘 1.25）
+                "size_factor": 1.0 # 额外倍率
             }
         }
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_settings.json")
@@ -571,7 +575,6 @@ class MeaPet(QWidget):
         # self.setWindowRole("desktop-pet")  # 有些 WM 认 role
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
-        self.bubble = DialogueBox(None)
 
 
         # 对话气泡（独立浮窗）
@@ -580,9 +583,10 @@ class MeaPet(QWidget):
     def _init_renderer(self):
         """初始化渲染器：先 PNG（快速显示），Live2D 延后异步加载"""
         char = self.config.get("character", {})
-        display_cfg = self.config.get("display", {})
-        self._scale = display_cfg.get("scale", 1.0) * 1.25  # 放大 25%
+        display_cfg = self._settings.get("display", {})   # ← 改为从 _settings 读取
+        self._scale = display_cfg.get("scale", 0.5)  # 取消硬编码放大 25%
         self._size_factor = display_cfg.get("size_factor", 1.0)
+        
         self._use_live2d = False
         self._l2d_model = None
         self._l2d_pending = False
@@ -601,6 +605,7 @@ class MeaPet(QWidget):
         self.sprite_label.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.sprite_label.show()
         self.renderer = SpriteRenderer(sprite_dir, outfit, direction)
+        safe_print(f"[toggle] PNG renderer 创建成功: {self.renderer is not None}")
         self.renderer.expression_changed.connect(self._on_sprite_changed)
         self._update_sprite()
         self.renderer.start_blink_animation()
@@ -623,6 +628,7 @@ class MeaPet(QWidget):
             png_label = self.sprite_label
 
             self._init_live2d()
+            safe_print(f"[toggle] _init_live2d 后，_use_live2d={self._use_live2d}, renderer={self.renderer is not None}")
 
             # 隐藏并清理 PNG 标签
             if png_label:
@@ -706,10 +712,12 @@ class MeaPet(QWidget):
     # ========================
 
     def _init_live2d(self):
-        """初始化 Live2D widget 替代 PNG 立绘"""
+    # 初始化 Live2D widget 替代 PNG 立绘
         l2d_cfg = self.config.get("live2d", {})
         model_dir = l2d_cfg.get("model_dir", "")
+        safe_print(f"[live2d] 开始初始化，model_dir={model_dir}")
         if not os.path.isdir(model_dir):
+            safe_print(f"[live2d] 模型目录不存在，回退至 PNG")
             self._use_live2d = False
             return
         self._l2d_model = Live2DModel(model_dir)
@@ -719,8 +727,6 @@ class MeaPet(QWidget):
         widget.head_patted.connect(self._on_head_patted)
         widget.tail_patted.connect(self._on_tail_patted)
         widget.show()
-        # Live2D 模型偏右偏上，左移下移让角色居中傻福吧你移你冯我靠
-        # 我的发还有第二关还以为只在live2d_widget里
         w0 = widget.width()
         h0 = widget.height()
         shift_x = int(w0 * 0.00)
@@ -728,6 +734,8 @@ class MeaPet(QWidget):
         widget.move(-shift_x, shift_y)
         widget.resize(w0 + shift_x, h0)
         self.resize(w0, h0)
+        safe_print(f"[live2d] 初始化成功")
+
 
     def _save_config(self):
         """保存配置到 config.json"""
@@ -1093,6 +1101,7 @@ class MeaPet(QWidget):
         self._update_sprite()
 
     def _size_factor_preview(self, factor: float):
+        safe_print(f"[resize] 进入，factor={factor}, _use_live2d={self._use_live2d}, renderer={self.renderer is not None}")
         """滑块拖动时实时预览立绘大小"""
         self._size_factor = factor
         if self._use_live2d and self.sprite_label:
@@ -1104,6 +1113,9 @@ class MeaPet(QWidget):
             self._apply_hit_region()
             QApplication.processEvents()
         else:
+            if self.renderer is None:
+                safe_print("[resize] ERROR: renderer is None，跳过 PNG 缩放")
+                return
             pixmap = self.renderer.get_current_pixmap()
             if not pixmap.isNull():
                 new_w = max(80, int(pixmap.width() * self._scale * factor))
@@ -1129,9 +1141,21 @@ class MeaPet(QWidget):
         if dialog.exec_() == QDialog.Accepted:
             new_factor = dialog.get_value()
             self._size_factor = new_factor
-            self.config.setdefault("display", {})["size_factor"] = round(new_factor, 2)
-            self._save_config()
-            self._show_bubble(f"立绘大小已设为 {int(new_factor*100)}%", 1500)
+            # 更新 _settings 并保存到 config_settings.json
+            self._settings.setdefault("display", {})["size_factor"] = round(new_factor, 2)
+            self._save_settings()          # ← 新增保存方法
+
+    def _save_settings(self):
+        """保存 config_settings.json"""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_settings.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._settings, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            safe_print(f"[settings] 保存失败: {e}")
+
+
+
 
     def _position_bubble(self):
         """把消息框定位到立绘下方，与腿部重叠"""
@@ -1519,7 +1543,6 @@ class MeaPet(QWidget):
             if hasattr(self, '_pending_reply'):
                 reply, mood = self._pending_reply
                 del self._pending_reply
-                self._on_watch_tts_and_show(result)
 
                 
         # 没有待处理的 worker 就停止
@@ -1783,6 +1806,7 @@ class MeaPet(QWidget):
 
 
     def _toggle_render_mode(self):
+        safe_print(f"[toggle] 进入切换，当前 _use_live2d={self._use_live2d}, renderer={self.renderer is not None}")
         """切换 Live2D / PNG 立绘渲染模式"""
         # 停止当前渲染器
         if self._use_live2d:
@@ -1806,6 +1830,7 @@ class MeaPet(QWidget):
             outfit = char.get("default_outfit", "01")
             direction = char.get("default_direction", "A")
             self.renderer = SpriteRenderer(sprite_dir, outfit, direction)
+            safe_print(f"[toggle] PNG renderer 创建成功: {self.renderer is not None}")
             self.renderer.expression_changed.connect(self._on_sprite_changed)
             self._update_sprite()
             self.renderer.start_blink_animation()
@@ -1823,12 +1848,18 @@ class MeaPet(QWidget):
                 self.sprite_label.deleteLater()
                 self.sprite_label = None
             self._use_live2d = True
-            self._init_live2d()
+            self._init_live2d()          # 这会创建新的 sprite_label
+            # 确保新控件可见
+            if self.sprite_label:
+                self.sprite_label.show()
+                self.sprite_label.raise_()
+            self.show()                  # 确保主窗口可见
             if self._size_factor != 1.0:
                 self._size_factor_preview(self._size_factor)
             self._apply_hit_region()
+            self._position_bubble()
             self._show_bubble("🎭 Live2D 模式喵～", 2500)
-        self._position_bubble()
+        
 
         # 更新配置并保存
         self.config.setdefault("live2d", {})["enabled"] = self._use_live2d
