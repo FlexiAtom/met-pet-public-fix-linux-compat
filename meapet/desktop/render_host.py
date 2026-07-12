@@ -14,6 +14,7 @@ from meapet.desktop.widgets import (
     SizeScaleDialog,
     calculate_bubble_stack_opacities,
 )
+from meapet.desktop import status_language
 from meapet.utils import safe_print
 
 
@@ -661,7 +662,7 @@ class PetRenderHostMixin:
         if self._standby:
             self._watcher_timer.stop()
             self._safe_set_expression("011")
-            self._show_bubble("💤 梅尔酱待机中……", 0)
+            self._show_bubble(status_language.standby_on(), 0)
             self._position_bubble()
             self._set_standby_region()
         else:
@@ -671,10 +672,13 @@ class PetRenderHostMixin:
                 clear_bubbles()
             elif hasattr(self, "bubble") and self.bubble:
                 self.bubble.hide()
-            self._show_bubble("✨ 梅尔酱回来了喵～", 2500)
+            self._show_bubble(status_language.standby_off(), 2500)
             self._position_bubble()
             self._apply_hit_region()
             self._start_watcher_timer()
+        refresh_tray = getattr(self, "_refresh_tray_state", None)
+        if callable(refresh_tray):
+            refresh_tray()
 
     def _set_standby_region(self):
         if sys.platform == "win32":
@@ -710,7 +714,7 @@ class PetRenderHostMixin:
             self._live2d_startup_widget = None
             self._init_png_renderer()
             self._apply_hit_region()
-            self._show_bubble("🎭 切回 PNG 立绘喵～", 2500)
+            self._show_bubble("已切回 PNG 立绘喵", 2500)
             self.config.setdefault("live2d", {})["enabled"] = False
             self._save_config()
         else:
@@ -736,7 +740,7 @@ class PetRenderHostMixin:
 
             def announce_mode_change():
                 if self._use_live2d:
-                    self._show_bubble("🎭 Live2D 模式喵～", 2500)
+                    self._show_bubble("已切换到 Live2D 喵", 2500)
                 else:
                     self._show_bubble("Live2D 加载失败，已切回 PNG 喵", 3000)
 

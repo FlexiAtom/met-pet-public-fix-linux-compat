@@ -8,6 +8,7 @@ from PyQt5.QtCore import QTimer
 
 from meapet.utils import safe_print, log_error, debug_enabled
 from meapet.chat.engine import SYSTEM_PROMPT
+from meapet.desktop import status_language
 from meapet.desktop.workers import ChatWorker, TTSWorker
 from meapet.desktop.chat_input import ChatInputBox
 
@@ -36,6 +37,8 @@ class PetChatFlowMixin:
                     pass
 
         self._chat_input = ChatInputBox(None)
+        if getattr(self, "_awaiting_reply", False):
+            self._chat_input.set_busy(True, status_language.thinking_busy())
 
         # 以编辑器实际尺寸居中，避免 UI 调整后仍依赖旧的硬编码宽度。
         input_x = self.pos().x() + (self.width() - self._chat_input.width()) // 2
@@ -49,6 +52,11 @@ class PetChatFlowMixin:
 
     def _on_input_submit(self, text: str):
         """用户提交了输入"""
+        if getattr(self, "_awaiting_reply", False):
+            safe_print("[pet] 对话被拒绝：正在等待回复中")
+            self._show_bubble(status_language.thinking_busy(), 2500)
+            self._position_bubble()
+            return
         self._record_interaction()
         _log_private_text("[pet] 收到输入", text)
         self._show_bubble("……？", 1500)
@@ -59,13 +67,18 @@ class PetChatFlowMixin:
         """执行 LLM 对话（后台线程）"""
         if self._awaiting_reply:
             safe_print("[pet] 对话被拒绝：正在等待回复中")
+            self._show_bubble(status_language.thinking_busy(), 2500)
+            self._position_bubble()
             return
         self._awaiting_reply = True
         self._safe_set_mood("talking")
         _log_private_text("[pet] 发送给 LLM", message)
 
         # 显示思考中提示
-        self._show_bubble("💭 梅尔正在思考……", self.config["bubble_duration_ms"]["thinking"])  # 0 = 持久显示
+        self._show_bubble(
+            status_language.thinking(),
+            self.config["bubble_duration_ms"]["thinking"],
+        )  # 0 = 持久显示
         self._position_bubble()
 
         # 停止旧 worker（防止泄漏）
@@ -281,14 +294,18 @@ class PetChatFlowMixin:
             "pet_chat",
             err if debug_enabled() else f"error_chars={len(err or '')}",
         )
-        self.show_reply(f"出错啦：{err}", "annoyed", duration_ms=10000)
+        self.show_reply(
+            f"{status_language.chat_error_prefix()}{err}",
+            "annoyed",
+            duration_ms=10000,
+        )
         self._awaiting_reply = False
 
     def _on_chat_timeout(self):
         """ChatWorker 超时 — 强制终止线程并释放锁"""
         safe_print("[pet] Chat超时，已释放对话锁")
         self._awaiting_reply = False
-        self._show_bubble("唔…好像没响应喵。再试一次？", 3000)
+        self._show_bubble(status_language.chat_timeout(), 3000)
         self._position_bubble()
         if hasattr(self, '_chat_worker') and self._chat_worker:
             if self._chat_worker.isRunning():
@@ -355,7 +372,7 @@ class PetChatFlowMixin:
         if duration_ms is None:
             duration_ms = self.config["bubble_duration_ms"]["reply"]
         self._safe_set_mood(mood)
-        self._show_bubble(text, max(duration_ms, 3000))
+        self._show_bubble(text, max(duration_ms, 3000), mood=mood)
         self._position_bubble()
 
 

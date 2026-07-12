@@ -52,11 +52,22 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         self.enable_cb.setChecked(True)
         self.enable_cb.toggled.connect(self._toggle)
         layout.addWidget(self.enable_cb)
+        tts_hint = QLabel("想先开玩可暂时关闭；本地引擎需要额外模型，云端 TTS 只需 API Key。")
+        tts_hint.setObjectName("HelperText")
+        tts_hint.setWordWrap(True)
+        layout.addWidget(tts_hint)
+
+        self.engine_details_toggle = QCheckBox("显示引擎详细设置")
+        self.engine_details_toggle.setChecked(False)
+        self.engine_details_toggle.setAccessibleName("显示引擎详细设置")
+        self.engine_details_toggle.setToolTip("关闭后只保留总开关，适合先开玩再细调")
+        self.engine_details_toggle.toggled.connect(self._sync_engine_details_visibility)
+        layout.addWidget(self.engine_details_toggle)
 
         # ═══ 语音后端选择 ═══
-        backend_label = QLabel("选择语音引擎：")
-        backend_label.setObjectName("FieldLabel")
-        layout.addWidget(backend_label)
+        self.backend_label = QLabel("选择语音引擎：")
+        self.backend_label.setObjectName("FieldLabel")
+        layout.addWidget(self.backend_label)
 
         self.backend_combo = QComboBox()
         self.backend_combo.setObjectName("TtsEngine")
@@ -293,6 +304,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         self.translate_key.setAccessibleName("翻译备用 DeepSeek API Key")
         tf.addWidget(self.translate_key)
         layout.addWidget(self.translate_frame)
+        self._sync_engine_details_visibility()
 
         layout.addStretch()
         self._tl_widgets = []
@@ -350,9 +362,31 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
                 self.setup_vits_btn.setVisible(False)
             if hasattr(self, "gsv_container"):
                 self.gsv_container.setVisible(False)
+        if hasattr(self, "engine_details_toggle"):
+            self.engine_details_toggle.setEnabled(bool(on))
+            self._sync_engine_details_visibility()
 
     def _toggle_backend(self):
         """切换语音后端：MiMo / VITS / GPT-SoVITS"""
+        if (
+            hasattr(self, "engine_details_toggle")
+            and not self.engine_details_toggle.isChecked()
+        ):
+            # 细节折叠时只隐藏控件，避免与 _sync_engine_details_visibility 递归
+            for attr in (
+                "backend_label",
+                "backend_combo",
+                "mimo_tts_frame",
+                "vits_python_frame",
+                "vits_status",
+                "setup_vits_btn",
+                "gsv_container",
+                "translate_frame",
+            ):
+                w = getattr(self, attr, None)
+                if w is not None:
+                    w.setVisible(False)
+            return
         engine = self.backend_combo.currentData()
         is_mimo = engine == "mimo"
         is_vits = engine == "vits"
@@ -379,6 +413,33 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
 
         if is_vits:
             self._check_vits()
+
+    def _sync_engine_details_visibility(self, *_args) -> None:
+        """折叠引擎细节，只保留总开关时更适合首次上手。"""
+        show = bool(
+            self.enable_cb.isChecked()
+            and getattr(self, "engine_details_toggle", None)
+            and self.engine_details_toggle.isChecked()
+        )
+        if hasattr(self, "backend_label"):
+            self.backend_label.setVisible(show)
+        self.backend_combo.setVisible(show)
+        if not show:
+            for attr in (
+                "mimo_tts_frame",
+                "vits_python_frame",
+                "vits_status",
+                "setup_vits_btn",
+                "gsv_container",
+                "translate_frame",
+            ):
+                w = getattr(self, attr, None)
+                if w is not None:
+                    w.setVisible(False)
+            return
+        # 展开时交回原有后端显隐逻辑
+        if self.enable_cb.isChecked():
+            self._toggle_backend()
 
     def set_engine(self, engine: str):
         """按 data 值选中语音引擎。"""

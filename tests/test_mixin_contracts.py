@@ -54,8 +54,8 @@ class _FakeBubble:
     def __init__(self):
         self.texts = []
 
-    def show_text(self, text, duration_ms=0):
-        self.texts.append((text, duration_ms))
+    def show_text(self, text, duration_ms=0, mood=None, **kwargs):
+        self.texts.append((text, duration_ms, mood))
 
 
 class _FakeTTS:
@@ -112,9 +112,9 @@ class _Composite:
         from meapet.desktop.chat_flow import PetChatFlowMixin
         return PetChatFlowMixin.show_reply(self, text, mood, duration_ms)
 
-    def _show_bubble(self, text, duration_ms=None):
+    def _show_bubble(self, text, duration_ms=None, mood=None):
         from meapet.desktop.interaction import PetInteractionMixin
-        return PetInteractionMixin._show_bubble(self, text, duration_ms)
+        return PetInteractionMixin._show_bubble(self, text, duration_ms, mood=mood)
 
     def _speak_and_show(self, text, duration_ms, mood="neutral"):
         from meapet.desktop.chat_flow import PetChatFlowMixin

@@ -1234,5 +1234,113 @@ class UiRefactorTests(unittest.TestCase):
         self.assertEqual(confirm.call_args.kwargs["timeout_seconds"], 5)
 
 
+
+    def test_status_language_covers_core_states(self) -> None:
+        from meapet.desktop import status_language
+
+        self.assertIn("思考", status_language.thinking())
+        self.assertIn("稍等", status_language.thinking_busy())
+        self.assertIn("截屏", status_language.menu_watch_enable())
+        self.assertIn("Live2D", status_language.menu_render_to_live2d())
+        self.assertIn("回忆", status_language.empty_memories())
+
+    def test_chat_input_set_busy_disables_send(self) -> None:
+        from meapet.desktop.chat_input import ChatInputBox
+
+        composer = self._track(ChatInputBox())
+        composer.set_busy(True, "还在想上一条…稍等喵")
+        self.assertFalse(composer.send_button.isEnabled())
+        self.assertTrue(composer.input.isReadOnly())
+        self.assertIn("还在想", composer.feedback_label.text())
+        composer.set_busy(False)
+        self.assertTrue(composer.send_button.isEnabled())
+        self.assertFalse(composer.input.isReadOnly())
+
+
+    def test_bubble_mood_accent_changes_border_color(self) -> None:
+        from meapet.desktop.widgets import DialogueBox, MOOD_BORDER_COLORS
+
+        bubble = self._track(DialogueBox())
+        bubble.show_text("今天也要加油喵", duration_ms=0, mood="happy")
+        self.assertEqual(bubble._container.mood, "happy")
+        self.assertEqual(
+            MOOD_BORDER_COLORS["happy"].lower(),
+            "#ffb36b",
+        )
+        bubble.set_mood("annoyed")
+        self.assertEqual(bubble._container.mood, "annoyed")
+
+    def test_normalize_config_includes_motion_and_first_run_flags(self) -> None:
+        from meapet.config.store import normalize_config
+
+        cfg = normalize_config({"display": {"font_scale": 1.2}})
+        self.assertIn("reduced_motion", cfg["display"])
+        self.assertFalse(cfg["display"]["reduced_motion"])
+        self.assertIn("first_run_hint_shown", cfg["ui"])
+        self.assertFalse(cfg["ui"]["first_run_hint_shown"])
+
+
+    def test_standard_icons_resolve_for_core_roles(self) -> None:
+        from meapet.desktop.icons import standard_icon
+
+        for role in ("status", "watch", "settings", "quit", "wake", "standby"):
+            icon = standard_icon(role)
+            self.assertFalse(icon.isNull(), msg=role)
+
+    def test_resolve_reduced_motion_respects_config_true(self) -> None:
+        from meapet.ui_theme import resolve_reduced_motion
+        import os
+
+        os.environ.pop("MEAPET_REDUCED_MOTION", None)
+        self.assertTrue(resolve_reduced_motion(True))
+        self.assertFalse(resolve_reduced_motion(False) and os.environ.get("MEAPET_REDUCED_MOTION") == "force")
+
+    def test_tts_engine_details_are_collapsible(self) -> None:
+        from wizard.page_tts import TTSPage
+
+        page = self._track(TTSPage())
+        page.enable_cb.setChecked(True)
+        page.engine_details_toggle.setChecked(False)
+        page._sync_engine_details_visibility()
+        # 未 show 的窗口上 isVisible() 恒为 False，用 isHidden() 验证显式折叠
+        self.assertTrue(page.backend_combo.isHidden())
+        page.engine_details_toggle.setChecked(True)
+        page._sync_engine_details_visibility()
+        self.assertFalse(page.backend_combo.isHidden())
+
+    def test_tray_menu_offers_standby_recovery(self) -> None:
+        from meapet.desktop.window_chrome import PetWindowChromeMixin
+        from meapet.desktop import status_language
+
+        class Host(QWidget, PetWindowChromeMixin):
+            def __init__(self):
+                super().__init__()
+                self._standby = True
+                self._toggled = False
+
+            def _toggle_standby(self):
+                self._toggled = True
+                self._standby = False
+
+            def _is_auto_start(self):
+                return False
+
+            def _toggle_auto_start(self):
+                pass
+
+            def _quit(self):
+                pass
+
+            def _do_screen_watch(self, force=False):
+                pass
+
+            def _toggle_visibility(self):
+                pass
+
+        host = self._track(Host())
+        menu = self._track(host._build_tray_menu())
+        labels = [a.text() for a in menu.actions() if not a.isSeparator()]
+        self.assertIn(status_language.tray_recover_standby(), labels)
+
 if __name__ == "__main__":
     unittest.main()

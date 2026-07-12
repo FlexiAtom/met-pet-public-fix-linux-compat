@@ -5,6 +5,7 @@ import os
 import random
 import time
 
+from meapet.desktop import status_language
 from meapet.utils import (
     safe_print,
     log_error,
@@ -71,7 +72,7 @@ class PetWatcherMixin:
 
         if not cloud_vision_allowed(self.config, True):
             safe_print("[watcher] cloud vision disabled (allow_cloud=false)")
-            self._show_bubble("云端识图未授权：请在向导勾选允许云端识图", 4000)
+            self._show_bubble(status_language.cloud_vision_disabled(), 4000)
             return False
 
         msg = "\n".join([
@@ -89,7 +90,7 @@ class PetWatcherMixin:
         )
         if not allowed:
             safe_print("[watcher] user denied cloud screenshot upload")
-            self._show_bubble("好，这次不看了喵", 2500)
+            self._show_bubble(status_language.watching_denied(), 2500)
             return False
         safe_print("[watcher] user allowed cloud vision for this capture only")
         return True
@@ -301,11 +302,11 @@ class PetWatcherMixin:
 
         if w["enabled"]:
             if self._is_cloud_vision():
-                self._show_bubble("屏幕观察已开（云端，上传前会确认）喵", 3500)
+                self._show_bubble(status_language.watcher_enabled_cloud(), 3500)
             else:
-                self._show_bubble("屏幕观察已开启（本地识图）喵", 2500)
+                self._show_bubble(status_language.watcher_enabled_local(), 2500)
             self._start_watcher_timer()
         else:
             if hasattr(self, "_watcher_timer") and self._watcher_timer:
                 self._watcher_timer.stop()
-            self._show_bubble("屏幕观察已关闭喵", 2500)
+            self._show_bubble(status_language.watcher_disabled(), 2500)

@@ -310,7 +310,13 @@ def normalize_config(config: dict) -> dict:
     disp["font_scale"] = normalize_ui_font_scale(
         disp.get("font_scale", 1.0)
     )
+    disp["reduced_motion"] = bool(disp.get("reduced_motion", False))
     cfg["display"] = disp
+
+    # UI 一次性引导等非敏感本地状态
+    ui = cfg.get("ui") if isinstance(cfg.get("ui"), dict) else {}
+    ui["first_run_hint_shown"] = bool(ui.get("first_run_hint_shown", False))
+    cfg["ui"] = ui
 
     # tts sync
     tts = cfg.get("tts") if isinstance(cfg.get("tts"), dict) else {}

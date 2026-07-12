@@ -121,12 +121,35 @@ class ChatInputBox(QWidget):
         self.send_button.setObjectName("SendButton")
         self.send_button.setMinimumSize(80, MIN_TARGET_SIZE)
         self.send_button.setAccessibleName("发送消息")
+        self.send_button.setDefault(True)
+        self.send_button.setAutoDefault(True)
         self.send_button.clicked.connect(self._submit)
         input_row.addWidget(self.send_button)
         layout.addLayout(input_row)
 
         self.setTabOrder(self.input, self.send_button)
         self.setTabOrder(self.send_button, self.close_button)
+
+        self._busy = False
+
+    def set_busy(self, busy: bool, message: str = "") -> None:
+        """异步回复进行中时禁用发送，并给出可读反馈。"""
+        self._busy = bool(busy)
+        self.send_button.setEnabled(not self._busy)
+        self.input.setReadOnly(self._busy)
+        if self._busy:
+            text = message or "正在等待回复…"
+            self.feedback_label.setText(text)
+            self.hint_label.hide()
+            self.feedback_label.show()
+            self.send_button.setToolTip(text)
+            self.setAccessibleDescription(text)
+        else:
+            self.send_button.setToolTip("发送消息（Enter）")
+            self.setAccessibleDescription(
+                "输入消息后按 Enter 或点击发送；按 Escape 关闭"
+            )
+            self._clear_feedback(self.input.text())
 
     def _animate_in(self) -> None:
         if self._closing:
@@ -137,6 +160,12 @@ class ChatInputBox(QWidget):
             self._anim_timer.stop()
 
     def _submit(self) -> None:
+        if getattr(self, "_busy", False):
+            if not self.feedback_label.text():
+                self.feedback_label.setText("正在等待回复…")
+            self.hint_label.hide()
+            self.feedback_label.show()
+            return
         text = self.input.text().strip()
         if not text:
             self.feedback_label.setText("请输入内容后再发送")
@@ -144,6 +173,7 @@ class ChatInputBox(QWidget):
             self.feedback_label.show()
             self.input.setFocus(Qt.OtherFocusReason)
             return
+        self.send_button.setEnabled(False)
         self._clear_feedback(text)
         # 先退出编辑浮窗，再同步发出信号；接收方显示气泡时不会与输入框重叠。
         self._closing = True

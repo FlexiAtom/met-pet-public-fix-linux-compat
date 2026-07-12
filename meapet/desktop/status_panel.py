@@ -9,6 +9,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QColor
+from meapet.desktop import status_language
+from meapet.desktop.icons import standard_icon
 from meapet.desktop.theme import STATUS_PANEL_STYLE
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
@@ -80,6 +82,7 @@ class StatusPanel(QWidget):
         header.addLayout(heading, 1)
 
         self.close_button = QPushButton("关闭")
+        self.close_button.setIcon(standard_icon("close"))
         self.close_button.setObjectName("PanelCloseButton")
         self.close_button.setMinimumSize(64, MIN_TARGET_SIZE)
         self.close_button.setAccessibleName("关闭养成状态")
@@ -225,7 +228,7 @@ class StatusPanel(QWidget):
         mood_emoji = {"平静": "😶", "开心": "😊", "忧郁": "😔",
                       "烦躁": "😤", "困倦": "😴", "期待": "🤗"}
         emoji = mood_emoji.get(mood, "😶")
-        self.mood_label.setText(f"{mood}  {emoji}")
+        self.mood_label.setText(f"{mood}（{emoji}）")
 
         # 统计
         self.stats_label.setText(
@@ -239,7 +242,7 @@ class StatusPanel(QWidget):
                 "梅尔记住了：\n" + "\n".join(f"  · {x}" for x in mems)
             )
         else:
-            self.memory_label.setText("梅尔对你还不太了解喵…")
+            self.memory_label.setText(status_language.empty_memories())
 
         self.setAccessibleDescription(
             f"好感等级 {tier[1]}，好感度 {aff}，心情 {mood}，累计对话 {total_chats} 次"

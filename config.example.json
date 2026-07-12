@@ -47,7 +47,8 @@
     "scale": 0.5,
     "fps": 30,
     "size_factor": 1.0,
-    "font_scale": 1.0
+    "font_scale": 1.0,
+    "reduced_motion": false
   },
   "character": {
     "name": "梅尔",
@@ -76,5 +77,8 @@
     "watch": 7000,
     "interaction": 3000,
     "thinking": 0
+  },
+  "ui": {
+    "first_run_hint_shown": false
   }
 }

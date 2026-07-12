@@ -48,10 +48,25 @@ class VisionPage(QFrame):
         description.setWordWrap(True)
         layout.addWidget(description)
 
-        self.enable_cb = QCheckBox("启用屏幕观察（watcher.enabled）")
+        self.enable_cb = QCheckBox("启用屏幕观察（可选，默认关闭）")
         self.enable_cb.setAccessibleDescription("定时截取屏幕并交给所选视觉模型分析")
         self.enable_cb.setChecked(False)
         layout.addWidget(self.enable_cb)
+        progressive = QLabel("可先不启用。需要时再打开，并配置识图后端。")
+        progressive.setObjectName("HelperText")
+        progressive.setWordWrap(True)
+        layout.addWidget(progressive)
+        self.advanced_toggle = QCheckBox("显示高级识图选项")
+        self.advanced_toggle.setChecked(False)
+        self.advanced_toggle.setAccessibleName("显示高级识图选项")
+        layout.addWidget(self.advanced_toggle)
+        self.advanced_frame = QFrame()
+        self.advanced_frame.setObjectName("SectionCard")
+        self.advanced_layout = QVBoxLayout(self.advanced_frame)
+        self.advanced_layout.setContentsMargins(16, 14, 16, 14)
+        self.advanced_layout.setSpacing(10)
+        layout.addWidget(self.advanced_frame)
+        self.advanced_frame.setVisible(False)
 
         self.allow_cloud_cb = QCheckBox("允许云端识图（watcher.allow_cloud，截图会上传）")
         self.allow_cloud_cb.setChecked(False)
@@ -64,9 +79,9 @@ class VisionPage(QFrame):
         layout.addWidget(self.require_confirm_label)
 
 
-        backend_label = QLabel("识图后端：")
-        backend_label.setObjectName("FieldLabel")
-        layout.addWidget(backend_label)
+        self.backend_label = QLabel("识图后端：")
+        self.backend_label.setObjectName("FieldLabel")
+        layout.addWidget(self.backend_label)
         self.backend_combo = QComboBox()
         self.backend_combo.setObjectName("VisionBackend")
         self.backend_combo.setAccessibleName("识图后端")
@@ -74,6 +89,8 @@ class VisionPage(QFrame):
         self.backend_combo.addItem("MiMo 云端识图", "mimo")
         self.backend_combo.addItem("Ollama 本地识图", "ollama")
         self.backend_combo.currentIndexChanged.connect(self._on_backend_changed)
+        self.advanced_toggle.toggled.connect(self._sync_advanced_visibility)
+        self.enable_cb.toggled.connect(self._sync_advanced_visibility)
         layout.addWidget(self.backend_combo)
 
         self.model_label = QLabel("本地视觉模型：")
@@ -156,7 +173,33 @@ class VisionPage(QFrame):
         layout.addStretch()
         self._on_backend_changed()
 
-    def _on_backend_changed(self):
+        self._sync_advanced_visibility()
+
+    def _sync_advanced_visibility(self, *_args) -> None:
+        """未启用且未展开时隐藏高级识图细节，降低首次配置负担。"""
+        show = bool(
+            self.advanced_toggle.isChecked() or self.enable_cb.isChecked()
+        )
+        self.advanced_frame.setVisible(False)  # 占位容器，细节仍在原布局
+        widgets = [
+            getattr(self, "allow_cloud_cb", None),
+            getattr(self, "require_confirm_label", None),
+            getattr(self, "backend_label", None),
+            getattr(self, "backend_combo", None),
+            getattr(self, "model_label", None),
+            getattr(self, "model_combo", None),
+            getattr(self, "host_label", None),
+            getattr(self, "host_input", None),
+            getattr(self, "cloud_box", None),
+        ]
+        for w in widgets:
+            if w is not None:
+                w.setVisible(show)
+        if show and hasattr(self, "_on_backend_changed"):
+            # 恢复后端相关的二次显隐（云端框等）
+            self._on_backend_changed()
+
+    def _on_backend_changed(self, *_args):
         data = self.backend_combo.currentData()
         is_ollama = data == "ollama"
         is_mimo = data == "mimo"
