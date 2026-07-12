@@ -45,7 +45,7 @@ class MeaMemory:
     def __init__(self):
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._init_tables()
         self._ensure_defaults()
 
