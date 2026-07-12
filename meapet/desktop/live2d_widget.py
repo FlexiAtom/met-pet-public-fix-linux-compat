@@ -246,9 +246,9 @@ class Live2DWidget(QOpenGLWidget):
             _s.stderr.flush()
         
         from OpenGL.GL import glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT,glViewport
-        # 强制清空颜色缓冲，确保没有残留的黑色像素
+        # 强制清空颜色缓冲，确保没有残留的黑色像素 记得导入
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) 
-        glViewport(0, -60, self.width(), self.height())
+        glViewport(0, -60, self.width(), self.height()) #这里那个-60能改
         live2d.clearBuffer()
         
         # 每帧从系统获取光标全局坐标，映射后驱动眼球+身体追踪
