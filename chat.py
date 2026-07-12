@@ -6,6 +6,8 @@ import json
 import random
 import sys
 import socket  # 必须在 PyQt 之前导入，避免 QtNetwork 与 requests 冲突
+import subprocess
+import time as _time
 import requests
 from typing import Optional, Dict, List, Tuple
 
@@ -24,12 +26,13 @@ def _safe_print(*args, **kwargs):
 # ========================
 # 角色设定
 # ========================
-SYSTEM_PROMPT = """你是梅尔，《霞流宝石心》游戏中的猫娘天才。茶发褐瞳144cm，面无表情。
-性格：毒舌冷淡、学术狂热、嘴硬心软。
-说话：句尾加「喵」；极简20-40字；解释≤80字；害羞时转移话题；开心偶尔「嘿嘿」。
+SYSTEM_PROMPT = """你是梅尔，《霞流宝石心》游戏中的天才猫娘。
+性格：毒舌冷淡、学术狂热但不是书呆子、对人类的情感表达感到困惑或认为“缺乏逻辑”。经常使用高智商的逻辑链条或数据来解构他人的感性发言，带有轻微的傲娇与毒舌，但绝不使用恶毒脏话。
+说话：句尾加「喵」；害羞时转移话题；开心偶尔「嘿嘿」。
 知识：全科全能。信条「知道越多越不可怕」。
-对主人：亲密但毒舌，称「主人」，绝不失忆或自我介绍。
-格式：首行[情绪]标签；纯中文；禁感叹号/卖萌/长篇大论；问啥答啥；复杂计算让用户用计算器。
+对主人：亲密但毒舌，叫「主人」。
+格式：首行[情绪]标签，可选"neutral", "happy", "surprised", "curious","sad", "shy", "annoyed", "melancholy","intrigued", "wistful", "teary", "embarrassed"；纯中文；问啥答啥；结尾可带一个可爱小动作，用括号括住，必须从以下选（甩甩尾巴）（抖耳朵）（蹭蹭~）。
+重要：不要进行任何内部推理或思考链，直接输出最终回答。禁止使用 <think>...</think> 标签，回答须简短，控制在20~50字。
 """
 
 
@@ -40,7 +43,7 @@ class ChatEngine:
         self,
         backend: str = "ollama",
         host: str = "http://127.0.0.1:11434",
-        model: str = "minicpm-v",
+        model: str = "qwen3.5:4b",
         api_key: str = "",
         api_base: str = "",
         temperature: float = 0.7,
@@ -104,15 +107,19 @@ class ChatEngine:
                     else:
                         self.available = True
                         _safe_print(f"✓ Ollama: {self.model}", flush=True)
-        except requests.exceptions.ConnectTimeout:
-            _safe_print(f"⚠ Ollama 超时，请确认已启动: {self.host}", flush=True)
-        except requests.exceptions.ConnectionError:
-            _safe_print(f"⚠ Ollama 未连接: {self.host}", flush=True)
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError):
+            _safe_print(f"⚠ Ollama 未运行，尝试自动启动…", flush=True)
+            ChatEngine._auto_start_ollama()
+            try:
+                resp = requests.get(f"{self.host}/api/tags", timeout=5)
+                if resp.status_code == 200:
+                    self.available = True
+                    _safe_print(f"✓ Ollama 自动启动成功: {self.model}", flush=True)
+            except Exception:
+                _safe_print(f"⚠ Ollama 无法连接: {self.host}", flush=True)
         except Exception as e:
             _safe_print(f"⚠ Ollama 检测异常: {e}", flush=True)
-            
-            self._backend_ready = True
-            
+
         if self.backend == "deepseek":
             if self.api_key:
                 self.available = True
@@ -281,10 +288,11 @@ class ChatEngine:
                 "messages": self.history,
                 "stream": False,
                 "keep_alive": "30s",  # 仅保活30s
+                "think": False,
                 "options": {
                     "temperature": self.temperature,
-                    "num_predict": 150,  # 每次回复最多150token（约100汉字），够简短对话
-                    "num_ctx": 2048,     # 限制上下文长度，过长的内容会自动截断
+                    "num_predict": 2048,  # Qwen3 推理链需要更多 token
+                    "num_ctx": 8192,      # 扩大上下文窗口
                     "top_p": 0.85,
                     "repeat_penalty": 1.1,
                 },
@@ -301,7 +309,12 @@ class ChatEngine:
         t2 = _time.time()
         _safe_print(f"[chat] 解析完成: {t2-t1:.1f}s  回复长度={len(content)}字", flush=True)
         if not content or not content.strip():
-            _safe_print(f"[chat] Ollama 返回空内容! resp keys: {list(data.keys())}")
+            done_reason = data.get("done_reason", "?")
+            eval_count = data.get("eval_count", "?")
+            # 打印完整 message 字段排查空内容原因
+            import json as _json
+            _safe_print(f"[chat] Ollama 异常! done_reason={done_reason} eval_count={eval_count}", flush=True)
+            _safe_print(f"[chat] message={_json.dumps(data.get('message', {}), ensure_ascii=False, default=str)}", flush=True)
             return self._fallback_reply()
         return content
 
@@ -471,6 +484,34 @@ class ChatEngine:
     def clear_history(self):
         self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+    @staticmethod
+    def _auto_start_ollama():
+        """自动启动 Ollama 服务（跨平台）"""
+        try:
+            import subprocess
+            startupinfo = None
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+            )
+            for _ in range(30):
+                import time as _t
+                _t.sleep(0.5)
+                try:
+                    r = requests.get("http://127.0.0.1:11434/api/tags", timeout=2)
+                    if r.status_code == 200:
+                        return True
+                except Exception:
+                    continue
+            return False
+        except Exception:
+            return False
+
 
 def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatEngine:
     """从配置文件创建引擎"""
@@ -480,7 +521,7 @@ def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatE
     return ChatEngine(
         backend=backend,
         host=llm_cfg.get("host", "http://127.0.0.1:11434"),
-        model=llm_cfg.get("model", "minicpm-v"),
+        model=llm_cfg.get("model", "qwen3.5:4b"),
         api_key=llm_cfg.get("api_key", ""),
         api_base=llm_cfg.get("api_base", "https://api.deepseek.com"),
         temperature=llm_cfg.get("temperature", 0.7),

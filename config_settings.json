@@ -11,10 +11,10 @@
   },
   "display": {
     "scale": 1.0,
-    "size_factor": 0.77
-  }
+    "size_factor": 1.06
+  },
   "watcher_interval": {
-      "min_ms": 180000,
-      "max_ms": 360000
+    "min_ms": 60000,
+    "max_ms": 600000
   }
 }

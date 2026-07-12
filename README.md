@@ -27,7 +27,7 @@
 
 1. **AI 大脑** — 推荐选「Ollama」（免费，不需要任何 Key）
    - 向导可以帮你下载安装 Ollama + 拉取模型
-   - 对话用 `qwen2.5:7b`，识图用 `minicpm-v`
+   - 对话+识图用 `qwen3.5:4b`（多模态）
 2. **语音** — 开/关
    - 语音引擎使用 **GPT-SoVITS** 本地推理
    - 梅尔说日语（中文回复会自动翻译成日语后合成）
@@ -74,13 +74,13 @@
   "llm": {
     "backend": "ollama",
     "host": "http://127.0.0.1:11434",
-    "model": "qwen2.5:7b",
+    "model": "qwen3.5:4b",
     "api_key": "",
     "api_base": "https://api.deepseek.com"
     <!-- ollama: 本地聊天+识图; deepseek: 在线聊天; mimo: 在线聊天+识图（不需要Ollama） -->
   },
   "vision": {
-    "model": "minicpm-v"
+    "model": "qwen3.5:4b"
   },
   "tts": {
     "engine": "gpt_sovits",
@@ -179,7 +179,7 @@ QT_PLUGIN_PATH=/usr/lib/qt/plugins
 | **DeepSeek API** | `"backend": "deepseek"` | DeepSeek API Key | 需要 `api_key`，填入 `config.json` 或设置环境变量 |
 | **MiMo V2.5 API** | `"backend": "mimo"` | 第三方平台 API Key | 小米多模态模型，聊天+识图一体，不需要 Ollama |
 
-> 👀 **关于屏幕识图**：Ollama 和 MiMo 后端自带识图能力；DeepSeek 后端**需要额外安装 Ollama + 视觉模型**（minicpm-v）才能使用偷看屏幕功能。
+> 👀 **关于屏幕识图**：Ollama 和 MiMo 后端自带识图能力；DeepSeek 后端**需要额外安装 Ollama + 多模态模型**（qwen3.5:4b）才能使用偷看屏幕功能。
 
 ### 快速判断
 
@@ -190,7 +190,7 @@ QT_PLUGIN_PATH=/usr/lib/qt/plugins
 用 DeepSeek 对话 + 日语语音       → 只需要 DEEPSEEK_API_KEY（翻译自动共用）
 用 MiMo V2.5 对话 + 日语语音      → 只需要第三方平台 API Key（MiMo 自带识图，不需要 Ollama）
 
-👀 屏幕识图功能：Ollama 和 MiMo 后端自带识图；DeepSeek 需要额外装 Ollama + 视觉模型（minicpm-v）
+👀 屏幕识图功能：Ollama 和 MiMo 后端自带识图；DeepSeek 需要额外装 Ollama + 多模态模型（qwen3.5:4b）
 ```
 
 ---
@@ -367,7 +367,7 @@ mea-pet/
 <details>
 <summary><b>屏幕观察不吐槽</b></summary>
 
-1. 确认已安装 Ollama 并拉取了视觉模型（`minicpm-v`）
+1. 确认已安装 Ollama 并拉取了多模态模型（`qwen3.5:4b`）
 2. 观察模块使用冷落感知：最近 3 分钟内说过话则保持沉默
 3. 检查 `config.json` 中 `vision.model` 是否正确
 </details>
@@ -392,7 +392,7 @@ mea-pet/
 
 - Live2D 渲染需要支持 OpenGL 的显卡
 - GPT-SoVITS 引擎需要单独下载整合包（~2GB），VITS 引擎已内置
-- 屏幕观察：Ollama 后端需额外下载视觉模型（minicpm-v 约 5.5GB）；MiMo 后端云端自带识图能力，无需下载
+- 屏幕观察：Ollama 后端需额外下载多模态模型（qwen3.5:4b 约 3GB）；MiMo 后端云端自带识图能力，无需下载
 - 嵌入版 Python（`_python\`）首次安装 pip 需要联网
 
 ---

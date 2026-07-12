@@ -314,7 +314,7 @@ class MeaPetLive2D(QWidget):
         self._awaiting_reply = True
         self._watcher = ScreenWatcher(
             ollama_host=self.config.get("llm", {}).get("host", "http://127.0.0.1:11434"),
-            model="minicpm-v",
+            model="qwen3.5:4b",
         )
         self._watcher.result_ready.connect(self._on_watch_result)
         self._watcher.error.connect(self._on_watch_error)

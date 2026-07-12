@@ -12,7 +12,9 @@ if _this_dir not in sys.path:
     sys.path.insert(0, _this_dir)
 import json
 import random
+import shutil
 import time
+import subprocess
 import threading
 import socket  # 必须在 PyQt5 之前导入（避免 QtNetwork hook 冲突）
 from typing import Optional
@@ -696,7 +698,7 @@ class MeaPet(QWidget):
         """初始化屏幕观察器"""
         llm_cfg = self.config.get("llm", {})
         backend = llm_cfg.get("backend", "ollama")
-        vision_model = self.config.get("vision", {}).get("model", "minicpm-v")
+        vision_model = self.config.get("vision", {}).get("model", "qwen3.5:4b")
         self._watcher = ScreenWatcher(
             ollama_host=llm_cfg.get("host", "http://127.0.0.1:11434"),
             vision_model=vision_model,
@@ -960,23 +962,6 @@ class MeaPet(QWidget):
             expr_menu.addAction(action)
         menu.addMenu(expr_menu)
 
-        # 识图模型切换（仅 Ollama 本地模型可切换，MiMo 云端不适用）
-        backend = self.config.get("llm", {}).get("backend", "ollama")
-        if backend != "mimo":
-            vision_menu = QMenu("🔍 识图模型", self)
-            current_vision = self.config.get("vision", {}).get("model", "minicpm-v")
-            vision_options = [
-                ("minicpm-v (5.5G, 快)", "minicpm-v"),
-                ("qwen2.5vl:7b (6G)", "qwen2.5vl:7b"),
-            ]
-            for label, model_name in vision_options:
-                action = QAction(f"{'✅ ' if current_vision == model_name else '   '}{label}", self)
-                action.triggered.connect(
-                    lambda checked, m=model_name: self._set_vision_model(m)
-                )
-                vision_menu.addAction(action)
-            menu.addMenu(vision_menu)
-
         # 养成状态面板
         status_action = QAction("📊 养成状态", self)
         status_action.triggered.connect(self._show_status_panel)
@@ -1030,54 +1015,6 @@ class MeaPet(QWidget):
         menu.addSeparator()
         menu.addAction("退出", self._quit)
         menu.exec_(self.mapToGlobal(pos))
-
-    def _set_vision_model(self, model_name: str):
-        """切换识图模型并保存到 config"""
-        self.config.setdefault("vision", {})["model"] = model_name
-        self._save_config()
-        # 重新创建 ScreenWatcher
-        if hasattr(self, '_watcher') and self._watcher is not None:
-            try:
-                self._watcher.result_ready.disconnect()
-            except Exception:
-                pass
-            try:
-                self._watcher.error.disconnect()
-            except Exception:
-                pass
-            try:
-                self._watcher.silent.disconnect()
-            except Exception:
-                pass
-            try:
-                self._watcher.progress.disconnect()
-            except Exception:
-                pass
-            try:
-                self._watcher.search_request.disconnect()
-            except Exception:
-                pass
-            self._watcher.stop()
-        chat_model = self.config.get("llm", {}).get("model", "qwen2.5:7b")
-        llm_cfg = self.config.get("llm", {})
-        backend = llm_cfg.get("backend", "ollama")
-        self._watcher = ScreenWatcher(
-            ollama_host=llm_cfg.get("host", "http://127.0.0.1:11434"),
-            vision_model=model_name,
-            chat_model=chat_model,
-            # MiMo 后端参数
-            backend=backend,
-            api_base=llm_cfg.get("api_base", ""),
-            api_key=llm_cfg.get("api_key", ""),
-            mimo_model=llm_cfg.get("model", "XiaomiMiMo/MiMo-V2.5"),
-        )
-        self._watcher.result_ready.connect(self._on_watch_result)
-        self._watcher.error.connect(self._on_watch_error)
-        self._watcher.silent.connect(self._on_watch_silent)
-        self._watcher.progress.connect(self._on_watch_progress)
-        self._watcher.search_request.connect(self._on_search_request)
-        short = model_name.split(":")[0]
-        self._show_bubble(f"识图模型切换为 {short}", 2000)
 
     def _show_status_panel(self):
         """打开养成状态面板"""
@@ -1383,6 +1320,9 @@ class MeaPet(QWidget):
             if cached:
                 self._play_audio(cached)
                 return
+            # 保存文本用于 TTS 完成后重新显示气泡
+            self._pending_tts_text = text
+            self._pending_tts_mood = mood
             # 保持引用防止 GC 导致 QThread 销毁
             self._speak_worker = TTSWorker(self.tts, text, mood=mood)
             self._speak_worker.start()
@@ -1411,6 +1351,13 @@ class MeaPet(QWidget):
                         shutil.copy2(wav_path, cache_path)
                     except Exception:
                         pass
+            # 播放语音时重新显示对话内容，气泡保持到音频播完
+            if hasattr(self, '_pending_tts_text'):
+                txt = self._pending_tts_text
+                md = getattr(self, '_pending_tts_mood', 'neutral')
+                audio_ms = self._get_wav_duration_ms(wav_path)
+                bubble_ms = max(audio_ms + 1000, self._settings["bubble_duration_ms"]["reply"]) if audio_ms else self._settings["bubble_duration_ms"]["reply"]
+                self.show_reply(txt, md, duration_ms=bubble_ms)
             self._play_audio(wav_path)
 
     def show_reply(self, text: str, mood: str = "neutral", duration_ms: int = None):
@@ -1540,6 +1487,9 @@ class MeaPet(QWidget):
         detected = self._detect_mood(reply)
         self.show_reply(reply, detected)
         self._awaiting_reply = False
+        # 保存文本用于 TTS 完成后重新显示气泡
+        self._pending_tts_text = reply
+        self._pending_tts_mood = detected
         # 后台 TTS 合成
         self._tts_worker = TTSWorker(self.tts, reply, mood=detected)
         self._tts_worker.start()
@@ -1612,14 +1562,17 @@ class MeaPet(QWidget):
         return "neutral"
 
     def _on_tts_audio(self, raw: str):
-        """TTS 合成完成 → 播放语音（文字已显示）"""
+        """TTS 合成完成 → 重新显示文字 + 播放语音（气泡时长始终匹配音频）"""
         wav_path = raw.rsplit("|", 1)[0] if "|" in raw else raw
         if wav_path and os.path.exists(wav_path):
-            # 更新气泡时长以匹配音频
             audio_ms = self._get_wav_duration_ms(wav_path)
-            if self._settings["tts"]["sync_with_audio"] and audio_ms > 0:
-                self.bubble.show_text(self.bubble.text_label.text(), duration_ms=max(audio_ms + 500, self._settings["bubble_duration_ms"]["reply"]))
-                self._play_audio(wav_path)
+            # 播放语音时重新显示对话内容，气泡保持到音频播完
+            if hasattr(self, '_pending_tts_text'):
+                txt = self._pending_tts_text
+                md = getattr(self, '_pending_tts_mood', 'neutral')
+                bubble_ms = max(audio_ms + 1000, self._settings["bubble_duration_ms"]["reply"]) if audio_ms else self._settings["bubble_duration_ms"]["reply"]
+                self.show_reply(txt, md, duration_ms=bubble_ms)
+            self._play_audio(wav_path)
 
     def _on_chat_error(self, err: str):
         safe_print(f"[pet] Chat错误: {err}")
@@ -1660,29 +1613,73 @@ class MeaPet(QWidget):
         return 0
 
     def _play_audio(self, wav_path: str):
-        """播放 wav 音频（Windows 原生优先）"""
+        """播放 wav 音频（跨平台：Windows winsound → Linux aplay/paplay → Qt 备用）"""
         if not os.path.exists(wav_path):
             safe_print(f"[audio] 文件不存在: {wav_path}")
             return
-        try:
-            # Windows 原生播放（最可靠）
-            import winsound
-            winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-            safe_print(f"[audio] 播放: {os.path.basename(wav_path)}")
-            return
-        except Exception as e:
-            safe_print(f"[audio] winsound 失败，尝试 Qt: {e}")
 
-        # 备用：PyQt5 QtMultimedia
+        basename = os.path.basename(wav_path)
+
+        # ===== 1) Windows：winsound（原生，最可靠）=====
+        if sys.platform == "win32":
+            try:
+                import winsound
+                winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                safe_print(f"[audio] winsound 播放: {basename}")
+                return
+            except Exception as e:
+                safe_print(f"[audio] winsound 失败: {e}")
+
+        # ===== 2) Linux：aplay → paplay → ffplay（subprocess 非阻塞）=====
+        if sys.platform == "linux":
+            for player, args in [
+                ("aplay",  ["aplay", wav_path]),
+                ("paplay", ["paplay", wav_path]),
+                ("ffplay", ["ffplay", "-nodisp", "-autoexit", wav_path]),
+                ("play",   ["play", wav_path]),      # sox
+            ]:
+                try:
+                    import shutil
+                    if shutil.which(player):
+                        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        safe_print(f"[audio] {player} 播放: {basename}")
+                        return
+                except Exception:
+                    continue
+
+        # ===== 3) macOS：afplay =====
+        if sys.platform == "darwin":
+            try:
+                import shutil
+                if shutil.which("afplay"):
+                    subprocess.Popen(["afplay", wav_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    safe_print(f"[audio] afplay 播放: {basename}")
+                    return
+            except Exception as e:
+                safe_print(f"[audio] afplay 失败: {e}")
+
+        # ===== 4) 通用备用：QMediaPlayer（持有引用防 GC）=====
         try:
             from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
             from PyQt5.QtCore import QUrl
             mp = QMediaPlayer()
             mp.setMedia(QMediaContent(QUrl.fromLocalFile(wav_path)))
             mp.play()
-            safe_print(f"[audio] Qt 播放: {os.path.basename(wav_path)}")
+            # 保持引用防止局部变量 GC 导致播放中断
+            if not hasattr(self, '_audio_players'):
+                self._audio_players = []
+            self._audio_players.append(mp)
+            # 播放完成后自动清理
+            mp.mediaStatusChanged.connect(
+                lambda status, p=mp: (
+                    self._audio_players.remove(p)
+                    if status == QMediaPlayer.EndOfMedia and p in self._audio_players
+                    else None
+                )
+            )
+            safe_print(f"[audio] Qt 播放: {basename}")
         except Exception as e:
-            safe_print(f"[audio] 播放失败: {e}")
+            safe_print(f"[audio] 所有播放方式均失败: {e}")
 
     # ========================
     # 屏幕观察（截屏吐槽）
@@ -1762,9 +1759,8 @@ class MeaPet(QWidget):
             self._start_watcher_timer()
             return
         audio_duration_ms = self._get_wav_duration_ms(wav_path) if wav_path else 0
-        bubble_ms = self._settings["bubble_duration_ms"]["watch"]
-        if self._settings["tts"]["sync_with_audio"]:
-            bubble_ms = max(audio_duration_ms + 500, bubble_ms)
+        # 气泡时长始终匹配音频（不再依赖 sync_with_audio）
+        bubble_ms = max(audio_duration_ms + 1000, self._settings["bubble_duration_ms"]["watch"]) if audio_duration_ms else self._settings["bubble_duration_ms"]["watch"]
         self.show_reply(reply, mood, duration_ms=bubble_ms)
         
         self._awaiting_reply = False

@@ -12,6 +12,16 @@ import time
 import urllib.request
 import io
 
+
+os.environ.pop("HTTP_PROXY", None)
+os.environ.pop("HTTPS_PROXY", None)
+os.environ.pop("http_proxy", None)
+os.environ.pop("https_proxy", None)
+
+# Ollama 目标多模态模型
+OLLAMA_TARGET = "qwen3.5:4b"
+OLLAMA_HOST = "http://127.0.0.1:11434"
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QRadioButton, QLineEdit,
@@ -184,25 +194,140 @@ def check_ollama_installed():
         return False
 
 
-def pull_ollama_model(model: str, log_callback=None):
-    """拉取 Ollama 模型"""
+def start_ollama():
+    """后台启动 Ollama 服务（跨平台，如果尚未运行）"""
     try:
+        # 先检查是否已经在运行
+        running, _ = check_ollama_running()
+        if running:
+            return True
+        # 检查是否已安装
+        if not check_ollama_installed():
+            return False
+        # 后台启动 ollama serve
+        startupinfo = None
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         proc = subprocess.Popen(
-            ["ollama", "pull", model],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            startupinfo=startupinfo,
         )
-        for line in proc.stdout:
+        # 等待服务就绪（最多等 15 秒）
+        for _ in range(30):
+            time.sleep(0.5)
+            try:
+                req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    if resp.status == 200:
+                        return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return False
+
+
+def verify_ollama_model(model_name: str) -> bool:
+    """通过 /api/show 接口验证模型是否存在且完整"""
+    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    url = f"{base_url}/api/show"
+    payload = json.dumps({"name": model_name}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except urllib.error.HTTPError as e:
+        # 404 表示模型不存在，其他错误也视为验证失败
+        return False
+    except Exception:
+        return False
+
+
+def pull_ollama_model(model: str, log_callback=None, progress_callback=None):
+    import json as _json
+    import urllib.request as _req
+    import urllib.error as _err
+
+    resp = None
+    try:
+        data = _json.dumps({"model": model, "stream": True}).encode("utf-8")
+        req = _req.Request(
+            "http://127.0.0.1:11434/api/pull",
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        resp = _req.urlopen(req, timeout=10)
+
+        last_status = ""
+        while True:
+            line_bytes = resp.readline()
+            if not line_bytes:
+                break
+            line = line_bytes.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+
+            try:
+                obj = _json.loads(line)
+                last_status = obj.get("status", last_status)
+                
+                total = obj.get("total", 0)
+                completed = obj.get("completed", 0)
+                status = obj.get("status", "")
+                digest = obj.get("digest", "")[:12] if obj.get("digest") else ""
+
+                # ✅ 新增：将数值进度传递给 UI 进度条
+                if progress_callback and total > 0 and completed >= 0:
+                    pct = int(completed / total * 100)
+                    progress_callback(pct)
+
+                if log_callback:
+                    if total > 0 and completed >= 0:
+                        pct = int(completed / total * 100)
+                        # ✅ 显式输出百分比，格式更清晰直观
+                        log_callback(f"⏳ {status} | 进度: {pct}% ({completed}/{total})")
+                    elif status:
+                        log_callback(f"🔄 {status}")
+                    else:
+                        log_callback(str(obj))
+            except _json.JSONDecodeError:
+                if log_callback:
+                    log_callback(line)
+
+        # ✅ 核心修复：无论流中是否出现过 total 字段，
+        # 只要函数执行到这里（未提前 return False），就说明拉取成功，
+        # 必须强制将进度条推到 100%
+        if progress_callback:
+            progress_callback(100)
+
+        if resp.status != 200 or last_status != "success":
             if log_callback:
-                log_callback(line.strip())
-        proc.wait()
-        return proc.returncode == 0
+                log_callback(f"❌ 拉取异常结束，最终状态: {last_status}")
+            return False
+            
+        if log_callback:
+            log_callback(f"✅ 模型 {model} 已就绪")
+            
+        return True
+
     except Exception as e:
         if log_callback:
             log_callback(f"错误：{e}")
         return False
-
-
+    finally:
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
 # ═══════════════════════════════════════
 # 页面：环境检测
 # ═══════════════════════════════════════
@@ -397,15 +522,32 @@ class EnvCheckPage(QFrame):
             model_list = ", ".join(models[:3])
             self._set_item_status("Ollama", True, f"✅ 运行中 ({model_list})")
         elif ollama_ok:
-            self._set_item_status("Ollama", True, "✅ 已安装，未运行")
+            self._set_item_status("Ollama", True, "⏳ 正在启动…")
+            self.log("Ollama 未运行，尝试自动启动…")
+            QApplication.processEvents()
+            started = start_ollama()
+            if started:
+                running = True
+                running, models = check_ollama_running()
+                model_list = ", ".join(models[:3])
+                self._set_item_status("Ollama", True, f"✅ 已自动启动 ({model_list})")
+                self.log("✓ Ollama 自动启动成功")
+            else:
+                self._set_item_status("Ollama", True, "⚠️ 已安装，自动启动失败（请手动启动 Ollama）")
+                self.log("⚠ Ollama 自动启动失败")
         else:
             self._set_item_status("Ollama", False, "❌ 未安装")
         self.total_bar.setValue(80)
 
-        # 8-9. Ollama 模型（仅在 Ollama 运行中时检测）
+        # 8-9. Ollama 模型检测
         self._model_items = {}
         if running:
             self._check_ollama_models(models)
+        else:
+            # Ollama 未运行，仍显示模型项但注明无法检测
+            _, status, _ = self._add_row(f"  📦 {OLLAMA_TARGET}", "多模态模型")
+            status.setText("⚠️ Ollama 未运行，无法检测")
+            status.setStyleSheet("font-size: 13px; color: #ffa500;")
 
         # 总结
         self.total_bar.setValue(100)
@@ -445,28 +587,30 @@ class EnvCheckPage(QFrame):
         return name_label, status, btn
 
     def _check_ollama_models(self, existing_models: list):
-        """检测 Ollama 模型是否就绪"""
-        needed = [
-            ("qwen2.5:7b", "对话模型（约 4GB）", "对话用"),
-            ("minicpm-v", "视觉模型（约 5.5GB）", "屏幕识图用"),
-        ]
-        has_qwen = any("qwen2.5" in m for m in existing_models)
-        has_vision = any("minicpm" in m or "llava" in m or "vl" in m for m in existing_models)
+        """检测 Ollama 模型是否就绪（列表存在 + 真正可用）"""
+        hint = "多模态模型（约 3GB，对话+识图用）"
+        has_model = any(OLLAMA_TARGET in m for m in existing_models)
 
-        for model_name, hint, purpose in needed:
-            is_chat = "qwen" in model_name
-            ok = has_qwen if is_chat else has_vision
-            _, status, btn = self._add_row(f"  📦 {model_name}", hint)
-            if ok:
+        _, status, btn = self._add_row(f"  📦 {OLLAMA_TARGET}", hint)
+        if has_model:
+            # 模型在列表里，但可能上次下载中断导致不可用
+            if verify_ollama_model(OLLAMA_TARGET):
                 status.setText("✅ 就绪")
                 status.setStyleSheet("font-size: 13px; color: #7dffb3;")
                 btn.hide()
+                self.log(f"✓ {OLLAMA_TARGET} 验证通过")
             else:
-                status.setText(f"❌ 未拉取（{purpose}）")
-                status.setStyleSheet("font-size: 13px; color: #ff6b6b;")
+                status.setText("⚠️ 模型文件不完整，请重新拉取")
+                status.setStyleSheet("font-size: 13px; color: #ffa500;")
                 btn.show()
-                btn.clicked.connect(lambda checked, m=model_name, s=status: self._pull_model(m, s))
-            self._model_items[model_name] = (status, btn)
+                btn.clicked.connect(lambda checked, m=OLLAMA_TARGET, s=status: self._pull_model(m, s))
+                self.log(f"⚠ {OLLAMA_TARGET} 存在于列表但不可用，需要重新拉取")
+        else:
+            status.setText("❌ 未拉取（对话+识图用）")
+            status.setStyleSheet("font-size: 13px; color: #ff6b6b;")
+            btn.show()
+            btn.clicked.connect(lambda checked, m=OLLAMA_TARGET, s=status: self._pull_model(m, s))
+        self._model_items[OLLAMA_TARGET] = (status, btn)
 
     def _set_installing(self, busy: bool):
         """安装中禁用/启用所有按钮"""
@@ -552,40 +696,84 @@ class EnvCheckPage(QFrame):
             self.total_status.setText(f"❌ {name} 安装失败")
         self.total_bar.setVisible(False)
 
+    def _update_pull_progress(self, pct: int):
+            """【新增】安全的进度条更新方法"""
+            # 确保范围正确，且不重复设置
+            if self.total_bar.maximum() != 100:
+                self.total_bar.setRange(0, 100)
+            self.total_bar.setValue(pct)
+    
     def _pull_model(self, model: str, status_label):
-        """拉取 Ollama 模型（后台线程，带进度）"""
+        from PyQt5.QtCore import QTimer
+        import threading
+
+        # ✅ 核心修复：激活安装状态，显示进度条并禁用所有按钮
         self._set_installing(True)
         self.total_bar.setValue(0)
         self.total_bar.setVisible(True)
-        self.log(f"📦 正在拉取 {model}（这可能需要很久，取决于你的网速）…")
+        
+        self.log(f"🚀 开始拉取模型：{model}")
+    
+        last_log_line = ""
+
+        def on_log(line: str):
+            nonlocal last_log_line
+            line_s = line.strip()
+            if not line_s or line_s == last_log_line:
+                return
+            last_log_line = line_s
+
+            ll = line_s.lower()
+            if 'error' in ll:
+                QTimer.singleShot(0, lambda l=line_s: self.log(f"  ❌ {l}"))
+            elif 'success' in ll:
+                QTimer.singleShot(0, lambda: self.log("  ✅ 模型拉取完成"))
+            else:
+                QTimer.singleShot(0, lambda l=line_s: self.log(f"  📥 {l}"))
+
+        # ✅ 新增：安全的进度条更新回调（通过 QTimer 切回主线程）
+        def on_progress(pct: int):
+            QTimer.singleShot(0, lambda: self._update_pull_progress(pct))
 
         def task():
-            def on_log(line: str):
-                QTimer.singleShot(0, lambda: self.log(f"  {line}"))
-                # 尝试解析进度百分比
-                import re
-                m = re.search(r'(\d+)%', line)
-                if m:
-                    pct = int(m.group(1))
-                    QTimer.singleShot(0, lambda: self.total_bar.setValue(pct))
-
-            ok = pull_ollama_model(model, log_callback=on_log)
+            # ✅ 传入 progress_callback
+            ok = pull_ollama_model(model, log_callback=on_log, progress_callback=on_progress)
             QTimer.singleShot(0, lambda: self._pull_done(model, ok, status_label))
 
         threading.Thread(target=task, daemon=True).start()
-
     def _pull_done(self, model: str, ok: bool, status_label):
-        """模型拉取完成"""
+        """模型拉取完成（含验证，不完整则清理）"""
         self._set_installing(False)
         self.total_bar.setVisible(False)
         if ok:
-            status_label.setText("✅ 就绪")
-            status_label.setStyleSheet("font-size: 13px; color: #7dffb3;")
-            self.log(f"✅ {model} 拉取完成")
-            self.total_status.setText(f"✅ {model} 就绪")
+            # 拉取完成后验证模型是否真正可用
+            self.log(f"🔍 正在验证 {model}…")
+            QApplication.processEvents()
+            if verify_ollama_model(model):
+                status_label.setText("✅ 就绪")
+                status_label.setStyleSheet("font-size: 13px; color: #7dffb3;")
+                self.log(f"✅ {model} 拉取并验证通过")
+                self.total_status.setText(f"✅ {model} 就绪")
+            else:
+                # 模型在列表中但不可用 → 清理并提示重新拉取
+                self.log(f"⚠️ {model} 拉取不完整，正在清理…")
+                try:
+                    subprocess.run(["ollama", "rm", model],
+                                   capture_output=True, timeout=30)
+                except Exception:
+                    pass
+                status_label.setText("❌ 拉取不完整，请重试")
+                status_label.setStyleSheet("font-size: 13px; color: #ff6b6b;")
+                self.log(f"❌ {model} 拉取不完整，已清理，请重新拉取")
+                self.total_status.setText(f"❌ {model} 拉取不完整")
+                # 恢复拉取按钮
+                for mn in self._model_items:
+                    _, btn = self._model_items[mn]
+                    btn.show()
         else:
-            self.log(f"❌ {model} 拉取失败，稍后可以手动运行: ollama pull {model}")
-            self.total_status.setText(f"❌ {model} 拉取失败")
+            # 拉取进程异常退出（如窗口关闭、网络中断）
+            self.log(f"❌ {model} 拉取中断，稍后可以手动运行: ollama pull {model}")
+            self.total_status.setText(f"❌ {model} 拉取中断")
 
 
 # ═══════════════════════════════════════
@@ -633,8 +821,7 @@ class LLMPage(QFrame):
         layout.addWidget(QLabel(
             "    • 完全免费，不需要 API Key\n"
             "    • 需要先装 Ollama 并下载模型\n"
-            "    • 对话推荐模型：qwen2.5:7b\n"
-            "    • 识图推荐模型：minicpm-v（桌宠会偷看你屏幕）",
+            "    • 推荐模型：qwen3.5:4b（多模态，对话+识图一体）",
             styleSheet="font-size: 12px; color: #888; padding-left: 35px;"
         ))
 
@@ -645,7 +832,7 @@ class LLMPage(QFrame):
         layout.addWidget(QLabel(
             "    • 需要注册 DeepSeek 获取 API Key\n"
             "    • 按量付费，不需要本地显卡\n"
-            "    • 注：屏幕识图仍需要 Ollama（装 minicpm-v 即可）",
+            "    • 注：屏幕识图仍需要 Ollama（装 qwen3.5:4b 即可）",
             styleSheet="font-size: 12px; color: #888; padding-left: 35px;"
         ))
 
@@ -1478,7 +1665,7 @@ class SummaryPage(QFrame):
         # 识图提醒
         if b not in ("ollama", "mimo"):
             lines.append("")
-            lines.append("👀 屏幕识图需要 Ollama + minicpm-v 模型")
+            lines.append("👀 屏幕识图需要 Ollama + qwen3.5:4b 多模态模型")
             lines.append("   如果没装，桌宠的偷看功能不会工作")
         self.summary.setText("\n".join(lines))
 
@@ -1702,7 +1889,7 @@ class SetupWizard(QWidget):
     def collect_config(self):
         config = {
             "llm": {"backend": self.llm_page.get_backend(), "temperature": 0.7},
-            "vision": {"model": "minicpm-v"},
+            "vision": {"model": "qwen3.5:4b"},
             "tts": {
                 "engine": self.tts_page.backend_combo.currentData(),
                 "enabled": self.tts_page.enable_cb.isChecked(),
@@ -1730,7 +1917,7 @@ class SetupWizard(QWidget):
         b = self.llm_page.get_backend()
         if b == "ollama":
             config["llm"]["host"] = "http://127.0.0.1:11434"
-            config["llm"]["model"] = "qwen2.5:7b"
+            config["llm"]["model"] = "qwen3.5:4b"
             config["llm"]["api_key"] = ""
             config["llm"]["api_base"] = ""
             config["llm"]["bridge_url"] = ""
