@@ -132,8 +132,5 @@
     "watch": 7000,
     "interaction": 3000,
     "thinking": 0
-  },
-  "ui": {
-    "first_run_hint_shown": false
   }
 }
