@@ -29,7 +29,7 @@ from meapet.control.transport import (
     ensure_control_token,
 )
 from meapet.conversation.output_protocol import ParseResult, SegmentCompleted
-from meapet.desktop.dialogs import confirm_cloud_vision
+from meapet.desktop.dialogs import CaptureApproval, confirm_capture_scope
 from meapet.desktop.workers import TTSWorker
 from meapet.log import get_color_logger
 from meapet.watcher.capture import CaptureError, CapturedImage, capture_screen_image
@@ -162,13 +162,25 @@ class PetControlBridgeMixin:
                     play_motion(command.motion)
 
         for request in broker.take_capture_requests():
-            if not self._confirm_control_capture(request):
+            decision = self._confirm_control_capture(request)
+            if isinstance(decision, CaptureApproval):
+                approval = decision
+            elif decision is True:
+                # 兼容已有嵌入方；新 UI 总是返回本机最终范围。
+                approval = CaptureApproval(
+                    request.scope,
+                    dict(request.region) if request.region else None,
+                    request.application,
+                )
+            else:
+                approval = None
+            if approval is None:
                 broker.resolve_capture(
                     request.capture_id,
                     {"status": "rejected", "code": "user_denied"},
                 )
                 continue
-            self._capture_for_control(request)
+            self._capture_for_control(request, approval)
 
         self._poll_control_tts()
 
@@ -178,45 +190,37 @@ class PetControlBridgeMixin:
         if command is not None:
             self._start_control_say(command)
 
-    def _confirm_control_capture(self, request) -> bool:
-        scope_names = {
-            "full_screen": "全部屏幕",
-            "region": "指定区域",
-            "application": "指定应用窗口",
-        }
-        detail = scope_names.get(request.scope, request.scope)
-        if request.scope == "region" and request.region:
-            detail += (
-                f"（{request.region['width']}×{request.region['height']}，"
-                f"位置 {request.region['x']},{request.region['y']}）"
-            )
-        elif request.scope == "application" and request.application:
-            detail += f"（{request.application[:80]}）"
-        message = (
-            "已配置的 Agent 请求读取一次桌面截图。\n\n"
-            f"本次范围：{detail}\n"
-            "批准后才会采集，并直接在内存中发送给 Agent；MeaPet 不会为此落盘。\n"
-            "授权仅本次有效，超时将自动拒绝。"
-        )
-        return confirm_cloud_vision(
+    def _confirm_control_capture(self, request):
+        return confirm_capture_scope(
             self,
-            title="允许 Agent 本次截图？",
-            message=message,
+            requested_scope=request.scope,
+            requested_region=(
+                dict(request.region) if request.region else None
+            ),
+            requested_application=request.application,
             timeout_seconds=15,
-            accept_text="允许本次截图",
         )
 
-    def _capture_for_control(self, request) -> None:
+    def _capture_for_control(
+        self,
+        request,
+        approval: CaptureApproval | None = None,
+    ) -> None:
         broker = getattr(self, "_control_broker", None)
         if broker is None:
             return
+        final_scope = approval or CaptureApproval(
+            request.scope,
+            dict(request.region) if request.region else None,
+            request.application,
+        )
 
         def capture() -> None:
             try:
                 captured = capture_screen_image(
-                    scope=request.scope,
-                    region=request.region,
-                    application=request.application,
+                    scope=final_scope.scope,
+                    region=final_scope.region,
+                    application=final_scope.application,
                 )
                 result = encode_control_capture(captured)
             except CaptureError as exc:

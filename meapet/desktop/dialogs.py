@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -29,6 +35,15 @@ DEFAULT_CLOUD_CONSENT_MESSAGE = "\n".join(
         "只有本次明确允许后才会上传；取消不会截屏。",
     ]
 )
+
+
+@dataclass(frozen=True)
+class CaptureApproval:
+    """本地用户对单次截图确定的最终范围。"""
+
+    scope: str
+    region: dict[str, int] | None = None
+    application: str = ""
 
 
 class CloudVisionConsentDialog(QDialog):
@@ -197,3 +212,247 @@ def confirm_cloud_vision(
         accept_text=accept_text,
     )
     return dialog.exec_() == QDialog.Accepted
+
+
+class CaptureScopeConsentDialog(QDialog):
+    """每次 Agent 截图的本地范围选择；默认拒绝且不持久化。"""
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        requested_scope: str = "full_screen",
+        requested_region: dict | None = None,
+        requested_application: str = "",
+        timeout_seconds: int = 15,
+    ) -> None:
+        super().__init__(parent)
+        ensure_application_fonts()
+        self.setObjectName("CaptureScopeConsentRoot")
+        self.setWindowTitle("允许 Agent 本次截图？")
+        self.setWindowFlags(
+            Qt.Dialog
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+        )
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(500, 500)
+        set_scaled_stylesheet(self, CONSENT_DIALOG_STYLE)
+        self.setAccessibleName("Agent 截图范围确认")
+        self.setAccessibleDescription(
+            "最终截图范围由本机用户选择，仅本次有效，超时自动拒绝"
+        )
+
+        self.remaining_seconds = max(1, int(timeout_seconds))
+        self.auto_cancelled = False
+        self._explicit_allow = False
+        self.approval: CaptureApproval | None = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        card = QFrame()
+        card.setObjectName("CloudConsentCard")
+        outer.addWidget(card)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(8)
+
+        eyebrow = QLabel("隐私保护 · 本次有效 · 默认取消")
+        eyebrow.setObjectName("ConsentEyebrow")
+        layout.addWidget(eyebrow)
+        title = QLabel("允许 Agent 读取一次桌面截图？")
+        title.setObjectName("ConsentTitle")
+        layout.addWidget(title)
+        body = QLabel(
+            "截图只在点击允许后采集，内存传输给 Agent，不会由 MeaPet 落盘。\n"
+            "请在下方确定本次的最终范围；Agent 请求的范围不会自动获批。"
+        )
+        body.setObjectName("ConsentBody")
+        body.setWordWrap(True)
+        layout.addWidget(body)
+
+        scope_label = QLabel("本次截图范围：")
+        scope_label.setObjectName("FieldLabel")
+        layout.addWidget(scope_label)
+        self.scope_combo = QComboBox()
+        self.scope_combo.setObjectName("CaptureConsentScope")
+        self.scope_combo.setAccessibleName("本次截图范围")
+        self.scope_combo.addItem("全部屏幕（默认）", "full_screen")
+        self.scope_combo.addItem("矩形区域", "region")
+        self.scope_combo.addItem("Windows 应用窗口", "application")
+        layout.addWidget(self.scope_combo)
+
+        self.region_frame = QFrame()
+        self.region_frame.setObjectName("SectionCard")
+        region_layout = QGridLayout(self.region_frame)
+        region_layout.setContentsMargins(10, 8, 10, 8)
+        region = requested_region if isinstance(requested_region, dict) else {}
+        self.region_x = QSpinBox()
+        self.region_y = QSpinBox()
+        self.region_width = QSpinBox()
+        self.region_height = QSpinBox()
+        for row, (label, widget, key, default) in enumerate(
+            (
+                ("X", self.region_x, "x", 0),
+                ("Y", self.region_y, "y", 0),
+                ("宽", self.region_width, "width", 1280),
+                ("高", self.region_height, "height", 720),
+            )
+        ):
+            widget.setRange(
+                -100_000 if key in {"x", "y"} else 1,
+                100_000,
+            )
+            try:
+                widget.setValue(int(region.get(key, default)))
+            except (TypeError, ValueError):
+                widget.setValue(default)
+            widget.setAccessibleName(f"本次截图区域{label}")
+            region_layout.addWidget(QLabel(label), row // 2, (row % 2) * 2)
+            region_layout.addWidget(widget, row // 2, (row % 2) * 2 + 1)
+        layout.addWidget(self.region_frame)
+
+        self.application_frame = QFrame()
+        self.application_frame.setObjectName("SectionCard")
+        application_layout = QVBoxLayout(self.application_frame)
+        application_layout.setContentsMargins(10, 8, 10, 8)
+        application_hint = QLabel(
+            "填写可见窗口标题片段；仅 Windows 支持，最小化窗口无法采集。"
+        )
+        application_hint.setObjectName("HelperText")
+        application_hint.setWordWrap(True)
+        application_layout.addWidget(application_hint)
+        self.application_input = QLineEdit(
+            str(requested_application or "").strip()
+        )
+        self.application_input.setObjectName("CaptureConsentApplication")
+        self.application_input.setPlaceholderText("例如 Visual Studio Code")
+        self.application_input.setAccessibleName("本次截图应用窗口")
+        application_layout.addWidget(self.application_input)
+        layout.addWidget(self.application_frame)
+
+        self.validation_label = QLabel("")
+        self.validation_label.setObjectName("ConsentCountdown")
+        self.validation_label.setWordWrap(True)
+        layout.addWidget(self.validation_label)
+        self.countdown_label = QLabel()
+        self.countdown_label.setObjectName("ConsentCountdown")
+        self.countdown_label.setAccessibleName("自动取消倒计时")
+        layout.addWidget(self.countdown_label)
+
+        buttons = QHBoxLayout()
+        self.allow_button = QPushButton("允许本次截图")
+        self.allow_button.setObjectName("AllowUploadButton")
+        self.allow_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.allow_button.setAutoDefault(False)
+        self.allow_button.setDefault(False)
+        self.allow_button.clicked.connect(self._allow_once)
+        buttons.addWidget(self.allow_button, 1)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setObjectName("CancelUploadButton")
+        self.cancel_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.cancel_button.setAutoDefault(True)
+        self.cancel_button.setDefault(True)
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button, 1)
+        layout.addLayout(buttons)
+
+        requested = str(requested_scope or "full_screen").strip().lower()
+        index = self.scope_combo.findData(requested)
+        self.scope_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.scope_combo.currentIndexChanged.connect(self._sync_scope)
+        self._sync_scope()
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
+        self._update_countdown()
+
+    def _sync_scope(self, *_args) -> None:
+        scope = self.scope_combo.currentData() or "full_screen"
+        self.region_frame.setVisible(scope == "region")
+        self.application_frame.setVisible(scope == "application")
+        self.validation_label.clear()
+
+    def _update_countdown(self) -> None:
+        self.countdown_label.setText(
+            f"{self.remaining_seconds} 秒后自动取消。"
+        )
+
+    def _tick(self) -> None:
+        if self.remaining_seconds <= 0:
+            return
+        self.remaining_seconds -= 1
+        if self.remaining_seconds <= 0:
+            self.auto_cancelled = True
+            self.reject()
+            return
+        self._update_countdown()
+
+    def _allow_once(self) -> None:
+        scope = self.scope_combo.currentData() or "full_screen"
+        region = None
+        application = ""
+        if scope == "region":
+            region = {
+                "x": self.region_x.value(),
+                "y": self.region_y.value(),
+                "width": self.region_width.value(),
+                "height": self.region_height.value(),
+            }
+        elif scope == "application":
+            application = self.application_input.text().strip()[:256]
+            if not application:
+                self.validation_label.setText("请填写本次要采集的应用窗口标题。")
+                self.application_input.setFocus(Qt.OtherFocusReason)
+                return
+        self.approval = CaptureApproval(scope, region, application)
+        self._explicit_allow = True
+        self.accept()
+
+    def accept(self) -> None:
+        if not self._explicit_allow:
+            return
+        super().accept()
+
+    def done(self, result: int) -> None:
+        self._timer.stop()
+        super().done(result)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        screen = QApplication.primaryScreen()
+        if self.parentWidget() is not None:
+            center = self.parentWidget().frameGeometry().center()
+        elif screen is not None:
+            center = screen.availableGeometry().center()
+        else:
+            center = None
+        if center is not None:
+            self.move(
+                center.x() - self.width() // 2,
+                center.y() - self.height() // 2,
+            )
+        self.cancel_button.setFocus(Qt.OtherFocusReason)
+        self._timer.start()
+
+
+def confirm_capture_scope(
+    parent=None,
+    *,
+    requested_scope: str = "full_screen",
+    requested_region: dict | None = None,
+    requested_application: str = "",
+    timeout_seconds: int = 15,
+) -> CaptureApproval | None:
+    dialog = CaptureScopeConsentDialog(
+        parent,
+        requested_scope=requested_scope,
+        requested_region=requested_region,
+        requested_application=requested_application,
+        timeout_seconds=timeout_seconds,
+    )
+    if dialog.exec_() != QDialog.Accepted:
+        return None
+    return dialog.approval
