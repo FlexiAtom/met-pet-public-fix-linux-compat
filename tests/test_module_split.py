@@ -900,18 +900,27 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
         self.assertEqual(seen["filter"], "Audio (*.wav *.mp3);;All (*.*)")
 
     def test_tts_log_and_status_background_stay_project_relative(self):
-        import meapet.tts.common as common
+        import meapet.log as meapet_log
         from meapet.desktop.status_panel import BG_PATH
 
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            with (
-                mock.patch("meapet.paths.PROJECT_ROOT", root),
-                mock.patch("builtins.print"),
-            ):
-                common._safe_print("path regression probe")
-            log_path = root / "tts_debug.log"
-            self.assertIn("path regression probe", log_path.read_text(encoding="utf-8"))
+            previous_cwd = os.getcwd()
+            logger = None
+            try:
+                os.chdir(td)
+                with mock.patch(
+                    "meapet.log.logging.handlers.TimedRotatingFileHandler"
+                ) as handler_factory:
+                    logger = meapet_log.get_color_logger("tts-path-regression")
+                log_path = Path(
+                    handler_factory.call_args.kwargs["filename"]
+                ).resolve()
+            finally:
+                os.chdir(previous_cwd)
+                if logger is not None:
+                    logger.handlers.clear()
+
+            self.assertEqual(log_path.parent, (ROOT / "logs").resolve())
 
         self.assertEqual(Path(BG_PATH).resolve(), (ROOT / "ev312b.png").resolve())
 

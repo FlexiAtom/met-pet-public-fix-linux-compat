@@ -791,11 +791,8 @@ class ChatEngine:
 
     def _extract_memories(self, user_msg: str, mea_reply: str):
         """从对话中提取值得长期记住的信息（类似 OpenClaw memory promotion）
-        每 3 条用户消息触发一次，用本地 Ollama 做提取（不额外费 token）"""
+        每 3 条用户消息触发一次，用 LLM 做轻量提取。"""
         if not self.memory:
-            return
-        # MiMo 云端 API 不使用本地 Ollama，跳过记忆提取
-        if self.backend == "mimo":
             return
         # 用内存计数器
         if not hasattr(self, '_mem_extract_count'):
@@ -837,27 +834,9 @@ class ChatEngine:
         )
 
         try:
-            from meapet.async_runtime import run as _arun
-            from meapet.http_async import post_json
-            resp = _arun(
-                post_json(
-                    f"{self.host}/api/generate",
-                    json={
-                        "model": self.model,
-                        "prompt": extract_prompt,
-                        "stream": False,
-                        "options": {
-                            "temperature": 0.2,
-                            "num_predict": 200,
-                        },
-                    },
-                    timeout=30.0,
-                ),
-                timeout=45,
-            )
-            if resp.status_code != 200:
+            result = self._send_extract_request(extract_prompt)
+            if not result:
                 return
-            result = resp.json().get("response", "")
             for line in result.split("\n"):
                 line = line.strip()
                 if line.startswith("-") or line.startswith("·"):
@@ -874,6 +853,65 @@ class ChatEngine:
         except Exception as e:
             _safe_print(f"[memory] 提取失败: {type(e).__name__}")
             self._debug_dump("memory extraction exception", e)
+
+    def _send_extract_request(self, prompt: str) -> str:
+        """根据后端类型发送记忆提取请求，返回响应文本（空字符串表示失败）。"""
+        from meapet.async_runtime import run as _arun
+        from meapet.http_async import post_json
+
+        if self.backend == "ollama":
+            resp = _arun(
+                post_json(
+                    f"{self.host}/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.2,
+                            "num_predict": 200,
+                        },
+                    },
+                    timeout=30.0,
+                ),
+                timeout=45,
+            )
+            if resp.status_code != 200:
+                return ""
+            return resp.json().get("response", "")
+
+        elif self.backend in ("deepseek", "mimo"):
+            extract_messages = [
+                {"role": "system", "content": "你是一个信息提取助手。从对话中提取值得长期记住的事实，每行一条用「- 」开头。如果没有值得记的内容回复「无」。仅提取非敏感事实。"},
+                {"role": "user", "content": prompt},
+            ]
+            resp = _arun(
+                post_json(
+                    f"{self.api_base.rstrip('/')}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": extract_messages,
+                        "temperature": 0.2,
+                        "max_tokens": 200,
+                    },
+                    timeout=30.0,
+                ),
+                timeout=45,
+            )
+            if resp.status_code != 200:
+                return ""
+            choices = resp.json().get("choices") or []
+            if not choices:
+                return ""
+            msg = choices[0].get("message") or {}
+            return (msg.get("content") or "").strip()
+
+        _safe_print(f"[memory] 后端 {self.backend} 不支持记忆提取", flush=True)
+        return ""
 
     def _fallback_reply(self) -> str:
         fallbacks = [

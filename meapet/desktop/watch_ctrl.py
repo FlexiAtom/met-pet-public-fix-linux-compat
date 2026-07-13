@@ -8,8 +8,6 @@ import time
 from meapet.desktop import status_language
 from meapet.desktop.chat_input import set_awaiting_reply_state
 from meapet.utils import (
-    safe_print,
-    log_error,
     cloud_vision_allowed,
     debug_enabled,
     is_loopback_url,
@@ -21,14 +19,18 @@ from meapet.config.store import (
     resolve_vision_backend,
     resolve_vision_host,
 )
+from meapet.log import get_color_logger
+
+log = get_color_logger("watch_ctrl")
 
 
 def _log_private_text(label: str, text: str) -> None:
     """默认仅记录识图文本长度，调试模式才打印正文。"""
     value = str(text or "")
-    safe_print(f"{label}: chars={len(value)}")
     if debug_enabled():
-        safe_print(f"{label} [debug]: {value}")
+        log.debug(f"{label}: chars={len(value)}\n{value}")
+    else:
+        log.debug(f"{label}: chars={len(value)}")
 
 
 class PetWatcherMixin:
@@ -72,7 +74,7 @@ class PetWatcherMixin:
             return True
 
         if not cloud_vision_allowed(self.config, True):
-            safe_print("[watcher] cloud vision disabled (allow_cloud=false)")
+            log.info("[watcher] cloud vision disabled (allow_cloud=false)")
             self._show_bubble(status_language.cloud_vision_disabled(), 4000)
             return False
 
@@ -90,10 +92,10 @@ class PetWatcherMixin:
             accept_text="允许本次上传",
         )
         if not allowed:
-            safe_print("[watcher] user denied cloud screenshot upload")
+            log.info("[watcher] user denied cloud screenshot upload")
             self._show_bubble(status_language.watching_denied(), 2500)
             return False
-        safe_print("[watcher] user allowed cloud vision for this capture only")
+        log.info("[watcher] user allowed cloud vision for this capture only")
         return True
 
     def _do_screen_watch(self, force: bool = False):
@@ -109,7 +111,7 @@ class PetWatcherMixin:
         if self._watcher.isRunning():
             if force:
                 if not self._watcher.stop():
-                    safe_print("[watcher] previous capture did not stop in time")
+                    log.warning("[watcher] previous capture did not stop in time")
                     set_awaiting_reply_state(self, False)
                     self._start_watcher_timer()
                     return
@@ -122,10 +124,10 @@ class PetWatcherMixin:
                 self._start_watcher_timer()
                 return
         else:
-            safe_print("[watcher] local vision backend=%s (no upload)" % self._vision_backend())
+            log.info(f"[watcher] local vision backend={self._vision_backend()} (no upload)")
 
         if not self._watcher.prepare_start():
-            safe_print("[watcher] capture thread is still running")
+            log.warning("[watcher] capture thread is still running")
             set_awaiting_reply_state(self, False)
             self._start_watcher_timer()
             return
@@ -167,50 +169,39 @@ class PetWatcherMixin:
                     except Exception:
                         pass
                 else:
-                    safe_print("[watch] 无日语行，TTS 用中文（可能回退翻译）")
+                    log.info("[watch] 无日语行，TTS 用中文（可能回退翻译）")
             except Exception as e:
-                safe_print(f"[watch] 取日语行失败: {type(e).__name__}")
+                log.error(f"[watch] 取日语行失败: {type(e).__name__}")
             self._watch_tts_worker = TTSWorker(self.tts, voice, mood=mood)
             self._watch_tts_worker.start()
             self._ensure_tts_poll()
         except Exception as e:
-            log_error(
-                "watch_result",
-                str(e) if debug_enabled() else type(e).__name__,
-            )
+            log.error(f"[watch] _on_watch_result 异常: {type(e).__name__}" + (f": {e}" if debug_enabled() else ""))
             self.show_reply(text, mood, duration_ms=self.config["bubble_duration_ms"]["watch"])
             set_awaiting_reply_state(self, False)
             self._start_watcher_timer()
 
     def _on_watch_tts_and_show(self, raw: str, reply: str = None, mood: str = None):
-        safe_print(f"[watch] _on_watch_tts_and_show called, raw={raw is not None}, reply={reply is not None}")
+        log.info(f"[watch] _on_watch_tts_and_show called, raw={raw is not None}, reply={reply is not None}")
         if raw is None or reply is None:
-            safe_print("[TTS] watch tts returned None, skip audio")
+            log.warn("[TTS] watch tts returned None, skip audio")
             if reply and mood:
                 self.show_reply(reply, mood, duration_ms=self.config["bubble_duration_ms"]["watch"])
 
             else:
-                safe_print("[watch] _pending_reply 已丢失!")
+                log.warning("[watch] _pending_reply 已丢失!")
             set_awaiting_reply_state(self, False)
             self._start_watcher_timer()
             return
-            
+
         """屏幕吐槽：语音合成完成 → 显示文字 + 播放"""
         wav_path = raw.rsplit("|", 1)[0] if "|" in raw else raw
-        if hasattr(self, '_pending_reply'):
-            reply, mood = self._pending_reply
-            del self._pending_reply
-        else:
-            log_error("watch_tts", "_pending_reply missing")
-            set_awaiting_reply_state(self, False)
-            self._start_watcher_timer()
-            return
+        # reply/mood 由调用方 _poll_tts 直接传入，不再从 _pending_reply 重复读取
         audio_duration_ms = self._get_wav_duration_ms(wav_path) if wav_path else 0
         bubble_ms = self.config["bubble_duration_ms"]["watch"]
         if self.config["tts"]["sync_with_audio"]:
             bubble_ms = max(audio_duration_ms + 500, bubble_ms)
         self.show_reply(reply, mood, duration_ms=bubble_ms)
-        
         set_awaiting_reply_state(self, False)
         self._start_watcher_timer()
         if wav_path and os.path.exists(wav_path):
@@ -218,6 +209,8 @@ class PetWatcherMixin:
 
     def _on_watch_tts_error(self, err: str):
         """屏幕吐槽 TTS 合成失败 —— 至少显示文字，不卡死"""
+        _log_private_text("[watch] TTS 合成失败", err)
+        log.error(f"[watch] TTS 合成失败: error_chars={len(err or '')}")
         set_awaiting_reply_state(self, False)
         if hasattr(self, '_pending_reply'):
             reply, mood = self._pending_reply

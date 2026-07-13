@@ -8,6 +8,9 @@ import os
 import sys
 import time
 import socket  # must import before PyQt (QtNetwork hook)
+from meapet.log import get_color_logger
+
+log = get_color_logger("app")
 
 from meapet.paths import PROJECT_ROOT
 if str(PROJECT_ROOT) not in sys.path:
@@ -60,8 +63,7 @@ def _install_excepthook():
 
     def _hook(exc_type, exc, tb):
         msg = "".join(traceback.format_exception(exc_type, exc, tb))
-        log_error("uncaught", msg)
-        safe_print(f"[pet] uncaught: {exc_type.__name__}: {exc}")
+        log.error(f"[excepthook] 未捕获异常: {exc_type.__name__}: {exc}\n{msg}")
         sys.__excepthook__(exc_type, exc, tb)
 
     sys.excepthook = _hook
@@ -112,8 +114,9 @@ class MeaPet(
         )
         self._apply_motion_preference()
         bub = self.config.get("bubble_duration_ms") or {}
-        safe_print(
-            f"[config] bubble default={bub.get('default')} reply={bub.get('reply')} "
+        log.info(
+            f"[config] 气泡时长配置: "
+            f"default={bub.get('default')} reply={bub.get('reply')} "
             f"watch={bub.get('watch')} interaction={bub.get('interaction')} "
             f"sync_with_audio={self.config.get('tts', {}).get('sync_with_audio')}"
         )
@@ -138,11 +141,11 @@ class MeaPet(
         def _safe(step, fn):
             try:
                 fn()
-                safe_print(f"[init] {step} OK")
+                log.info(f"[init] {step} 初始化完成")
             except Exception as e:
                 import traceback
-                safe_print(f"[init] {step} FAILED: {e}")
-                safe_print(traceback.format_exc())
+                log.error(f"[init] {step} 初始化失败: {e}")
+                log.error(f"[init] {step} 异常堆栈:\n{traceback.format_exc()}")
 
         _safe("renderer", self._init_renderer)
         _safe("chat", self._init_chat)
@@ -156,31 +159,32 @@ class MeaPet(
         try:
             self._place_bottom_right()
         except Exception as e:
-            safe_print(f"[init] place failed: {e}")
+            log.warn(f"[init] 窗口定位失败: {e}")
         self.show()
         self.raise_()
         try:
             self._apply_hit_region()
         except Exception as e:
-            safe_print(f"[init] hit region failed: {e}")
+            log.warn(f"[init] 碰撞区域设置失败: {e}")
 
         try:
             cache_dir = str(PROJECT_ROOT / "audio_cache")
             stats = cleanup_audio_cache(cache_dir, max_files=40, max_age_hours=48.0)
             if stats.get("removed"):
-                safe_print(
-                    f"[audio_cache] cleaned removed={stats['removed']} kept={stats['kept']}"
+                log.info(
+                    f"[audio_cache] 缓存清理完成: removed={stats['removed']} kept={stats['kept']}"
                 )
         except Exception as e:
-            safe_print(f"[audio_cache] cleanup skipped: {e}")
+            log.warn(f"[audio_cache] 缓存清理跳过: {e}")
 
         if self._config_broken:
             QTimer.singleShot(800, lambda: self._show_bubble("配置文件坏了喵", 5000))
 
     def _init_window(self):
-        # 注意：不要用 SubWindow（无父窗口时在部分 Windows 上会“存在但不可见/无任务栏”）
+        # 注意：不要用 SubWindow（无父窗口时在部分 Windows 上会"存在但不可见/无任务栏"）
         self.setWindowFlags(
             Qt.FramelessWindowHint
+
             | Qt.WindowStaysOnTopHint
             | Qt.Tool
         )
@@ -267,8 +271,8 @@ class MeaPet(
                     mimo_model = "mimo-v2.5"
         ollama_host = resolve_vision_host(vision_cfg, llm_cfg)
 
-        safe_print(
-            f"[watcher] vision backend={backend} "
+        log.info(
+            f"[watcher] 视觉后端配置: backend={backend} "
             f"model={vision_model if backend != 'mimo' else mimo_model} "
             f"allow_cloud={self.config.get('watcher', {}).get('allow_cloud', False)}"
         )
@@ -304,7 +308,7 @@ class MeaPet(
         if watcher_cfg.get("enabled", False):
             self._start_watcher_timer()
         else:
-            safe_print("[watcher] 屏幕观察默认关闭（隐私）。右键菜单可开启。")
+            log.info("[watcher] 屏幕观察默认关闭（隐私），右键菜单可开启")
 
     # ── mouse ──────────────────────────────────────────
     def mousePressEvent(self, event):
@@ -362,10 +366,18 @@ class MeaPet(
     def mouseDoubleClickEvent(self, event):
         self._start_chat()
 
+    def showEvent(self, event):
+        """窗口显示时恢复空闲动画等后台定时器"""
+        super().showEvent(event)
+        if hasattr(self, '_idle_timer') and self._idle_timer and not self._idle_timer.isActive():
+            self._idle_timer.start(20000)
+
     def closeEvent(self, event):
         # 桌宠是常驻悬浮窗：系统/误触关闭只隐藏，真正退出走右键「退出」
-        safe_print("[pet] closeEvent -> hide (use tray/menu to quit)")
+        log.info("[pet] 关闭事件触发 -> 隐藏窗口（使用托盘或右键菜单退出）")
         event.ignore()
+        if hasattr(self, '_idle_timer') and self._idle_timer:
+            self._idle_timer.stop()
         self.hide()
 
 
@@ -390,28 +402,6 @@ def main():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     boot_log = _Path(PROJECT_ROOT) / "meapet_boot.log"
-    crash_log = _Path(PROJECT_ROOT) / "meapet_crash.log"
-
-    def _log(msg: str) -> None:
-        line = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
-        try:
-            safe_print(line)
-        except Exception:
-            print(line)
-        try:
-            with open(boot_log, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except Exception:
-            pass
-
-    def _crash(msg: str) -> None:
-        try:
-            with open(crash_log, "a", encoding="utf-8") as f:
-                f.write(f"\n===== {datetime.now().isoformat(timespec='seconds')} =====\n")
-                f.write(msg if msg.endswith("\n") else msg + "\n")
-        except Exception:
-            pass
-        _log("CRASH: " + (msg.splitlines()[0][:200] if msg else "?"))
 
     try:
         boot_log.write_text(
@@ -421,14 +411,14 @@ def main():
     except Exception:
         pass
 
-    _log(f"python={sys.version.split()[0]} exe={sys.executable}")
-    _log(f"cwd={os.getcwd()} root={PROJECT_ROOT}")
-    _log(f"FORCE_PNG={os.environ.get('MEAPET_FORCE_PNG', '')}")
+    log.info(f"[boot] python={sys.version.split()[0]} exe={sys.executable}")
+    log.info(f"[boot] cwd={os.getcwd()} root={PROJECT_ROOT}")
+    log.info(f"[boot] FORCE_PNG={os.environ.get('MEAPETFORCE_PNG', '')}")
 
     try:
         app = QApplication(sys.argv)
     except Exception:
-        _crash(traceback.format_exc())
+        log.error(f"[boot] QApplication 创建失败:\n{traceback.format_exc()}")
         raise
 
     from meapet.ui_theme import ensure_application_fonts, resolve_reduced_motion, apply_reduced_motion_env, set_ui_font_scale
@@ -438,7 +428,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("MeaPet")
     app.setOrganizationName("MeaPet")
-    app.aboutToQuit.connect(lambda: _log("aboutToQuit fired"))
+    app.aboutToQuit.connect(lambda: log.info("[boot] 应用即将退出 (aboutToQuit)"))
 
     holder: dict = {"pet": None}
     app._meapet_holder = holder
@@ -453,18 +443,11 @@ def main():
     keepalive.move(-10000, -10000)
     keepalive.show()
     app._meapet_keepalive = keepalive
-    _log("keepalive ready")
+    log.info("[boot] 保活窗口就绪")
 
     config_path = resolve_startup_config_path(PROJECT_ROOT)
     if os.path.basename(config_path) == "config.example.json":
-        _log("using config.example.json")
-    try:
-        startup_config = load_config(config_path)
-        set_ui_font_scale(
-            (startup_config.get("display") or {}).get("font_scale", 1.0)
-        )
-    except Exception as exc:
-        _log(f"font scale fallback: {exc}")
+        log.info("[boot] 使用默认示例配置文件 config.example.json")
 
     # 可选启动页（失败忽略）
     splash = None
@@ -476,25 +459,26 @@ def main():
         splash.show()
         app.processEvents()
     except Exception as e:
-        _log(f"splash skipped: {e}")
+        log.warn(f"[boot] 启动页跳过: {e}")
         splash = None
 
     pet = None
     try:
-        _log("creating MeaPet...")
+        log.info("[boot] 正在创建 MeaPet 实例...")
         pet = MeaPet(config_path)
         holder["pet"] = pet
         app._meapet_pet = pet
         pet.show()
         pet.raise_()
-        _log(
-            f"MeaPet OK size={pet.width()}x{pet.height()} "
+        log.info(
+            f"[boot] MeaPet 创建成功: "
+            f"size={pet.width()}x{pet.height()} "
             f"pos=({pet.x()},{pet.y()}) vis={pet.isVisible()} "
             f"live2d={getattr(pet, '_use_live2d', None)} tray={getattr(pet, 'tray', None) is not None}"
         )
     except Exception:
         tb = traceback.format_exc()
-        _crash(tb)
+        log.error(f"[boot] MeaPet 创建失败:\n{tb}")
         try:
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(None, "MeaPet 启动失败", tb[-1200:])
@@ -503,13 +487,36 @@ def main():
         _abort_failed_startup(app, keepalive, splash)
         return 1
 
+    if splash is not None:
+        try:
+            splash.hide()
+        except Exception:
+            pass
+
+    def _ensure_visible():
+        pet2 = holder.get("pet")
+        if pet2 is None:
+            return
+        try:
+            if hasattr(pet2, "_place_bottom_right"):
+                pet2._place_bottom_right()
+            pet2.show()
+            pet2.raise_()
+            log.debug(
+                f"[boot] 确保窗口可见: "
+                f"size={pet2.width()}x{pet2.height()} "
+                f"@({pet2.x()},{pet2.y()}) vis={pet2.isVisible()}"
+            )
+        except Exception as e:
+            log.warn(f"[boot] 确保窗口可见失败: {e}")
+
     def _greet():
         try:
             pet2 = holder.get("pet")
             if pet2 is not None and hasattr(pet2, "show_reply"):
                 pet2.show_reply("......", "neutral")
         except Exception as e:
-            _log(f"greet skipped: {e}")
+            log.warn(f"[boot] 问候消息跳过: {e}")
 
     startup_finished = {"done": False}
 
@@ -528,13 +535,13 @@ def main():
                 # 几何位置已在构造阶段确定，这里只显现，不再二次定位。
                 pet2.show()
                 pet2.raise_()
-                _log(
+                log.debug(
                     f"renderer ready size={pet2.width()}x{pet2.height()} "
                     f"@({pet2.x()},{pet2.y()}) vis={pet2.isVisible()} "
                     f"opacity={pet2.windowOpacity():.2f} mapping=continuous"
                 )
             except Exception as exc:
-                _log(f"renderer reveal failed: {exc}")
+                log.error(f"渲染器显示失败: {exc}")
         QTimer.singleShot(600, _greet)
 
     if hasattr(pet, "when_renderer_ready"):
@@ -550,15 +557,15 @@ def main():
         pet2 = holder.get("pet")
         vis = pet2.isVisible() if pet2 is not None else None
         if beats["n"] <= 5 or beats["n"] % 30 == 0:
-            _log(f"heartbeat #{beats['n']} pet_visible={vis}")
+            log.debug(f"[heartbeat] #{beats['n']} pet_visible={vis}")
 
     heartbeat.timeout.connect(_beat)
     heartbeat.start(1000)
     app._meapet_heartbeat = heartbeat
 
-    _log("entering app.exec_()")
+    log.info("[boot] 进入事件循环 app.exec_()")
     code = app.exec_()
-    _log(f"app.exec_ returned code={code}")
+    log.info(f"[boot] 事件循环退出 code={code}")
     try:
         from meapet.desktop.live2d_widget import dispose_live2d
         dispose_live2d()
@@ -574,14 +581,8 @@ if __name__ == "__main__":
         raise
     except Exception:
         import traceback
-        from pathlib import Path as _Path
         msg = traceback.format_exc()
-        print(msg, file=sys.stderr)
-        try:
-            with open(_Path(PROJECT_ROOT) / "meapet_crash.log", "a", encoding="utf-8") as f:
-                f.write(msg)
-        except Exception:
-            pass
+        log.error(f"[fatal] 启动阶段未捕获异常:\n{msg}")
         try:
             if sys.platform == "win32":
                 input("启动失败，按回车退出...")

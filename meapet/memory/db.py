@@ -421,7 +421,7 @@ class MeaMemory:
         mood_updated = float(self._get_state("mood_updated", "0"))
         if time.time() - mood_updated > 14400:  # 4小时
             if random.random() < 0.3:
-                new_mood = random.choice(["平静", "困倦", "烦躁", "期待"])
+                new_mood = random.choice(["平静", "开心", "忧郁", "烦躁", "困倦", "期待"])
                 self.set_mood(new_mood)
 
         # 记录今天有没有聊过
