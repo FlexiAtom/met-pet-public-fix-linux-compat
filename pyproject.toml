@@ -92,8 +92,9 @@ Homepage = "https://github.com/suan-11/mea-pet-public"
 Repository = "https://github.com/suan-11/mea-pet-public"
 Issues = "https://github.com/suan-11/mea-pet-public/issues"
 
-[tool.setuptools]
-packages = ["meapet", "wizard"]
+[tool.setuptools.packages.find]
+include = ["meapet*", "wizard*"]
+exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 "*" = [
