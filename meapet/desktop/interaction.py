@@ -127,12 +127,38 @@ class PetInteractionMixin:
     # ========================
     # 对话气泡
     # ========================
+    def _on_bubble_stack_changed(self) -> None:
+        stack = getattr(self, "_bubble_stack", None)
+        if stack is None:
+            return
+        self.bubble = stack.latest
+        if hasattr(self, "_position_bubble"):
+            self._position_bubble(animate=True)
+
+    def _clear_bubbles(self) -> None:
+        stack = getattr(self, "_bubble_stack", None)
+        if stack is not None:
+            stack.hide_all()
+            self.bubble = None
+            return
+        bubble = getattr(self, "bubble", None)
+        if bubble is not None:
+            try:
+                bubble.hide()
+            except RuntimeError:
+                pass
+
     def _show_bubble(self, text: str, duration_ms: int = None):
         try:
             if duration_ms is None:
                 duration_ms = (self.config.get("bubble_duration_ms") or {}).get("default", 5000)
-            if getattr(self, "bubble", None) is not None:
+            stack = getattr(self, "_bubble_stack", None)
+            if stack is not None:
+                self.bubble = stack.show_message(text, duration_ms)
+            elif getattr(self, "bubble", None) is not None:
                 self.bubble.show_text(text, duration_ms)
+                if hasattr(self, "_position_bubble"):
+                    self._position_bubble()
         except Exception as e:
             log_error("show_bubble", f"{type(e).__name__}: {e}")
             safe_print(f"[pet] show_bubble error: {e}")

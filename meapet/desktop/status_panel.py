@@ -10,7 +10,11 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QColor
 from meapet.desktop.theme import STATUS_PANEL_STYLE
-from meapet.ui_theme import MIN_TARGET_SIZE
+from meapet.ui_theme import (
+    MIN_TARGET_SIZE,
+    ensure_application_fonts,
+    set_scaled_stylesheet,
+)
 from meapet.paths import project_path
 
 
@@ -22,6 +26,7 @@ class StatusPanel(QWidget):
 
     def __init__(self, memory, parent=None):
         super().__init__(parent)
+        ensure_application_fonts()
         self.memory = memory
         self._build_ui()
         self.refresh()
@@ -42,7 +47,7 @@ class StatusPanel(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAccessibleName("梅尔养成状态")
         self.setAccessibleDescription("查看好感度、心情、对话统计和重要记忆")
-        self.setStyleSheet(STATUS_PANEL_STYLE)
+        set_scaled_stylesheet(self, STATUS_PANEL_STYLE)
 
         # 背景
         self.bg_label = QLabel(self)

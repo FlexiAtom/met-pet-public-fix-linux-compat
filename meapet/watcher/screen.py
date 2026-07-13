@@ -79,7 +79,7 @@ def parse_decision(decision: str) -> tuple:
 
 def parse_watch_output(raw: str) -> tuple:
     _debug_log(f"[parse_watch_output] input raw chars={len(raw)}")
-    
+
     """
     解析一次多模态偷看输出。
     返回 (should_speak, display_zh, voice_jp, mood, strategy_hint)
@@ -299,7 +299,7 @@ class ScreenWatcher(QThread):
             import re
 
             self.last_voice_text = ""
-            
+
             print(f"[watcher] thread started, idle_minutes={self.idle_minutes}, backend={self.backend}")
             # ========== 1) 截屏 ==========
             if self._stop:
@@ -307,7 +307,7 @@ class ScreenWatcher(QThread):
             self.progress.emit(STAGE_CAPTURE)
             img = ImageGrab.grab()
             print(f"[watcher] screenshot captured: size={img.size}, mode={img.mode}")
-            
+
             import os
             save_dir = "screenshots"                     # 可改为配置项
             os.makedirs(save_dir, exist_ok=True)
@@ -316,8 +316,8 @@ class ScreenWatcher(QThread):
             save_path = os.path.join(save_dir, f"screenshot_{timestamp}.png")
             img.save(save_path)
             print(f"[watcher] screenshot saved to {save_path}")
-            
-            
+
+
             ratio = 320 / img.width
             if ratio < 1.0:
                 img = img.resize((320, int(img.height * ratio)))
@@ -332,10 +332,10 @@ class ScreenWatcher(QThread):
 
             prompt = UNIFIED_WATCH_PROMPT.format(idle_minutes=int(self.idle_minutes))
             raw = ""
-            
+
             print(f"[watcher] calling model: backend={self.backend}, model={self.vision_model if self.backend=='ollama' else self.mimo_model}, prompt_len={len(prompt)}")
-            
-            
+
+
 
             # ========== 2) 一次多模态 ==========
             if self.backend == "mimo":
@@ -343,9 +343,9 @@ class ScreenWatcher(QThread):
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 }
-                
+
                 print(f"[watcher] MiMo request: url={self.api_base}/chat/completions, model={self.mimo_model}, max_tokens=2048")
-                
+
                 if self.api_key:
                     headers["api-key"] = self.api_key
                 resp = self._http_post(
@@ -378,9 +378,9 @@ class ScreenWatcher(QThread):
                     },
                     timeout=600,
                 )
-                
+
                 print(f"[watcher] MiMo response: status={resp.status_code}, elapsed=...")
-                
+
                 if self._stop:
                     return
                 if resp.status_code == 200:
@@ -427,7 +427,7 @@ class ScreenWatcher(QThread):
                 raw = (resp.json().get("response") or "").strip()
                 print(f"[watcher] RAW MODEL OUTPUT ({len(raw)} chars):")
                 print(raw)
-                
+
                 print(f"[watcher] raw response received, chars={len(raw)}")
                 _debug_log(f"[watcher] raw response first 300 chars: {raw[:300]!r}")
 

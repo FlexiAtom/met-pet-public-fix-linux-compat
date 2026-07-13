@@ -89,7 +89,10 @@ class LLMPage(QFrame):
         layout.addWidget(self.ollama_status)
 
         layout.addStretch()
-        QTimer.singleShot(100, self._refresh_ollama_status)
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.timeout.connect(self._refresh_ollama_status)
+        self._status_timer.start(100)
 
     def _refresh_ollama_status(self):
         running, models = check_ollama_running()

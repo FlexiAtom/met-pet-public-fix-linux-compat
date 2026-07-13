@@ -13,6 +13,7 @@ from meapet.utils import (
     is_loopback_url,
 )
 from meapet.desktop.workers import TTSWorker
+from meapet.desktop.dialogs import confirm_cloud_vision
 from meapet.config.store import (
     resolve_vision_api_base,
     resolve_vision_backend,
@@ -73,23 +74,20 @@ class PetWatcherMixin:
             self._show_bubble("云端识图未授权：请在向导勾选允许云端识图", 4000)
             return False
 
-        # Force confirm every time (ignore require_confirm=false for safety? user asked always confirm)
-        # Keep require_confirm for config, but default and UI force True; still honor explicit false only if we want - user said MUST always confirm, so always confirm.
-        from PyQt5.QtWidgets import QMessageBox
         msg = "\n".join([
             "即将截取当前屏幕，并把截图发送到云端识别。",
             "",
             "图中可能包含聊天、密码、邮件、代码等隐私信息。",
             "每次上传前都必须确认；取消则不会截屏。",
         ])
-        ret = QMessageBox.question(
+        allowed = confirm_cloud_vision(
             self,
-            "隐私确认 - 云端识图",
-            msg,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            title="允许本次云端识图？",
+            message=msg,
+            timeout_seconds=5,
+            accept_text="允许本次上传",
         )
-        if ret != QMessageBox.Yes:
+        if not allowed:
             safe_print("[watcher] user denied cloud screenshot upload")
             self._show_bubble("好，这次不看了喵", 2500)
             return False
@@ -256,7 +254,6 @@ class PetWatcherMixin:
         turning_on = not w.get("enabled", False)
 
         if turning_on and self._is_cloud_vision():
-            from PyQt5.QtWidgets import QMessageBox
             if not w.get("allow_cloud", False):
                 q = "\n".join([
                     "当前识图后端会把截图发到云端。",
@@ -264,11 +261,14 @@ class PetWatcherMixin:
                     "是否授权「允许云端识图」并开启屏幕观察？",
                     "之后每次自动偷看默认仍会再确认一次。",
                 ])
-                ret = QMessageBox.question(
-                    self, "开启云端屏幕观察？", q,
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                allowed = confirm_cloud_vision(
+                    self,
+                    title="开启云端屏幕观察？",
+                    message=q,
+                    timeout_seconds=5,
+                    accept_text="允许并开启",
                 )
-                if ret != QMessageBox.Yes:
+                if not allowed:
                     self._show_bubble("未开启屏幕观察喵", 2500)
                     return
                 w["allow_cloud"] = True
@@ -280,11 +280,14 @@ class PetWatcherMixin:
                     "",
                     "继续开启？",
                 ])
-                ret = QMessageBox.question(
-                    self, "开启屏幕观察？", q,
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                allowed = confirm_cloud_vision(
+                    self,
+                    title="开启屏幕观察？",
+                    message=q,
+                    timeout_seconds=5,
+                    accept_text="继续开启",
                 )
-                if ret != QMessageBox.Yes:
+                if not allowed:
                     self._show_bubble("未开启屏幕观察喵", 2500)
                     return
 

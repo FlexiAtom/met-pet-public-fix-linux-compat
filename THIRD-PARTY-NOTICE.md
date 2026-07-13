@@ -71,7 +71,20 @@
 
 ---
 
-## 三、运行时 Python 包依赖
+## 三、随项目分发的字体资源
+
+### LXGW WenKai（霞鹜文楷）
+
+- **仓库**: https://github.com/lxgw/LxgwWenKai
+- **版本**: v1.522
+- **许可证**: SIL Open Font License 1.1
+- **使用方式**: `meapet/assets/fonts/LXGWWenKai-Regular.ttf` 作为桌宠及配置界面的全局中文字体
+- **版权声明**: Copyright 2021–2026 LXGW；Copyright 2020 The Klee Project Authors
+- **许可证全文**: 见 `meapet/assets/fonts/OFL-LXGWWenKai.txt`
+
+---
+
+## 四、运行时 Python 包依赖
 
 以下为项目运行时通过 pip 安装的 Python 包依赖（仅列出核心依赖，完整清单见各 `requirements.txt`）。各包遵循其各自的许可证条款：
 
@@ -109,7 +122,7 @@
 
 ---
 
-## 四、致谢
+## 五、致谢
 
 - **DeepSeek** — AI 对话 API 服务 (https://deepseek.com/)
 - **CMU Pronouncing Dictionary** — 英语音素词典，`vits_core/text/` 使用其数据 (BSD-like)

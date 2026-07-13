@@ -28,6 +28,7 @@ from meapet.utils import (
     cleanup_audio_cache,
 )
 from meapet.config.store import (
+    load_config,
     normalize_config,
     resolve_startup_config_path,
     resolve_vision_api_base,
@@ -43,13 +44,13 @@ from meapet.chat.engine import create_engine_from_config
 from meapet.memory.db import MeaMemory
 from meapet.watcher.screen import ScreenWatcher
 from meapet.tts.service import MeaTTS
-from meapet.desktop.widgets import DialogueBox
+from meapet.desktop.widgets import DialogueBubbleStack
 from meapet.desktop.audio import PetAudioMixin
 from meapet.desktop.watch_ctrl import PetWatcherMixin
 from meapet.desktop.chat_flow import PetChatFlowMixin
 from meapet.desktop.interaction import PetInteractionMixin
 from meapet.desktop.window_chrome import PetWindowChromeMixin
-from meapet.desktop.render_host import PetRenderHostMixin
+from meapet.desktop.render_host import PetRenderHostMixin, calculate_drag_position
 from meapet.desktop.config_bridge import PetConfigBridgeMixin
 from meapet.desktop.splash import StartupSplash
 
@@ -105,6 +106,11 @@ class MeaPet(
             self._config_broken = False
 
         self.config = normalize_config(self.config)
+        from meapet.ui_theme import set_ui_font_scale
+
+        set_ui_font_scale(
+            (self.config.get("display") or {}).get("font_scale", 1.0)
+        )
         bub = self.config.get("bubble_duration_ms") or {}
         log.info(
             f"[config] 气泡时长配置: "
@@ -118,6 +124,13 @@ class MeaPet(
         self._chat_worker = None
         self._tts_worker = None
         self._dragging = False
+        self._drag_pointer_origin = None
+        self._drag_window_origin = None
+        self._pending_drag_position = None
+        self._drag_move_timer = QTimer(self)
+        self._drag_move_timer.setSingleShot(True)
+        self._drag_move_timer.setTimerType(Qt.PreciseTimer)
+        self._drag_move_timer.timeout.connect(self._flush_drag_position)
         self._standby = False
         self._standby_bubble = None
 
@@ -185,7 +198,9 @@ class MeaPet(
         self.setAttribute(Qt.WA_QuitOnClose, False)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
-        self.bubble = DialogueBox(None)
+        self._bubble_stack = DialogueBubbleStack(self)
+        self._bubble_stack.changed.connect(self._on_bubble_stack_changed)
+        self.bubble = None
 
     def _init_chat(self):
         self.memory = MeaMemory()
@@ -278,7 +293,8 @@ class MeaPet(
             self._is_head_touching = event.y() < head_threshold
             self._head_press_x = event.x() if self._is_head_touching else None
             self._dragging = True
-            self._drag_offset = event.pos()
+            self._drag_pointer_origin = event.globalPos()
+            self._drag_window_origin = self.pos()
 
     def mouseMoveEvent(self, event):
         if not (self._dragging and event.buttons() & Qt.LeftButton):
@@ -289,11 +305,37 @@ class MeaPet(
                 self._is_head_touching = False
                 self._head_press_x = None
                 return
-        self.move(self.pos() + event.pos() - self._drag_offset)
+        if self._drag_pointer_origin is None or self._drag_window_origin is None:
+            return
+        self._queue_drag_position(
+            calculate_drag_position(
+                self._drag_window_origin,
+                self._drag_pointer_origin,
+                event.globalPos(),
+            )
+        )
+
+    def _queue_drag_position(self, position):
+        """合并高频 move 事件，同时保留首个事件的即时反馈。"""
+        self._pending_drag_position = position
+        if not self._drag_move_timer.isActive():
+            self._flush_drag_position()
+            self._drag_move_timer.start(8)
+
+    def _flush_drag_position(self):
+        position = self._pending_drag_position
+        if position is None:
+            return
+        self._pending_drag_position = None
+        self.move(position)
         self._position_bubble()
 
     def mouseReleaseEvent(self, event):
+        self._drag_move_timer.stop()
+        self._flush_drag_position()
         self._dragging = False
+        self._drag_pointer_origin = None
+        self._drag_window_origin = None
         self._is_head_touching = False
         self._head_press_x = None
 
@@ -346,6 +388,10 @@ def main():
     except Exception:
         log.error(f"[boot] QApplication 创建失败:\n{traceback.format_exc()}")
         raise
+
+    from meapet.ui_theme import ensure_application_fonts, set_ui_font_scale
+
+    ensure_application_fonts()
 
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("MeaPet")
@@ -440,8 +486,36 @@ def main():
         except Exception as e:
             log.warn(f"[boot] 问候消息跳过: {e}")
 
-    QTimer.singleShot(200, _ensure_visible)
-    QTimer.singleShot(800, _greet)
+    startup_finished = {"done": False}
+
+    def _finish_startup():
+        if startup_finished["done"]:
+            return
+        startup_finished["done"] = True
+        if splash is not None:
+            try:
+                splash.hide()
+            except Exception:
+                pass
+        pet2 = holder.get("pet")
+        if pet2 is not None:
+            try:
+                # 几何位置已在构造阶段确定，这里只显现，不再二次定位。
+                pet2.show()
+                pet2.raise_()
+                _log(
+                    f"renderer ready size={pet2.width()}x{pet2.height()} "
+                    f"@({pet2.x()},{pet2.y()}) vis={pet2.isVisible()} "
+                    f"opacity={pet2.windowOpacity():.2f} mapping=continuous"
+                )
+            except Exception as exc:
+                _log(f"renderer reveal failed: {exc}")
+        QTimer.singleShot(600, _greet)
+
+    if hasattr(pet, "when_renderer_ready"):
+        pet.when_renderer_ready(_finish_startup)
+    else:
+        _finish_startup()
 
     heartbeat = QTimer()
     beats = {"n": 0}

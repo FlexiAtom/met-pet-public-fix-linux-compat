@@ -24,6 +24,17 @@ def _log_private_text(label: str, text: str, *, suffix: str = "") -> None:
 class PetChatFlowMixin:
     def _start_chat(self):
         """双击触发：在桌宠附近打开消息编辑器。"""
+        clear_bubbles = getattr(self, "_clear_bubbles", None)
+        if callable(clear_bubbles):
+            clear_bubbles()
+        else:
+            bubble = getattr(self, "bubble", None)
+            if bubble is not None:
+                try:
+                    bubble.hide()
+                except RuntimeError:
+                    pass
+
         self._chat_input = ChatInputBox(None)
 
         # 以编辑器实际尺寸居中，避免 UI 调整后仍依赖旧的硬编码宽度。

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import math
+import re
+import sys
+from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
@@ -30,11 +34,38 @@ _PALETTE = {
 
 PALETTE: Mapping[str, str] = MappingProxyType(_PALETTE)
 
-FONT_FAMILY = (
-    '"Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", '
-    '"PingFang SC", "Noto Sans CJK SC", sans-serif'
+DISPLAY_FONT_NAME = "LXGW WenKai"
+DISPLAY_FONT_FAMILY = f'"{DISPLAY_FONT_NAME}"'
+BUNDLED_DISPLAY_FONT_PATH = (
+    Path(__file__).resolve().parent / "assets" / "fonts" / "LXGWWenKai-Regular.ttf"
 )
-MONO_FONT_FAMILY = '"Cascadia Mono", "JetBrains Mono", Consolas, monospace'
+
+if sys.platform == "win32":
+    FALLBACK_BODY_FONT_NAME = "Microsoft YaHei UI"
+elif sys.platform == "darwin":
+    FALLBACK_BODY_FONT_NAME = "PingFang SC"
+else:
+    FALLBACK_BODY_FONT_NAME = "Noto Sans CJK SC"
+
+# 正文和展示文字统一使用随项目分发的霞鹜文楷，避免各平台回退到古早系统字体。
+BODY_FONT_NAME = DISPLAY_FONT_NAME
+FONT_FAMILY = f'"{BODY_FONT_NAME}"'
+MONO_FONT_FAMILY = '"Cascadia Code", "JetBrains Mono", "Cascadia Mono", Consolas, monospace'
+
+_APPLICATION_FONT_FAMILIES: tuple[str, ...] = ()
+_APPLICATION_BASE_FONT_POINT_SIZE: float | None = None
+_APPLICATION_BASE_FONT_PIXEL_SIZE: int | None = None
+
+UI_FONT_SCALE_MIN = 0.8
+UI_FONT_SCALE_MAX = 1.5
+UI_FONT_SCALE_DEFAULT = 1.0
+_UI_FONT_SCALE = UI_FONT_SCALE_DEFAULT
+_BASE_STYLESHEET_PROPERTY = "_meapetBaseStylesheet"
+_SCALED_STYLESHEET_PROPERTY = "_meapetScaledStylesheet"
+_FONT_SIZE_PATTERN = re.compile(
+    r"(?P<prefix>font-size\s*:\s*)(?P<size>\d+(?:\.\d+)?)px",
+    re.IGNORECASE,
+)
 
 MIN_TARGET_SIZE = 44
 
@@ -49,6 +80,141 @@ SPACE_8 = 32
 RADIUS_SMALL = 8
 RADIUS_MEDIUM = 12
 RADIUS_LARGE = 18
+
+
+def ensure_application_fonts() -> tuple[str, ...]:
+    """加载随项目分发的霞鹜文楷，并把它设为 Qt 全局默认字体。"""
+    global _APPLICATION_FONT_FAMILIES
+    global _APPLICATION_BASE_FONT_PIXEL_SIZE
+    global _APPLICATION_BASE_FONT_POINT_SIZE
+
+    from PyQt5.QtGui import QFontDatabase
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return _APPLICATION_FONT_FAMILIES
+
+    if not _APPLICATION_FONT_FAMILIES and BUNDLED_DISPLAY_FONT_PATH.is_file():
+        font_id = QFontDatabase.addApplicationFont(
+            str(BUNDLED_DISPLAY_FONT_PATH)
+        )
+        if font_id >= 0:
+            _APPLICATION_FONT_FAMILIES = tuple(
+                QFontDatabase.applicationFontFamilies(font_id)
+            )
+
+    resolved_family = (
+        _APPLICATION_FONT_FAMILIES[0]
+        if _APPLICATION_FONT_FAMILIES
+        else FALLBACK_BODY_FONT_NAME
+    )
+    app_font = app.font()
+    if (
+        _APPLICATION_BASE_FONT_POINT_SIZE is None
+        and _APPLICATION_BASE_FONT_PIXEL_SIZE is None
+    ):
+        if app_font.pointSizeF() > 0:
+            _APPLICATION_BASE_FONT_POINT_SIZE = app_font.pointSizeF()
+        elif app_font.pixelSize() > 0:
+            _APPLICATION_BASE_FONT_PIXEL_SIZE = app_font.pixelSize()
+
+    app_font.setFamily(resolved_family)
+    if _APPLICATION_BASE_FONT_POINT_SIZE is not None:
+        app_font.setPointSizeF(
+            _APPLICATION_BASE_FONT_POINT_SIZE * _UI_FONT_SCALE
+        )
+    elif _APPLICATION_BASE_FONT_PIXEL_SIZE is not None:
+        app_font.setPixelSize(
+            max(1, round(_APPLICATION_BASE_FONT_PIXEL_SIZE * _UI_FONT_SCALE))
+        )
+    app.setFont(app_font)
+    return _APPLICATION_FONT_FAMILIES
+
+
+def normalize_ui_font_scale(value: object) -> float:
+    """把任意配置值规范到受支持的字体缩放范围。"""
+    try:
+        scale = float(value)
+    except (TypeError, ValueError):
+        return UI_FONT_SCALE_DEFAULT
+    if not math.isfinite(scale):
+        return UI_FONT_SCALE_DEFAULT
+    return min(max(scale, UI_FONT_SCALE_MIN), UI_FONT_SCALE_MAX)
+
+
+def get_ui_font_scale() -> float:
+    """返回当前进程使用的全局界面字体缩放。"""
+    return _UI_FONT_SCALE
+
+
+def set_ui_font_scale(scale: object) -> float:
+    """设置全局界面字体缩放，并同步 Qt 默认字体。"""
+    global _UI_FONT_SCALE
+
+    _UI_FONT_SCALE = normalize_ui_font_scale(scale)
+    ensure_application_fonts()
+    return _UI_FONT_SCALE
+
+
+def scale_stylesheet_font_sizes(
+    stylesheet: str,
+    scale: object | None = None,
+) -> str:
+    """只缩放 QSS 中的 ``font-size: Npx``，不改变布局尺寸。"""
+    factor = (
+        get_ui_font_scale()
+        if scale is None
+        else normalize_ui_font_scale(scale)
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        size = max(1, round(float(match.group("size")) * factor))
+        return f"{match.group('prefix')}{size}px"
+
+    return _FONT_SIZE_PATTERN.sub(replace, stylesheet or "")
+
+
+def set_scaled_stylesheet(widget, stylesheet: str, scale: object | None = None) -> str:
+    """给控件应用可重复缩放的 QSS，并保留一份未缩放基准。"""
+    factor = (
+        get_ui_font_scale()
+        if scale is None
+        else normalize_ui_font_scale(scale)
+    )
+    base = stylesheet or ""
+    scaled = scale_stylesheet_font_sizes(base, factor)
+    widget.setProperty(_BASE_STYLESHEET_PROPERTY, base)
+    widget.setProperty(_SCALED_STYLESHEET_PROPERTY, scaled)
+    widget.setStyleSheet(scaled)
+    return scaled
+
+
+def apply_ui_font_scale(root, scale: object | None = None) -> float:
+    """缩放控件树中的显式 QSS；重复预览不会发生倍率累乘。"""
+    factor = (
+        get_ui_font_scale()
+        if scale is None
+        else set_ui_font_scale(scale)
+    )
+
+    from PyQt5.QtWidgets import QWidget
+
+    widgets = (root, *root.findChildren(QWidget))
+    for widget in widgets:
+        current = widget.styleSheet()
+        if not current:
+            continue
+        base = widget.property(_BASE_STYLESHEET_PROPERTY)
+        last_scaled = widget.property(_SCALED_STYLESHEET_PROPERTY)
+        if not isinstance(base, str) or current != last_scaled:
+            base = current
+        scaled = scale_stylesheet_font_sizes(base, factor)
+        widget.setProperty(_BASE_STYLESHEET_PROPERTY, base)
+        widget.setProperty(_SCALED_STYLESHEET_PROPERTY, scaled)
+        if current != scaled:
+            widget.setStyleSheet(scaled)
+    return factor
 
 
 def rgba(color: str, alpha: int) -> str:

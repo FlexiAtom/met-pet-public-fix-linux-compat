@@ -16,6 +16,7 @@ from PyQt5.QtCore import Qt
 
 from meapet.desktop.theme import COLOR_ACCENT, COLOR_ACCENT_2, COLOR_TEXT, MENU_STYLE
 from meapet.paths import PROJECT_ROOT
+from meapet.ui_theme import set_scaled_stylesheet
 from meapet.utils import safe_print
 
 
@@ -59,7 +60,7 @@ class PetWindowChromeMixin:
         self.tray.setToolTip("梅尔桌宠 · MeaPet")
 
         menu = QMenu()
-        menu.setStyleSheet(MENU_STYLE)
+        set_scaled_stylesheet(menu, MENU_STYLE)
         show_action = QAction("显示 / 隐藏", self)
         show_action.triggered.connect(self._toggle_visibility)
         menu.addAction(show_action)
@@ -150,7 +151,13 @@ class PetWindowChromeMixin:
                 self.tray.hide()
             except Exception:
                 pass
-        if hasattr(self, "bubble"):
+        bubble_stack = getattr(self, "_bubble_stack", None)
+        if bubble_stack is not None:
+            try:
+                bubble_stack.close_all()
+            except Exception:
+                pass
+        elif hasattr(self, "bubble"):
             try:
                 self.bubble.close()
             except Exception:
@@ -218,20 +225,34 @@ class PetWindowChromeMixin:
             winreg.CloseKey(key)
             self._show_bubble("已开启开机自启喵 🖥️", 2000)
 
-    def _show_context_menu(self, pos):
+    def _build_context_menu(self) -> QMenu:
+        """构建分组菜单；根层只保留高频操作和清晰的功能入口。"""
         menu = QMenu(self)
-        menu.setStyleSheet(MENU_STYLE)
+        menu.setObjectName("PetContextMenu")
+        set_scaled_stylesheet(menu, MENU_STYLE)
+        menu.setAccessibleName("MeaPet 操作菜单")
+
+        status_action = QAction("养成状态", self)
+        status_action.triggered.connect(self._show_status_panel)
+        menu.addAction(status_action)
+
+        snap_action = QAction("看看我在干嘛", self)
+        snap_action.triggered.connect(lambda: self._do_screen_watch(force=True))
+        menu.addAction(snap_action)
+        menu.addSeparator()
 
         expr_menu = QMenu("切换表情", self)
-        expr_menu.setStyleSheet(MENU_STYLE)
+        expr_menu.setObjectName("ExpressionMenu")
+        set_scaled_stylesheet(expr_menu, MENU_STYLE)
+        expr_menu.setAccessibleName("切换表情")
         moods = [
-            ("😊 默认", "neutral"),
-            ("😄 开心", "happy"),
-            ("😢 悲伤", "sad"),
-            ("😳 害羞", "shy"),
-            ("🤔 好奇", "curious"),
-            ("😤 烦闷", "annoyed"),
-            ("😔 忧郁", "melancholy"),
+            ("默认", "neutral"),
+            ("开心", "happy"),
+            ("悲伤", "sad"),
+            ("害羞", "shy"),
+            ("好奇", "curious"),
+            ("烦闷", "annoyed"),
+            ("忧郁", "melancholy"),
         ]
         for label, mood in moods:
             action = QAction(label, self)
@@ -244,12 +265,14 @@ class PetWindowChromeMixin:
         vision_backend = (
             vision_cfg.get("backend") or llm_cfg.get("backend") or "ollama"
         ).lower()
-        vision_menu = QMenu("识图设置", self)
-        vision_menu.setStyleSheet(MENU_STYLE)
+        vision_menu = QMenu("识图与观察", self)
+        vision_menu.setObjectName("VisionAndWatchMenu")
+        set_scaled_stylesheet(vision_menu, MENU_STYLE)
+        vision_menu.setAccessibleName("识图与观察设置")
         current_vision = vision_cfg.get("model", "qwen3.5:4b")
         for label, bname in (
-            ("后端: Ollama 本地", "ollama"),
-            ("后端: MiMo 云端", "mimo"),
+            ("Ollama 本地识图", "ollama"),
+            ("MiMo 云端识图", "mimo"),
         ):
             act = QAction(label, self)
             act.setCheckable(True)
@@ -259,7 +282,7 @@ class PetWindowChromeMixin:
         vision_menu.addSeparator()
         if vision_backend != "mimo":
             for label, model_name in (
-                ("qwen3.5:4b (多模态, 推荐)", "qwen3.5:4b"),
+                ("模型 · qwen3.5:4b", "qwen3.5:4b"),
             ):
                 action = QAction(label, self)
                 action.setCheckable(True)
@@ -269,58 +292,66 @@ class PetWindowChromeMixin:
                 )
                 vision_menu.addAction(action)
         else:
-            tip = QAction("MiMo 使用 vision/llm 的云端模型", self)
+            tip = QAction("MiMo 使用当前云端模型", self)
             tip.setEnabled(False)
             vision_menu.addAction(tip)
-        menu.addMenu(vision_menu)
 
-        status_action = QAction("养成状态", self)
-        status_action.triggered.connect(self._show_status_panel)
-        menu.addAction(status_action)
-
+        vision_menu.addSeparator()
         w_enabled = self.config.get("watcher", {}).get("enabled", False)
         watch_text = "关闭屏幕观察" if w_enabled else "开启屏幕观察"
         watch_action = QAction(watch_text, self)
         watch_action.triggered.connect(self._toggle_watcher_enabled)
-        menu.addAction(watch_action)
+        vision_menu.addAction(watch_action)
 
         standby_text = "取消待机" if self._standby else "待机（暂停识图）"
         standby_action = QAction(standby_text, self)
         standby_action.triggered.connect(self._toggle_standby)
-        menu.addAction(standby_action)
+        vision_menu.addAction(standby_action)
+        menu.addMenu(vision_menu)
 
+        display_menu = QMenu("显示与立绘", self)
+        display_menu.setObjectName("DisplayMenu")
+        set_scaled_stylesheet(display_menu, MENU_STYLE)
+        display_menu.setAccessibleName("显示与立绘设置")
         mode_text = "切回 PNG 立绘" if self._use_live2d else "切换到 Live2D"
         mode_action = QAction(mode_text, self)
         mode_action.triggered.connect(self._toggle_render_mode)
-        menu.addAction(mode_action)
+        display_menu.addAction(mode_action)
 
-        size_action = QAction("立绘大小调节…", self)
+        size_action = QAction("调整立绘大小…", self)
         size_action.triggered.connect(self._open_size_dialog)
-        menu.addAction(size_action)
+        display_menu.addAction(size_action)
+        menu.addMenu(display_menu)
 
-        snap_action = QAction("看看我在干嘛", self)
-        snap_action.triggered.connect(lambda: self._do_screen_watch(force=True))
-        menu.addAction(snap_action)
-
-        menu.addSeparator()
-        reset_action = QAction("重置所有记忆", self)
-        reset_action.triggered.connect(self._reset_memory)
-        menu.addAction(reset_action)
-        menu.addSeparator()
-
+        settings_menu = QMenu("设置与数据", self)
+        settings_menu.setObjectName("SettingsAndDataMenu")
+        set_scaled_stylesheet(settings_menu, MENU_STYLE)
+        settings_menu.setAccessibleName("设置与数据")
         auto_started = self._is_auto_start()
         auto_action = QAction("开机自启", self)
         auto_action.setCheckable(True)
         auto_action.setChecked(auto_started)
         auto_action.triggered.connect(self._toggle_auto_start)
-        menu.addAction(auto_action)
-        menu.addSeparator()
+        settings_menu.addAction(auto_action)
 
-        reconf_action = QAction("再次配置", self)
+        reconf_action = QAction("打开配置页…", self)
         reconf_action.triggered.connect(self._reopen_setup_wizard)
-        menu.addAction(reconf_action)
+        settings_menu.addAction(reconf_action)
+        settings_menu.addSeparator()
+        reset_action = QAction("重置所有记忆…", self)
+        reset_action.setObjectName("DangerAction")
+        reset_action.triggered.connect(self._reset_memory)
+        settings_menu.addAction(reset_action)
+        menu.addMenu(settings_menu)
+
         menu.addSeparator()
-        menu.addAction("退出", self._quit)
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(self._quit)
+        menu.addAction(quit_action)
+        return menu
+
+    def _show_context_menu(self, pos):
+        menu = self._build_context_menu()
         menu.exec_(self.mapToGlobal(pos))
 
     def _show_status_panel(self):
@@ -353,5 +384,5 @@ class PetWindowChromeMixin:
             self._setup_wizard = SetupWizard()
             self._setup_wizard.show()
         except Exception as e:
-            safe_print(f"[pet] 启动配置向导失败: {e}")
-            self._show_bubble(f"启动配置向导失败喵: {e}", 3000)
+            safe_print(f"[pet] 打开配置页失败: {e}")
+            self._show_bubble(f"打开配置页失败喵: {e}", 3000)

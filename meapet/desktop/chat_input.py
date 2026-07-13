@@ -16,7 +16,15 @@ from PyQt5.QtWidgets import (
 )
 
 from meapet.desktop.theme import CHAT_COMPOSER_STYLE
-from meapet.ui_theme import MIN_TARGET_SIZE
+from meapet.ui_theme import (
+    MIN_TARGET_SIZE,
+    ensure_application_fonts,
+    set_scaled_stylesheet,
+)
+
+
+CHAT_COMPOSER_WIDTH = 480
+CHAT_COMPOSER_HEIGHT = 112
 
 
 class ChatInputBox(QWidget):
@@ -26,14 +34,15 @@ class ChatInputBox(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        ensure_application_fonts()
         self.setWindowTitle("和梅尔对话")
         self.setObjectName("ChatComposerRoot")
-        self.setFixedSize(560, 154)
+        self.setFixedSize(CHAT_COMPOSER_WIDTH, CHAT_COMPOSER_HEIGHT)
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAccessibleName("和梅尔对话")
         self.setAccessibleDescription("输入消息后按 Enter 或点击发送；按 Escape 关闭")
-        self.setStyleSheet(CHAT_COMPOSER_STYLE)
+        set_scaled_stylesheet(self, CHAT_COMPOSER_STYLE)
 
         self._opacity = 0.0
         self._fade_step = 0.08
@@ -64,8 +73,8 @@ class ChatInputBox(QWidget):
         outer.addWidget(self.container)
 
         layout = QVBoxLayout(self.container)
-        layout.setContentsMargins(16, 12, 16, 14)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
 
         header = QHBoxLayout()
         header.setSpacing(8)
@@ -75,14 +84,20 @@ class ChatInputBox(QWidget):
         title.setAccessibleName("消息编辑器")
         header.addWidget(title)
 
-        hint = QLabel("Enter 发送 · Esc 关闭")
-        hint.setObjectName("ComposerHint")
-        header.addWidget(hint)
+        self.hint_label = QLabel("Enter 发送 · Esc 关闭")
+        self.hint_label.setObjectName("ComposerHint")
+        header.addWidget(self.hint_label)
+
+        self.feedback_label = QLabel("")
+        self.feedback_label.setObjectName("ComposerFeedback")
+        self.feedback_label.setAccessibleName("消息输入提示")
+        self.feedback_label.hide()
+        header.addWidget(self.feedback_label)
         header.addStretch()
 
-        self.close_button = QPushButton("关闭")
+        self.close_button = QPushButton("×")
         self.close_button.setObjectName("ComposerCloseButton")
-        self.close_button.setMinimumSize(64, MIN_TARGET_SIZE)
+        self.close_button.setFixedSize(MIN_TARGET_SIZE, MIN_TARGET_SIZE)
         self.close_button.setAccessibleName("关闭消息输入框")
         self.close_button.setToolTip("关闭（Esc）")
         self.close_button.clicked.connect(self._close_with_fade)
@@ -110,12 +125,6 @@ class ChatInputBox(QWidget):
         input_row.addWidget(self.send_button)
         layout.addLayout(input_row)
 
-        self.feedback_label = QLabel("")
-        self.feedback_label.setObjectName("ComposerFeedback")
-        self.feedback_label.setAccessibleName("消息输入提示")
-        self.feedback_label.setMinimumHeight(14)
-        layout.addWidget(self.feedback_label)
-
         self.setTabOrder(self.input, self.send_button)
         self.setTabOrder(self.send_button, self.close_button)
 
@@ -131,15 +140,23 @@ class ChatInputBox(QWidget):
         text = self.input.text().strip()
         if not text:
             self.feedback_label.setText("请输入内容后再发送")
+            self.hint_label.hide()
+            self.feedback_label.show()
             self.input.setFocus(Qt.OtherFocusReason)
             return
-        self.feedback_label.clear()
+        self._clear_feedback(text)
+        # 先退出编辑浮窗，再同步发出信号；接收方显示气泡时不会与输入框重叠。
+        self._closing = True
+        self._anim_timer.stop()
+        self.hide()
+        self.close()
         self.text_submitted.emit(text)
-        self._close_with_fade()
 
     def _clear_feedback(self, _text: str) -> None:
         if self.feedback_label.text():
             self.feedback_label.clear()
+        self.feedback_label.hide()
+        self.hint_label.show()
 
     def _close_with_fade(self) -> None:
         if self._closing:

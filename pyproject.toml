@@ -92,7 +92,15 @@ Issues = "https://github.com/suan-11/mea-pet-public/issues"
 packages = ["meapet", "wizard"]
 
 [tool.setuptools.package-data]
-"*" = ["*.png", "*.wav", "*.json", "*.ckpt", "*.pth"]
+"*" = [
+    "*.png",
+    "*.wav",
+    "*.json",
+    "*.ckpt",
+    "*.pth",
+    "assets/fonts/*.ttf",
+    "assets/fonts/*.txt",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

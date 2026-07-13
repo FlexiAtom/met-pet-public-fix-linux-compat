@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from meapet.ui_theme import (
+    DISPLAY_FONT_FAMILY,
     FONT_FAMILY,
     MONO_FONT_FAMILY,
     PALETTE,
@@ -32,20 +33,20 @@ COLOR_ERR = PALETTE["danger"]
 
 MENU_STYLE = f"""
     QMenu {{
-        background: {rgba(COLOR_CARD, 248)};
+        background: {rgba(COLOR_CARD, 252)};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
-        border-radius: {RADIUS_MEDIUM}px;
-        padding: 7px;
+        border-radius: {RADIUS_SMALL}px;
+        padding: 5px;
         font-family: {FONT_FAMILY};
-        font-size: 13px;
+        font-size: 14px;
     }}
     QMenu::item {{
         min-height: 28px;
-        padding: 8px 28px 8px 14px;
+        padding: 5px 26px 5px 12px;
         border: 1px solid transparent;
-        border-radius: {RADIUS_SMALL}px;
-        margin: 1px 0;
+        border-radius: 6px;
+        margin: 0;
     }}
     QMenu::item:selected {{
         background: {rgba(COLOR_FOCUS, 35)};
@@ -58,12 +59,12 @@ MENU_STYLE = f"""
     QMenu::separator {{
         height: 1px;
         background: {COLOR_BORDER};
-        margin: 6px 10px;
+        margin: 4px 8px;
     }}
     QMenu::indicator {{
-        width: 16px;
-        height: 16px;
-        left: 8px;
+        width: 14px;
+        height: 14px;
+        left: 7px;
     }}
 """
 
@@ -137,6 +138,82 @@ DIALOG_STYLE = f"""
 """
 
 
+CONSENT_DIALOG_STYLE = f"""
+    QDialog#CloudConsentRoot {{
+        color: {COLOR_TEXT};
+        font-family: {FONT_FAMILY};
+        background: transparent;
+    }}
+    QFrame#CloudConsentCard {{
+        background: {COLOR_CARD};
+        border: 1px solid {COLOR_BORDER_STRONG};
+        border-radius: {RADIUS_LARGE}px;
+    }}
+    QLabel {{
+        color: {COLOR_TEXT};
+        background: transparent;
+        border: none;
+    }}
+    QLabel#ConsentEyebrow {{
+        color: {COLOR_WARN};
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QLabel#ConsentTitle {{
+        color: {COLOR_TEXT};
+        font-family: {DISPLAY_FONT_FAMILY};
+        font-size: 20px;
+        font-weight: 750;
+    }}
+    QLabel#ConsentBody {{
+        color: {COLOR_SECONDARY};
+        font-size: 13px;
+    }}
+    QLabel#ConsentCountdown {{
+        color: {COLOR_WARN};
+        font-size: 12px;
+        font-weight: 650;
+        padding: 6px 10px;
+        background: {rgba(COLOR_WARN, 18)};
+        border: 1px solid {rgba(COLOR_WARN, 70)};
+        border-radius: {RADIUS_SMALL}px;
+    }}
+    QPushButton {{
+        min-width: 112px;
+        min-height: 44px;
+        padding: 0 16px;
+        color: {COLOR_TEXT};
+        background: {COLOR_ELEVATED};
+        border: 1px solid {COLOR_BORDER_STRONG};
+        border-radius: {RADIUS_SMALL}px;
+        font-weight: 650;
+    }}
+    QPushButton:hover {{
+        background: {rgba(COLOR_FOCUS, 28)};
+        border-color: {COLOR_MUTED};
+    }}
+    QPushButton:focus {{
+        border: 2px solid {COLOR_FOCUS};
+    }}
+    QPushButton#AllowUploadButton {{
+        font-family: {DISPLAY_FONT_FAMILY};
+        font-size: 14px;
+        color: {PALETTE['on_primary']};
+        background: {COLOR_ACCENT};
+        border-color: {COLOR_ACCENT};
+    }}
+    QPushButton#AllowUploadButton:hover {{
+        background: {PALETTE['primary_hover']};
+        border-color: {PALETTE['primary_hover']};
+    }}
+    QPushButton#CancelUploadButton:default {{
+        color: {COLOR_TEXT};
+        border: 2px solid {COLOR_FOCUS};
+        background: {rgba(COLOR_FOCUS, 24)};
+    }}
+"""
+
+
 CHAT_COMPOSER_STYLE = f"""
     QWidget#ChatComposerRoot {{
         color: {COLOR_TEXT};
@@ -154,6 +231,7 @@ CHAT_COMPOSER_STYLE = f"""
     }}
     QLabel#ComposerTitle {{
         color: {COLOR_TEXT};
+        font-family: {DISPLAY_FONT_FAMILY};
         font-size: 13px;
         font-weight: 700;
     }}
@@ -201,6 +279,8 @@ CHAT_COMPOSER_STYLE = f"""
     }}
     QPushButton#SendButton {{
         min-width: 80px;
+        font-family: {DISPLAY_FONT_FAMILY};
+        font-size: 15px;
         background: {COLOR_ACCENT};
         color: {PALETTE['on_primary']};
         border-color: {COLOR_ACCENT};
@@ -212,7 +292,8 @@ CHAT_COMPOSER_STYLE = f"""
         background: transparent;
         color: {COLOR_MUTED};
         border-color: transparent;
-        padding: 0 10px;
+        padding: 0;
+        font-size: 18px;
     }}
     QPushButton#ComposerCloseButton:hover {{
         background: {rgba(COLOR_ERR, 35)};
@@ -223,38 +304,37 @@ CHAT_COMPOSER_STYLE = f"""
 
 
 DIALOGUE_STYLE = f"""
-    QFrame#DialogueCard {{
-        background: {rgba(COLOR_CARD, 248)};
-        border: 1px solid {COLOR_BORDER_STRONG};
-        border-radius: {RADIUS_MEDIUM}px;
-    }}
-    QLabel#DialogueName {{
-        background: {COLOR_ELEVATED};
-        color: {COLOR_ACCENT};
+    QFrame#DialogueBubble {{
+        background: transparent;
         border: none;
-        border-bottom: 1px solid {COLOR_BORDER_STRONG};
-        border-top-left-radius: {RADIUS_MEDIUM}px;
-        border-top-right-radius: {RADIUS_MEDIUM}px;
-        padding: 7px 18px;
-        font-family: {FONT_FAMILY};
-        font-size: 13px;
-        font-weight: 700;
     }}
     QLabel#DialogueText {{
         background: transparent;
         color: {COLOR_TEXT};
         border: none;
-        padding: 14px 20px 16px 20px;
+        padding: 0;
         font-family: {FONT_FAMILY};
         font-size: 15px;
+        font-weight: 500;
     }}
-    QLabel#DialogueAccent {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {rgba(COLOR_ACCENT, 0)},
-            stop:0.28 {rgba(COLOR_ACCENT, 150)},
-            stop:0.72 {rgba(COLOR_ACCENT_2, 150)},
-            stop:1 {rgba(COLOR_ACCENT_2, 0)});
+    QScrollArea#DialogueScroll,
+    QScrollArea#DialogueScroll > QWidget > QWidget {{
+        background: transparent;
         border: none;
+    }}
+    QScrollArea#DialogueScroll QScrollBar:vertical {{
+        width: 8px;
+        margin: 4px 2px;
+        background: transparent;
+    }}
+    QScrollArea#DialogueScroll QScrollBar::handle:vertical {{
+        min-height: 28px;
+        border-radius: 3px;
+        background: {rgba(COLOR_ACCENT, 150)};
+    }}
+    QScrollArea#DialogueScroll QScrollBar::add-line:vertical,
+    QScrollArea#DialogueScroll QScrollBar::sub-line:vertical {{
+        height: 0;
     }}
 """
 
@@ -277,6 +357,7 @@ STATUS_PANEL_STYLE = f"""
     }}
     QLabel#PanelTitle {{
         color: {COLOR_TEXT};
+        font-family: {DISPLAY_FONT_FAMILY};
         font-size: 22px;
         font-weight: 700;
     }}
@@ -365,6 +446,7 @@ SPLASH_STYLE = f"""
     }}
     QLabel#SplashTitle {{
         color: {COLOR_TEXT};
+        font-family: {DISPLAY_FONT_FAMILY};
         font-size: 26px;
         font-weight: 750;
     }}

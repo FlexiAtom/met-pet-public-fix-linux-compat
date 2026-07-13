@@ -8,18 +8,31 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QEvent, Qt  # noqa: E402
-from PyQt5.QtGui import QKeyEvent  # noqa: E402
+from PyQt5.QtCore import (  # noqa: E402
+    QAbstractAnimation,
+    QEvent,
+    QPoint,
+    QPointF,
+    QRect,
+    QSize,
+    Qt,
+)
+from PyQt5.QtGui import QKeyEvent, QPainterPath  # noqa: E402
+from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QAbstractButton,
     QApplication,
     QComboBox,
+    QDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QLabel,
     QLineEdit,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QSlider,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -100,7 +113,77 @@ class UiRefactorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             contrast_ratio("invalid", "#000000")
 
-    def test_wizard_is_resizable_and_core_actions_have_accessible_targets(self) -> None:
+    def test_bundled_cute_display_font_loads_with_a_safe_body_font(self) -> None:
+        from meapet.ui_theme import (
+            BODY_FONT_NAME,
+            BUNDLED_DISPLAY_FONT_PATH,
+            DISPLAY_FONT_FAMILY,
+            FONT_FAMILY,
+            ensure_application_fonts,
+        )
+
+        self.assertTrue(BUNDLED_DISPLAY_FONT_PATH.is_file())
+        self.assertEqual(BUNDLED_DISPLAY_FONT_PATH.name, "LXGWWenKai-Regular.ttf")
+        self.assertEqual(DISPLAY_FONT_FAMILY, '"LXGW WenKai"')
+        self.assertEqual(BODY_FONT_NAME, "LXGW WenKai")
+        self.assertEqual(FONT_FAMILY, f'"{BODY_FONT_NAME}"')
+        self.assertIn("LXGW WenKai", ensure_application_fonts())
+
+        from meapet.desktop.theme import CHAT_COMPOSER_STYLE, DIALOGUE_STYLE
+
+        self.assertIn(
+            f"QLabel#ComposerTitle {{\n        color: ",
+            CHAT_COMPOSER_STYLE,
+        )
+        self.assertIn(f"font-family: {DISPLAY_FONT_FAMILY};", CHAT_COMPOSER_STYLE)
+        self.assertIn(f"font-family: {DISPLAY_FONT_FAMILY};", DIALOGUE_STYLE)
+
+    def test_font_scaling_is_clamped_and_does_not_accumulate(self) -> None:
+        from meapet.config.store import normalize_config
+        from meapet.ui_theme import (
+            apply_ui_font_scale,
+            scale_stylesheet_font_sizes,
+            set_ui_font_scale,
+        )
+
+        self.addCleanup(set_ui_font_scale, 1.0)
+        self.assertEqual(
+            scale_stylesheet_font_sizes("font-size: 15px;", 1.2),
+            "font-size: 18px;",
+        )
+
+        label = self._track(QLabel("字号预览"))
+        label.setStyleSheet("font-size: 15px;")
+        apply_ui_font_scale(label, 1.2)
+        self.assertIn("font-size: 18px;", label.styleSheet())
+        apply_ui_font_scale(label, 1.4)
+        self.assertIn("font-size: 21px;", label.styleSheet())
+        self.assertNotIn("font-size: 25px;", label.styleSheet())
+
+        set_ui_font_scale(1.2)
+        from meapet.desktop.widgets import DialogueBox
+
+        dialogue = self._track(DialogueBox())
+        self.assertIn(
+            "font-size: 18px;",
+            dialogue._container.styleSheet(),
+        )
+
+        self.assertEqual(normalize_config({})["display"]["font_scale"], 1.0)
+        self.assertEqual(
+            normalize_config({"display": {"font_scale": 9}})["display"][
+                "font_scale"
+            ],
+            1.5,
+        )
+        self.assertEqual(
+            normalize_config({"display": {"font_scale": "invalid"}})[
+                "display"
+            ]["font_scale"],
+            1.0,
+        )
+
+    def test_configuration_window_uses_tabs_and_accessible_core_actions(self) -> None:
         from wizard.app import SetupWizard
         from wizard.styles import MIN_TARGET_SIZE
 
@@ -109,12 +192,145 @@ class UiRefactorTests(unittest.TestCase):
         self.assertGreater(wizard.maximumWidth(), wizard.minimumWidth())
         self.assertEqual(wizard.objectName(), "WizardRoot")
         self.assertEqual(wizard.container.objectName(), "WizardShell")
+        self.assertIsInstance(wizard.tabs, QTabWidget)
+        self.assertEqual(
+            [wizard.tabs.tabText(index) for index in range(wizard.tabs.count())],
+            ["环境", "对话", "语音", "屏幕识图"],
+        )
+        self.assertFalse(hasattr(wizard, "progress"))
+        self.assertFalse(hasattr(wizard, "back_btn"))
+        self.assertFalse(hasattr(wizard, "next_btn"))
 
-        for button in (wizard.close_btn, wizard.back_btn, wizard.next_btn):
+        for button in (wizard.close_btn, wizard.save_btn):
             with self.subTest(button=button.text()):
                 self.assertGreaterEqual(button.minimumWidth(), MIN_TARGET_SIZE)
                 self.assertGreaterEqual(button.minimumHeight(), MIN_TARGET_SIZE)
                 self.assertTrue(button.accessibleName())
+
+    def test_configuration_exposes_persistent_font_scaling_with_live_preview(self) -> None:
+        from meapet.ui_theme import set_ui_font_scale
+        from wizard.app import SetupWizard
+
+        self.addCleanup(set_ui_font_scale, 1.0)
+        wizard = self._track(SetupWizard())
+        wizard._load_timer.stop()
+
+        self.assertIsInstance(wizard.font_scale_slider, QSlider)
+        self.assertEqual(wizard.font_scale_slider.minimum(), 80)
+        self.assertEqual(wizard.font_scale_slider.maximum(), 150)
+        self.assertEqual(wizard.font_scale_slider.singleStep(), 5)
+        self.assertTrue(wizard.font_scale_slider.accessibleName())
+
+        wizard.font_scale_slider.setValue(125)
+        self.assertEqual(wizard.font_scale_value.text(), "125%")
+        self.assertIn("font-size: 18px;", wizard.styleSheet())
+        wizard._existing_config = {
+            "display": {
+                "size_factor": 1.33,
+                "custom_display_key": "keep-me",
+            }
+        }
+        display_config = wizard.collect_config()["display"]
+        self.assertEqual(display_config["font_scale"], 1.25)
+        self.assertEqual(display_config["size_factor"], 1.33)
+        self.assertEqual(display_config["custom_display_key"], "keep-me")
+
+    def test_environment_check_timer_is_owned_by_its_page(self) -> None:
+        from wizard.page_env import EnvCheckPage
+
+        with patch(
+            "wizard.page_env.QTimer.singleShot",
+            side_effect=AssertionError("环境检测不能留下无父对象的延迟回调"),
+        ):
+            page = self._track(EnvCheckPage())
+
+        self.assertIs(page._check_timer.parent(), page)
+        self.assertTrue(page._check_timer.isSingleShot())
+        self.assertTrue(page._check_timer.isActive())
+        page._check_timer.stop()
+
+    def test_environment_check_stops_if_its_widgets_are_destroyed(self) -> None:
+        from wizard.page_env import EnvCheckPage
+
+        page = self._track(EnvCheckPage())
+        page._check_timer.stop()
+        page._checklist = [("requests", "", True)]
+        deleted_widget_error = RuntimeError(
+            "wrapped C/C++ object of type QLabel has been deleted"
+        )
+
+        with patch(
+            "wizard.page_env.check_installed",
+            return_value=True,
+        ), patch.object(
+            page,
+            "_set_item_status",
+            side_effect=deleted_widget_error,
+        ):
+            page._run_checks()
+
+    def test_configuration_startup_callbacks_use_owned_timers(self) -> None:
+        from wizard.app import SetupWizard
+
+        with patch(
+            "wizard.app.QTimer.singleShot",
+            side_effect=AssertionError("配置页启动回调必须绑定到所属窗口"),
+        ):
+            wizard = self._track(SetupWizard())
+
+        timers = (
+            wizard.env_page._check_timer,
+            wizard.llm_page._status_timer,
+            wizard._load_timer,
+            *wizard.tts_page._startup_timers,
+        )
+        self.assertTrue(wizard.testAttribute(Qt.WA_DeleteOnClose))
+        self.assertTrue(all(timer.parent() is not None for timer in timers))
+        self.assertTrue(all(timer.isSingleShot() for timer in timers))
+        for timer in timers:
+            timer.stop()
+
+    def test_configuration_tabs_mark_and_clear_missing_required_fields(self) -> None:
+        from wizard.app import SetupWizard
+
+        wizard = self._track(SetupWizard())
+        wizard.tts_page.enable_cb.setChecked(False)
+
+        wizard.llm_page.radio_ds.setChecked(True)
+        wizard.key_page_ds.key_input.clear()
+        wizard._refresh_required_tabs()
+        self.assertFalse(wizard.tabs.tabIcon(wizard.TAB_CHAT).isNull())
+        self.assertIn("缺少", wizard.tabs.tabToolTip(wizard.TAB_CHAT))
+        self.assertIn("对话", wizard.config_status.text())
+
+        wizard.key_page_ds.key_input.setText("deepseek-test-key")
+        wizard._refresh_required_tabs()
+        self.assertTrue(wizard.tabs.tabIcon(wizard.TAB_CHAT).isNull())
+        self.assertNotIn("对话", wizard.config_status.text())
+
+        wizard.llm_page.radio_ollama.setChecked(True)
+        wizard.tts_page.enable_cb.setChecked(True)
+        wizard.tts_page.set_engine("mimo")
+        wizard.tts_page.mimo_api_key_input.clear()
+        wizard._refresh_required_tabs()
+        self.assertFalse(wizard.tabs.tabIcon(wizard.TAB_VOICE).isNull())
+        self.assertIn("MiMo TTS API Key", wizard.tabs.tabToolTip(wizard.TAB_VOICE))
+
+        wizard.tts_page.mimo_api_key_input.setText("mimo-tts-test-key")
+        wizard._refresh_required_tabs()
+        self.assertTrue(wizard.tabs.tabIcon(wizard.TAB_VOICE).isNull())
+
+        wizard.vision_page.enable_cb.setChecked(True)
+        wizard.vision_page.backend_combo.setCurrentIndex(1)
+        wizard.vision_page.api_key_input.setText("vision-test-key")
+        wizard.vision_page.allow_cloud_cb.setChecked(False)
+        wizard._refresh_required_tabs()
+        self.assertFalse(wizard.tabs.tabIcon(wizard.TAB_VISION).isNull())
+        self.assertIn("云端识图授权", wizard.tabs.tabToolTip(wizard.TAB_VISION))
+
+        wizard.vision_page.allow_cloud_cb.setChecked(True)
+        wizard._refresh_required_tabs()
+        self.assertTrue(wizard.tabs.tabIcon(wizard.TAB_VISION).isNull())
 
     def test_wizard_form_controls_are_keyboard_ready_and_named(self) -> None:
         from wizard.app import SetupWizard
@@ -139,7 +355,7 @@ class UiRefactorTests(unittest.TestCase):
                 self.assertTrue(control.accessibleName())
                 self.assertNotEqual(control.focusPolicy(), 0)
 
-        tab_chain = [wizard.back_btn, wizard.next_btn]
+        tab_chain = [wizard.save_btn]
         for button in tab_chain:
             self.assertNotEqual(button.focusPolicy(), 0)
 
@@ -148,7 +364,8 @@ class UiRefactorTests(unittest.TestCase):
         from meapet.ui_theme import MIN_TARGET_SIZE
 
         composer = self._track(ChatInputBox())
-        self.assertGreaterEqual(composer.height(), 120)
+        self.assertLessEqual(composer.width(), 480)
+        self.assertLessEqual(composer.height(), 120)
         self.assertEqual(composer.input.accessibleName(), "消息内容")
         self.assertTrue(composer.feedback_label.accessibleName())
 
@@ -161,6 +378,7 @@ class UiRefactorTests(unittest.TestCase):
         composer.input.clear()
         composer._submit()
         self.assertTrue(composer.feedback_label.text())
+        self.assertTrue(composer.feedback_label.isVisibleTo(composer))
         self.assertFalse(composer._closing)
 
     def test_chat_composer_submission_motion_and_escape_paths(self) -> None:
@@ -207,6 +425,65 @@ class UiRefactorTests(unittest.TestCase):
         self.assertEqual(reduced._opacity, 1.0)
         reduced._close_with_fade()
         self.assertTrue(reduced._closing)
+
+    def test_chat_composer_is_hidden_before_submission_is_emitted(self) -> None:
+        from meapet.desktop.chat_input import ChatInputBox
+
+        composer = self._track(ChatInputBox())
+        composer._anim_timer.stop()
+        composer.setWindowOpacity(1.0)
+        composer.show()
+        QApplication.processEvents()
+
+        visible_during_signal = []
+        composer.text_submitted.connect(
+            lambda _text: visible_during_signal.append(composer.isVisible())
+        )
+        composer.input.setText("不要让输入框挡住回复")
+        composer._submit()
+
+        self.assertEqual(visible_during_signal, [False])
+        self.assertFalse(composer.isVisible())
+        self.assertTrue(composer._closing)
+
+    def test_opening_chat_hides_an_existing_dialogue_bubble(self) -> None:
+        from meapet.desktop.chat_flow import PetChatFlowMixin
+
+        class SignalStub:
+            def connect(self, callback):
+                self.callback = callback
+
+        class InputStub:
+            text_submitted = SignalStub()
+
+            @staticmethod
+            def width():
+                return 480
+
+            @staticmethod
+            def height():
+                return 112
+
+            def move(self, point_or_x, y=None):
+                self.position = (point_or_x, y)
+
+            def show(self):
+                self.shown = True
+
+        host = type("ChatHost", (), {})()
+        host.bubble = unittest.mock.Mock()
+        host.pos = unittest.mock.Mock(return_value=QPoint(600, 500))
+        host.width = unittest.mock.Mock(return_value=300)
+        host.height = unittest.mock.Mock(return_value=360)
+        host._on_input_submit = unittest.mock.Mock()
+
+        input_box = InputStub()
+        with patch("meapet.desktop.chat_flow.ChatInputBox", return_value=input_box):
+            PetChatFlowMixin._start_chat(host)
+
+        host.bubble.hide.assert_called_once_with()
+        self.assertTrue(input_box.shown)
+        self.assertIs(host._chat_input, input_box)
 
     def test_accessibility_helpers_cover_legacy_and_unlabeled_controls(self) -> None:
         from wizard.styles import MIN_TARGET_SIZE, prepare_accessible_page, set_status
@@ -262,8 +539,10 @@ class UiRefactorTests(unittest.TestCase):
         self.assertTrue(splash.progress.accessibleName())
 
         dialogue = self._track(DialogueBox())
-        self.assertEqual(dialogue.text_label.accessibleName(), "梅尔的消息")
-        self.assertEqual(dialogue.name_label.accessibleName(), "发言角色")
+        self.assertEqual(dialogue.text_label.accessibleName(), "桌宠回复")
+        self.assertEqual(dialogue._container.objectName(), "DialogueBubble")
+        self.assertFalse(hasattr(dialogue, "name_label"))
+        self.assertFalse(hasattr(dialogue, "_deco_line"))
 
         panel = self._track(StatusPanel(_MemoryStub()))
         self.assertGreaterEqual(panel.close_button.minimumWidth(), MIN_TARGET_SIZE)
@@ -336,13 +615,42 @@ class UiRefactorTests(unittest.TestCase):
             timer.singleShot.assert_called_once()
 
     def test_dialogue_motion_and_scale_dialog_preview_paths(self) -> None:
-        from meapet.desktop.widgets import DialogueBox, SizeScaleDialog
+        from meapet.desktop.widgets import (
+            DIALOGUE_MAX_HEIGHT,
+            DIALOGUE_MAX_WIDTH,
+            DialogueBox,
+            SizeScaleDialog,
+        )
 
         dialogue = self._track(DialogueBox())
+        self.assertEqual(dialogue.tail_side, "bottom")
+        dialogue.set_tail("left", 72)
+        self.assertEqual(dialogue.tail_side, "left")
+        self.assertEqual(dialogue.tail_anchor, 72)
+        with self.assertRaises(ValueError):
+            dialogue.set_tail("diagonal")
+
         with patch.object(dialogue, "show"), patch.object(dialogue, "raise_"):
-            dialogue.show_text("【happy】今天也辛苦啦", duration_ms=1000, name="梅尔")
+            dialogue.show_text("【happy】今天也辛苦啦", duration_ms=1000)
         self.assertEqual(dialogue.text_label.text(), "今天也辛苦啦")
         self.assertTrue(dialogue._hide_timer.isActive())
+        short_size = dialogue.size()
+        self.assertLess(short_size.width(), 260)
+        self.assertLess(short_size.height(), 130)
+
+        long_text = "这是一段需要自动换行的较长对话。" * 120
+        with patch.object(dialogue, "show"), patch.object(dialogue, "raise_"):
+            dialogue.show_text(long_text, duration_ms=0)
+        self.assertLessEqual(dialogue.width(), DIALOGUE_MAX_WIDTH)
+        self.assertLessEqual(dialogue.height(), DIALOGUE_MAX_HEIGHT)
+        self.assertGreater(dialogue.width(), short_size.width())
+        self.assertGreater(dialogue.text_label.height(), dialogue.text_scroll.height())
+
+        from meapet.desktop.theme import DIALOGUE_STYLE
+
+        self.assertIn("QFrame#DialogueBubble", DIALOGUE_STYLE)
+        self.assertNotIn("DialogueName", DIALOGUE_STYLE)
+        self.assertNotIn("DialogueAccent", DIALOGUE_STYLE)
 
         dialogue._fade_out = True
         dialogue._opacity = 0.05
@@ -372,6 +680,558 @@ class UiRefactorTests(unittest.TestCase):
         dialog.reject()
         self.assertEqual(dialog.get_value(), 1.25)
         self.assertEqual(previews[-1], 1.25)
+
+    def test_speech_bubble_tail_curves_outward_from_the_lower_corner(self) -> None:
+        from meapet.desktop.widgets import (
+            DIALOGUE_TAIL_DEPTH,
+            DIALOGUE_TAIL_REACH,
+            SpeechBubbleFrame,
+        )
+
+        right_tail = self._track(SpeechBubbleFrame())
+        right_tail.setFixedSize(260, 124)
+        right_tail.set_tail("bottom", 224)
+        right_body = right_tail._body_rect()
+        right_path = right_tail._tail_path(right_body)
+        right_bounds = right_path.boundingRect()
+
+        self.assertLessEqual(DIALOGUE_TAIL_REACH, 24)
+        self.assertLessEqual(DIALOGUE_TAIL_DEPTH, 28)
+        self.assertLessEqual(
+            right_body.right(),
+            right_tail.width() - DIALOGUE_TAIL_REACH,
+        )
+        self.assertGreater(
+            right_bounds.right(),
+            right_body.right() + DIALOGUE_TAIL_REACH * 0.7,
+        )
+        self.assertGreater(
+            right_bounds.bottom(),
+            right_body.bottom() + DIALOGUE_TAIL_DEPTH * 0.75,
+        )
+        self.assertGreaterEqual(
+            sum(
+                right_path.elementAt(index).type
+                == QPainterPath.CurveToElement
+                for index in range(right_path.elementCount())
+            ),
+            2,
+        )
+        self.assertTrue(
+            right_path.contains(
+                QPointF(right_body.right() - 4, right_body.bottom() - 6)
+            )
+        )
+
+        left_tail = self._track(SpeechBubbleFrame())
+        left_tail.setFixedSize(260, 124)
+        left_tail.set_tail("bottom", 36)
+        left_body = left_tail._body_rect()
+        left_path = left_tail._tail_path(left_body)
+        left_bounds = left_path.boundingRect()
+
+        self.assertGreaterEqual(left_body.left(), DIALOGUE_TAIL_REACH)
+        self.assertLess(
+            left_bounds.left(),
+            left_body.left() - DIALOGUE_TAIL_REACH * 0.7,
+        )
+        self.assertAlmostEqual(left_body.width(), right_body.width())
+        self.assertTrue(
+            left_path.contains(
+                QPointF(left_body.left() + 4, left_body.bottom() - 6)
+            )
+        )
+
+    def test_dialogue_motion_and_fade_are_slow_enough_to_read(self) -> None:
+        from meapet.desktop.widgets import (
+            DIALOGUE_ENTRY_OFFSET,
+            DIALOGUE_FADE_DURATION_MS,
+            DIALOGUE_FADE_FRAME_MS,
+            DIALOGUE_MOTION_DURATION_MS,
+            DialogueBox,
+        )
+
+        self.assertGreaterEqual(DIALOGUE_MOTION_DURATION_MS, 480)
+        self.assertLessEqual(DIALOGUE_MOTION_DURATION_MS, 650)
+        self.assertGreaterEqual(DIALOGUE_ENTRY_OFFSET, 20)
+        self.assertGreaterEqual(DIALOGUE_FADE_DURATION_MS, 1200)
+        self.assertLessEqual(DIALOGUE_FADE_DURATION_MS, 1800)
+
+        dialogue = self._track(DialogueBox())
+        dialogue.show_text("这次会慢慢淡出。", duration_ms=0)
+        dialogue._start_fadeout()
+        for _ in range(500 // DIALOGUE_FADE_FRAME_MS):
+            dialogue._animate()
+
+        self.assertTrue(dialogue.isVisible())
+        self.assertGreater(dialogue.visualOpacity, 0.45)
+        self.assertLess(dialogue.visualOpacity, 0.8)
+
+        reduced_target = QPoint(180, 120)
+        reduced = self._track(DialogueBox())
+        reduced.show_text("减少动态效果。", duration_ms=0)
+        reduced.mark_stack_entry()
+        with patch.dict(os.environ, {"MEAPET_REDUCED_MOTION": "1"}):
+            reduced.animate_to(reduced_target, 0.76, animate=True)
+        self.assertEqual(reduced.pos(), reduced_target)
+        self.assertAlmostEqual(reduced.visualOpacity, 0.76)
+        self.assertEqual(
+            reduced._position_animation.state(),
+            QAbstractAnimation.Stopped,
+        )
+
+    def test_dialogue_fades_gradually_before_it_is_dismissed(self) -> None:
+        from meapet.desktop.widgets import (
+            DIALOGUE_FADE_DURATION_MS,
+            DIALOGUE_FADE_FRAME_MS,
+            DialogueBox,
+        )
+
+        dialogue = self._track(DialogueBox())
+        self.assertIsInstance(
+            dialogue._container.graphicsEffect(),
+            QGraphicsOpacityEffect,
+        )
+        dismissed = []
+        dialogue.dismissed.connect(lambda: dismissed.append(True))
+        dialogue.show_text("我会慢慢消失。", duration_ms=0)
+
+        dialogue._start_fadeout()
+        initial_opacity = dialogue.visualOpacity
+        dialogue._animate()
+
+        self.assertTrue(dialogue.isVisible())
+        self.assertGreater(dialogue.visualOpacity, 0.0)
+        self.assertLess(dialogue.visualOpacity, initial_opacity)
+        self.assertAlmostEqual(
+            dialogue._container.graphicsEffect().opacity(),
+            dialogue.visualOpacity,
+        )
+        self.assertEqual(dismissed, [])
+
+        for _ in range(
+            DIALOGUE_FADE_DURATION_MS // DIALOGUE_FADE_FRAME_MS + 2
+        ):
+            dialogue._animate()
+
+        self.assertFalse(dialogue.isVisible())
+        self.assertEqual(dismissed, [True])
+
+    def test_dialogue_stack_uses_tiered_opacity_from_oldest_to_newest(self) -> None:
+        from meapet.desktop.widgets import calculate_bubble_stack_opacities
+
+        self.assertEqual(calculate_bubble_stack_opacities(0), ())
+        self.assertEqual(calculate_bubble_stack_opacities(1), (1.0,))
+        self.assertEqual(calculate_bubble_stack_opacities(2), (0.76, 1.0))
+        self.assertEqual(
+            calculate_bubble_stack_opacities(3),
+            (0.52, 0.76, 1.0),
+        )
+
+    def test_dialogue_stack_keeps_three_distinct_messages_and_drops_the_oldest(self) -> None:
+        from meapet.desktop.widgets import DialogueBubbleStack
+
+        stack = DialogueBubbleStack()
+        self.addCleanup(stack.close_all)
+        first = stack.show_message("第一条", duration_ms=0)
+        stack.show_message("第二条", duration_ms=0)
+        stack.show_message("第三条", duration_ms=0)
+        fourth = stack.show_message("第四条", duration_ms=0)
+
+        self.assertEqual(
+            [bubble.text_label.text() for bubble in stack.bubbles],
+            ["第二条", "第三条", "第四条"],
+        )
+        self.assertEqual(len({id(bubble) for bubble in stack.bubbles}), 3)
+        self.assertIs(stack.latest, fourth)
+        self.assertFalse(first.isVisible())
+        self.assertTrue(all(bubble.isVisible() for bubble in stack.bubbles))
+
+    def test_dialogue_stack_releases_a_bubble_after_its_fade_finishes(self) -> None:
+        from meapet.desktop.widgets import (
+            DIALOGUE_FADE_DURATION_MS,
+            DIALOGUE_FADE_FRAME_MS,
+            DialogueBubbleStack,
+        )
+
+        stack = DialogueBubbleStack()
+        self.addCleanup(stack.close_all)
+        bubble = stack.show_message("淡出后释放", duration_ms=0)
+
+        bubble._start_fadeout()
+        for _ in range(
+            DIALOGUE_FADE_DURATION_MS // DIALOGUE_FADE_FRAME_MS + 2
+        ):
+            bubble._animate()
+
+        self.assertEqual(stack.bubbles, ())
+        self.assertIsNone(stack.latest)
+        self.assertFalse(bubble.isVisible())
+
+    def test_real_host_pushes_previous_bubbles_up_without_replacing_them(self) -> None:
+        from meapet.desktop.interaction import PetInteractionMixin
+        from meapet.desktop.render_host import PetRenderHostMixin
+        from meapet.desktop.widgets import (
+            DIALOGUE_MOTION_DURATION_MS,
+            DialogueBubbleStack,
+        )
+
+        class BubbleHost(PetInteractionMixin, PetRenderHostMixin, QWidget):
+            def __init__(self):
+                super().__init__()
+                self.config = {"bubble_duration_ms": {"default": 5000}}
+                self._bubble_stack = DialogueBubbleStack(self)
+                self._bubble_stack.changed.connect(
+                    self._on_bubble_stack_changed
+                )
+                self.bubble = None
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        host = self._track(BubbleHost())
+        host.resize(180, 300)
+        host.move(screen.right() - host.width() - 40, screen.top() + 240)
+        self.addCleanup(host._bubble_stack.close_all)
+
+        host._show_bubble("第一条", 5000)
+        first = host._bubble_stack.latest
+        first_target = first._position_animation.endValue()
+        self.assertEqual(
+            first._position_animation.state(),
+            QAbstractAnimation.Running,
+        )
+        self.assertGreater(first.pos().y(), first_target.y())
+        self.assertLess(first.visualOpacity, 1.0)
+        QTest.qWait(260)
+        self.assertEqual(
+            first._position_animation.state(),
+            QAbstractAnimation.Running,
+        )
+        self.assertNotEqual(first.pos(), first_target)
+        QTest.qWait(DIALOGUE_MOTION_DURATION_MS)
+        self.assertEqual(first.pos(), first_target)
+
+        host._show_bubble("第二条", 5000)
+        second = host._bubble_stack.latest
+        first_new_target = first._position_animation.endValue()
+        self.assertEqual(
+            first._position_animation.state(),
+            QAbstractAnimation.Running,
+        )
+        self.assertEqual(
+            second._position_animation.state(),
+            QAbstractAnimation.Running,
+        )
+        self.assertNotEqual(first.pos(), first_new_target)
+        self.assertGreater(second.pos().y(), second._position_animation.endValue().y())
+        QTest.qWait(DIALOGUE_MOTION_DURATION_MS + 80)
+
+        host._show_bubble("第三条", 5000)
+        QTest.qWait(DIALOGUE_MOTION_DURATION_MS + 80)
+
+        bubbles = host._bubble_stack.bubbles
+        self.assertEqual(
+            [bubble.text_label.text() for bubble in bubbles],
+            ["第一条", "第二条", "第三条"],
+        )
+        self.assertLess(bubbles[0].geometry().bottom(), bubbles[1].geometry().top())
+        self.assertLess(bubbles[1].geometry().bottom(), bubbles[2].geometry().top())
+        self.assertTrue(all(bubble.isVisible() for bubble in bubbles))
+        self.assertIs(host.bubble, bubbles[-1])
+        self.assertAlmostEqual(bubbles[0].visualOpacity, 0.52, places=2)
+        self.assertAlmostEqual(bubbles[1].visualOpacity, 0.76, places=2)
+        self.assertAlmostEqual(bubbles[2].visualOpacity, 1.0, places=2)
+
+    def test_bubble_position_stays_on_screen_and_avoids_the_pet(self) -> None:
+        from meapet.desktop.render_host import calculate_bubble_position
+
+        screen = QRect(0, 0, 1200, 900)
+        pet = QRect(760, 500, 280, 360)
+        bubble_size = QSize(360, 180)
+        position = calculate_bubble_position(pet, bubble_size, screen)
+        bubble = QRect(position, bubble_size)
+        self.assertTrue(screen.adjusted(24, 24, -24, -24).contains(bubble))
+        self.assertFalse(bubble.intersects(pet))
+
+        edge_pet = QRect(1050, 20, 140, 300)
+        edge_position = calculate_bubble_position(edge_pet, bubble_size, screen)
+        edge_bubble = QRect(edge_position, bubble_size)
+        self.assertTrue(screen.adjusted(24, 24, -24, -24).contains(edge_bubble))
+        self.assertFalse(edge_bubble.intersects(edge_pet))
+
+    def test_bubble_prefers_the_horizontal_side_away_from_the_screen_edge(self) -> None:
+        from meapet.desktop.render_host import (
+            calculate_bubble_position,
+            calculate_bubble_tail,
+        )
+
+        screen = QRect(0, 0, 1200, 900)
+        bubble_size = QSize(320, 150)
+
+        right_pet = QRect(850, 500, 250, 300)
+        right_position = calculate_bubble_position(
+            right_pet,
+            bubble_size,
+            screen,
+        )
+        right_bubble = QRect(right_position, bubble_size)
+        self.assertLess(right_bubble.right(), right_pet.left())
+        self.assertLessEqual(
+            right_bubble.center().y(),
+            right_pet.top() + right_pet.height() // 4,
+        )
+        right_tail_side, right_tail_anchor = calculate_bubble_tail(
+            right_pet,
+            right_bubble,
+        )
+        self.assertEqual(right_tail_side, "bottom")
+        self.assertGreater(right_tail_anchor, right_bubble.width() * 0.65)
+
+        left_pet = QRect(100, 500, 250, 300)
+        left_position = calculate_bubble_position(
+            left_pet,
+            bubble_size,
+            screen,
+        )
+        left_bubble = QRect(left_position, bubble_size)
+        self.assertGreater(left_bubble.left(), left_pet.right())
+        self.assertLessEqual(
+            left_bubble.center().y(),
+            left_pet.top() + left_pet.height() // 4,
+        )
+        left_tail_side, left_tail_anchor = calculate_bubble_tail(
+            left_pet,
+            left_bubble,
+        )
+        self.assertEqual(left_tail_side, "bottom")
+        self.assertLess(left_tail_anchor, left_bubble.width() * 0.35)
+
+    def test_newest_bubble_stays_near_the_pet_while_older_bubbles_stack_upward(self) -> None:
+        from meapet.desktop.render_host import calculate_bubble_stack_positions
+
+        screen = QRect(0, 0, 1200, 900)
+        pet = QRect(850, 430, 250, 360)
+        sizes = (
+            QSize(240, 72),
+            QSize(300, 88),
+            QSize(220, 64),
+        )
+
+        positions = calculate_bubble_stack_positions(
+            pet,
+            sizes,
+            screen,
+        )
+        bubbles = [QRect(position, size) for position, size in zip(positions, sizes)]
+        safe = screen.adjusted(24, 24, -24, -24)
+
+        self.assertEqual(len(positions), 3)
+        self.assertTrue(all(safe.contains(bubble) for bubble in bubbles))
+        self.assertTrue(all(bubble.right() < pet.left() for bubble in bubbles))
+        self.assertLess(bubbles[0].bottom(), bubbles[1].top())
+        self.assertLess(bubbles[1].bottom(), bubbles[2].top())
+        self.assertLess(bubbles[2].center().y(), pet.center().y())
+
+    def test_drag_position_always_uses_the_original_global_anchor(self) -> None:
+        from meapet.desktop.render_host import calculate_drag_position
+
+        window_origin = QPoint(720, 480)
+        pointer_origin = QPoint(900, 620)
+        current_pointer = QPoint(948, 677)
+
+        expected = QPoint(768, 537)
+        self.assertEqual(
+            calculate_drag_position(window_origin, pointer_origin, current_pointer),
+            expected,
+        )
+        # 同一鼠标坐标重复到达时结果必须完全一致，不能累计上一次移动误差。
+        self.assertEqual(
+            calculate_drag_position(window_origin, pointer_origin, current_pointer),
+            expected,
+        )
+
+    def test_bubble_position_avoids_visible_chat_composer(self) -> None:
+        from meapet.desktop.render_host import calculate_bubble_position
+
+        screen = QRect(0, 0, 1200, 900)
+        pet = QRect(760, 500, 280, 360)
+        composer = QRect(690, 280, 480, 220)
+        bubble_size = QSize(360, 180)
+
+        position = calculate_bubble_position(
+            pet,
+            bubble_size,
+            screen,
+            avoid_rects=(composer,),
+        )
+        bubble = QRect(position, bubble_size)
+        self.assertTrue(screen.adjusted(24, 24, -24, -24).contains(bubble))
+        self.assertFalse(bubble.intersects(pet))
+        self.assertFalse(bubble.intersects(composer))
+
+    def test_bubble_tail_points_from_the_bubble_toward_the_pet(self) -> None:
+        from meapet.desktop.render_host import calculate_bubble_tail
+
+        pet = QRect(500, 400, 200, 300)
+        cases = (
+            (QRect(450, 180, 300, 160), "bottom", 150),
+            (QRect(160, 430, 280, 160), "bottom", 244),
+            (QRect(760, 430, 280, 160), "bottom", 36),
+            (QRect(450, 740, 300, 160), "top", 150),
+        )
+        for bubble, expected_side, expected_anchor in cases:
+            with self.subTest(side=expected_side):
+                self.assertEqual(
+                    calculate_bubble_tail(pet, bubble),
+                    (expected_side, expected_anchor),
+                )
+
+    def test_context_menu_groups_secondary_actions_into_submenus(self) -> None:
+        from meapet.desktop.window_chrome import PetWindowChromeMixin
+
+        class MenuHost(QWidget, PetWindowChromeMixin):
+            def __init__(self):
+                super().__init__()
+                self.config = {
+                    "vision": {"backend": "ollama", "model": "qwen3.5:4b"},
+                    "llm": {"backend": "ollama"},
+                    "watcher": {"enabled": False},
+                }
+                self._standby = False
+                self._use_live2d = False
+
+            def _safe_set_mood(self, _mood):
+                pass
+
+            def _set_vision_backend(self, _backend):
+                pass
+
+            def _set_vision_model(self, _model):
+                pass
+
+            def _toggle_watcher_enabled(self):
+                pass
+
+            def _toggle_standby(self):
+                pass
+
+            def _toggle_render_mode(self):
+                pass
+
+            def _open_size_dialog(self):
+                pass
+
+            def _do_screen_watch(self, force=False):
+                pass
+
+        host = self._track(MenuHost())
+        menu = self._track(host._build_context_menu())
+        self.assertIsInstance(menu, QMenu)
+        root_labels = [
+            action.text()
+            for action in menu.actions()
+            if not action.isSeparator()
+        ]
+        self.assertEqual(
+            root_labels,
+            [
+                "养成状态",
+                "看看我在干嘛",
+                "切换表情",
+                "识图与观察",
+                "显示与立绘",
+                "设置与数据",
+                "退出",
+            ],
+        )
+        submenu_labels = {
+            action.menu().title()
+            for action in menu.actions()
+            if action.menu() is not None
+        }
+        self.assertEqual(
+            submenu_labels,
+            {"切换表情", "识图与观察", "显示与立绘", "设置与数据"},
+        )
+
+    def test_context_menu_uses_readable_type_and_row_height(self) -> None:
+        from meapet.desktop.theme import MENU_STYLE
+
+        menu = self._track(QMenu())
+        menu.setStyleSheet(MENU_STYLE)
+        action = menu.addAction("看看我在干嘛")
+        menu.show()
+        QApplication.processEvents()
+
+        self.assertGreaterEqual(menu.font().pixelSize(), 14)
+        self.assertGreaterEqual(menu.actionGeometry(action).height(), 38)
+
+    def test_cloud_consent_dialog_is_compact_and_has_balanced_actions(self) -> None:
+        from meapet.desktop.dialogs import CloudVisionConsentDialog
+
+        dialog = self._track(CloudVisionConsentDialog(timeout_seconds=5))
+        dialog.show()
+        dialog._timer.stop()
+        QApplication.processEvents()
+
+        self.assertEqual(dialog.size(), QSize(420, 270))
+        self.assertEqual(dialog.allow_button.width(), dialog.cancel_button.width())
+
+    def test_cloud_consent_dialog_defaults_to_cancel_and_times_out(self) -> None:
+        from meapet.desktop.dialogs import CloudVisionConsentDialog
+
+        dialog = self._track(CloudVisionConsentDialog(timeout_seconds=5))
+        self.assertEqual(dialog.remaining_seconds, 5)
+        self.assertEqual(dialog._timer.interval(), 1000)
+        self.assertTrue(dialog.cancel_button.isDefault())
+        self.assertFalse(dialog.allow_button.isDefault())
+        self.assertEqual(dialog.allow_button.text(), "允许本次上传")
+        self.assertEqual(dialog.countdown_label.text(), "5 秒后自动取消。")
+
+        dialog._tick()
+        self.assertEqual(dialog.allow_button.text(), "允许本次上传")
+        self.assertEqual(dialog.countdown_label.text(), "4 秒后自动取消。")
+
+        rejected = []
+        dialog.rejected.connect(lambda: rejected.append(True))
+        dialog.show()
+        dialog._timer.stop()
+        for _ in range(4):
+            dialog._tick()
+        self.assertEqual(dialog.result(), QDialog.Rejected)
+        self.assertEqual(rejected, [True])
+        self.assertTrue(dialog.auto_cancelled)
+
+    def test_cloud_consent_accepts_only_an_explicit_allow_click(self) -> None:
+        from meapet.desktop.dialogs import CloudVisionConsentDialog
+
+        dialog = self._track(CloudVisionConsentDialog(timeout_seconds=5))
+        dialog.show()
+        dialog._timer.stop()
+        dialog.accept()
+        self.assertEqual(dialog.result(), QDialog.Rejected)
+
+        dialog.allow_button.click()
+        self.assertEqual(dialog.result(), QDialog.Accepted)
+        self.assertFalse(dialog.auto_cancelled)
+
+    def test_watcher_cloud_confirmation_uses_themed_safe_dialog(self) -> None:
+        from meapet.desktop.watch_ctrl import PetWatcherMixin
+
+        pet = type("WatcherHost", (PetWatcherMixin,), {})()
+        pet.config = {"watcher": {"allow_cloud": True}}
+        pet._is_cloud_vision = lambda: True
+        pet._show_bubble = unittest.mock.Mock()
+
+        with patch(
+            "meapet.desktop.watch_ctrl.confirm_cloud_vision",
+            return_value=False,
+        ) as confirm, patch(
+            "PyQt5.QtWidgets.QMessageBox.question",
+            side_effect=AssertionError("不应调用系统确认框"),
+        ):
+            self.assertFalse(pet._confirm_cloud_capture())
+        confirm.assert_called_once()
+        self.assertEqual(confirm.call_args.kwargs["timeout_seconds"], 5)
 
 
 if __name__ == "__main__":

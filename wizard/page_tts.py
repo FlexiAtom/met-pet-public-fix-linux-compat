@@ -36,6 +36,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._startup_timers = []
         self.setObjectName("PageCard")
         self.setStyleSheet(STYLE_PAGE_CARD)
         layout = QVBoxLayout(self)
@@ -264,11 +265,11 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         path_row.addWidget(browse_btn)
         gsv_layout.addLayout(path_row)
 
-        QTimer.singleShot(300, self._check_gsv)
+        self._schedule_startup(300, self._check_gsv)
         layout.addWidget(self.gsv_container)
 
         # 初始调用后端切换（默认 VITS 模式）
-        QTimer.singleShot(100, self._toggle_backend)
+        self._schedule_startup(100, self._toggle_backend)
 
         packaged_hint = QLabel("语音模型已打包，开箱即用。")
         packaged_hint.setObjectName("HelperText")
@@ -297,7 +298,15 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         self._tl_widgets = []
 
 
-        QTimer.singleShot(500, self._check_gsv)
+        self._schedule_startup(500, self._check_gsv)
+
+    def _schedule_startup(self, delay_ms: int, callback) -> None:
+        """创建随页面销毁的单次启动计时器，避免关闭后回调已删除控件。"""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(callback)
+        timer.start(delay_ms)
+        self._startup_timers.append(timer)
 
     def log(self, msg):
         """日志输出（TTSPage 版本）"""

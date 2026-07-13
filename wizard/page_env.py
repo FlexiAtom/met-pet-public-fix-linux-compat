@@ -126,7 +126,10 @@ class EnvCheckPage(QFrame):
 
         self._installing = False
         self._model_items = {}
-        QTimer.singleShot(200, self._run_checks)
+        self._check_timer = QTimer(self)
+        self._check_timer.setSingleShot(True)
+        self._check_timer.timeout.connect(self._run_checks)
+        self._check_timer.start(200)
 
     def log(self, msg):
         self.log_area.show()
@@ -150,6 +153,15 @@ class EnvCheckPage(QFrame):
             btn.show()
 
     def _run_checks(self):
+        """执行检测；配置页销毁期间到达的状态更新应安全终止。"""
+        try:
+            self._run_checks_impl()
+        except RuntimeError as exc:
+            if "has been deleted" in str(exc):
+                return
+            raise
+
+    def _run_checks_impl(self):
         self.log(f"开始检测环境… 平台={PLATFORM['display']}")
         self.log(f"  system={PLATFORM['system']} arch={PLATFORM['arch']} wsl={PLATFORM['is_wsl']}")
 

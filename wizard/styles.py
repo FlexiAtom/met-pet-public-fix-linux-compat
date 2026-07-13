@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from meapet.ui_theme import (
+    DISPLAY_FONT_FAMILY,
     FONT_FAMILY,
     MIN_TARGET_SIZE,
     MONO_FONT_FAMILY,
@@ -175,6 +176,7 @@ WIZARD_STYLESHEET = f"""
     }}
     QLabel#BrandName {{
         color: {COLOR_TEXT};
+        font-family: {DISPLAY_FONT_FAMILY};
         font-size: 16px;
         font-weight: 700;
     }}
@@ -187,6 +189,18 @@ WIZARD_STYLESHEET = f"""
         border: 1px solid {COLOR_BORDER};
         border-radius: 10px;
     }}
+    QLabel#ConfigStatus {{
+        min-height: 22px;
+        color: {COLOR_TEXT_SECONDARY};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel#ConfigStatus[status="error"] {{
+        color: {COLOR_ERR};
+    }}
+    QLabel#ConfigStatus[status="success"] {{
+        color: {COLOR_OK};
+    }}
     QLabel#PageEyebrow {{
         color: {COLOR_ACCENT};
         font-size: 11px;
@@ -194,6 +208,7 @@ WIZARD_STYLESHEET = f"""
     }}
     QLabel#PageTitle {{
         color: {COLOR_TEXT};
+        font-family: {DISPLAY_FONT_FAMILY};
         font-size: 22px;
         font-weight: 700;
     }}
@@ -209,6 +224,15 @@ WIZARD_STYLESHEET = f"""
     QLabel#HelperText {{
         color: {COLOR_MUTED};
         font-size: 12px;
+    }}
+    QLabel#FontScaleValue {{
+        color: {COLOR_ACCENT};
+        background: {COLOR_ELEVATED};
+        border: 1px solid {COLOR_BORDER};
+        border-radius: {RADIUS_SMALL}px;
+        padding: 5px 8px;
+        font-size: 14px;
+        font-weight: 700;
     }}
     QLabel[status="success"] {{
         color: {COLOR_OK};
@@ -326,6 +350,8 @@ WIZARD_STYLESHEET = f"""
     QPushButton#PrimaryButton {{
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
             stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
+        font-family: {DISPLAY_FONT_FAMILY};
+        font-size: 15px;
         color: {PALETTE['on_primary']};
         border-color: {COLOR_ACCENT};
         font-weight: 700;
@@ -361,6 +387,78 @@ WIZARD_STYLESHEET = f"""
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
             stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
         border-radius: 3px;
+    }}
+    QSlider::groove:horizontal {{
+        height: 6px;
+        background: {COLOR_BORDER};
+        border-radius: 3px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
+        border-radius: 3px;
+    }}
+    QSlider::add-page:horizontal {{
+        background: {COLOR_BORDER};
+        border-radius: 3px;
+    }}
+    QSlider::handle:horizontal {{
+        width: 20px;
+        margin: -8px 0;
+        background: {COLOR_TEXT};
+        border: 3px solid {COLOR_ACCENT};
+        border-radius: 10px;
+    }}
+    QSlider::handle:horizontal:hover {{
+        background: {COLOR_FOCUS};
+        border-color: {COLOR_FOCUS};
+    }}
+    QSlider::handle:horizontal:pressed {{
+        background: {COLOR_ACCENT};
+    }}
+    QTabWidget#ConfigurationTabs {{
+        background: transparent;
+        border: none;
+    }}
+    QTabWidget#ConfigurationTabs::pane {{
+        background: {COLOR_CARD};
+        border: 1px solid {COLOR_BORDER};
+        border-radius: {RADIUS_MEDIUM}px;
+        top: -1px;
+        margin: 0 18px 10px 18px;
+    }}
+    QTabBar::tab {{
+        min-width: 112px;
+        min-height: 28px;
+        padding: 8px 16px;
+        margin: 0 4px 0 0;
+        color: {COLOR_TEXT_SECONDARY};
+        background: transparent;
+        border: 1px solid transparent;
+        border-top-left-radius: {RADIUS_SMALL}px;
+        border-top-right-radius: {RADIUS_SMALL}px;
+        font-weight: 600;
+    }}
+    QTabBar::tab:hover {{
+        color: {COLOR_TEXT};
+        background: {rgba(COLOR_FOCUS, 22)};
+    }}
+    QTabBar::tab:selected {{
+        color: {COLOR_TEXT};
+        background: {COLOR_CARD};
+        border-color: {COLOR_BORDER};
+        border-bottom-color: {COLOR_CARD};
+        font-weight: 700;
+    }}
+    QTabBar::tab:focus {{
+        border: 2px solid {COLOR_FOCUS};
+    }}
+    QWidget#ConfigurationTabContent {{
+        background: transparent;
+    }}
+    QScrollArea#ConfigurationTabScroll {{
+        background: transparent;
+        border: none;
     }}
     QScrollArea {{
         background: transparent;

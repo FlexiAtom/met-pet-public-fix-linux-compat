@@ -8,10 +8,11 @@ import traceback
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QStackedWidget, QMessageBox, QFrame, QProgressBar, QScrollArea, QSizeGrip,
+    QMessageBox, QFrame, QScrollArea, QSizeGrip, QSizePolicy, QTabWidget,
+    QSlider,
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QKeySequence, QPalette
+from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap
 from PyQt5.QtWidgets import QShortcut
 
 from wizard.platform_info import PLATFORM, CONFIG_PATH, detect_platform
@@ -21,24 +22,59 @@ from wizard.styles import (
     COLOR_TEXT,
     WIZARD_STYLESHEET,
     prepare_accessible_page,
+    set_status,
 )
-from meapet.ui_theme import MIN_TARGET_SIZE, PALETTE
+from meapet.ui_theme import (
+    MIN_TARGET_SIZE,
+    PALETTE,
+    UI_FONT_SCALE_DEFAULT,
+    apply_ui_font_scale,
+    ensure_application_fonts,
+    normalize_ui_font_scale,
+    set_ui_font_scale,
+)
 from wizard.pages import (
-    EnvCheckPage, LLMPage, ApiKeyPage, TTSPage, VisionPage, SummaryPage,
+    EnvCheckPage, LLMPage, ApiKeyPage, TTSPage, VisionPage,
 )
 
 class SetupWizard(QWidget):
+    TAB_ENV = 0
+    TAB_CHAT = 1
+    TAB_VOICE = 2
+    TAB_VISION = 3
+
+    @staticmethod
+    def _read_initial_font_scale() -> float:
+        """只读取显示字号，避免配置页首次绘制后再发生字体跳变。"""
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as file:
+                config = json.load(file)
+            if isinstance(config, dict) and isinstance(
+                config.get("display"),
+                dict,
+            ):
+                return normalize_ui_font_scale(
+                    config["display"].get("font_scale")
+                )
+        except (OSError, ValueError, TypeError):
+            pass
+        return UI_FONT_SCALE_DEFAULT
+
     def __init__(self):
+        initial_font_scale = self._read_initial_font_scale()
+        set_ui_font_scale(initial_font_scale)
         super().__init__()
-        self.setWindowTitle(f"MeaPet 配置向导 — {PLATFORM['os_label']}")
+        ensure_application_fonts()
+        self.setWindowTitle(f"MeaPet 配置 — {PLATFORM['os_label']}")
         self.setObjectName("WizardRoot")
-        self.setMinimumSize(680, 640)
-        self.resize(760, 780)
+        self.setMinimumSize(760, 620)
+        self.resize(880, 780)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setStyleSheet(WIZARD_STYLESHEET)
-        self.setAccessibleName("MeaPet 配置向导")
-        self.setAccessibleDescription("分步骤配置对话、语音和屏幕识图功能")
+        self.setAccessibleName("MeaPet 配置")
+        self.setAccessibleDescription("使用标签页配置环境、对话、语音和屏幕识图功能")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 16)
@@ -64,83 +100,89 @@ class SetupWizard(QWidget):
         brand_mark.setAccessibleName("MeaPet")
         top.addWidget(brand_mark)
 
-        brand_name = QLabel("MeaPet Setup")
+        brand_name = QLabel("MeaPet 设置")
         brand_name.setObjectName("BrandName")
         top.addWidget(brand_name)
         top.addStretch()
 
-        self.step_label = QLabel("环境检测")
-        self.step_label.setObjectName("StepLabel")
-        self.step_label.setAccessibleName("当前步骤")
-        top.addWidget(self.step_label)
+        section_label = QLabel("配置中心")
+        section_label.setObjectName("StepLabel")
+        section_label.setAccessibleName("当前页面")
+        top.addWidget(section_label)
 
         self.close_btn = QPushButton("×")
         self.close_btn.setObjectName("CloseButton")
         self.close_btn.setFixedSize(MIN_TARGET_SIZE, MIN_TARGET_SIZE)
-        self.close_btn.setToolTip("关闭配置向导（Esc）")
-        self.close_btn.setAccessibleName("关闭配置向导")
+        self.close_btn.setToolTip("关闭配置页（Esc）")
+        self.close_btn.setAccessibleName("关闭配置页")
         self.close_btn.clicked.connect(self.close)
         top.addWidget(self.close_btn)
         main.addWidget(header)
-
-        # 进度条
-        progress_row = QHBoxLayout()
-        progress_row.setContentsMargins(24, 0, 24, 14)
-        self.progress = QProgressBar()
-        self.progress.setRange(1, 7)
-        self.progress.setValue(1)
-        self.progress.setFixedHeight(8)
-        self.progress.setTextVisible(False)
-        self.progress.setAccessibleName("配置进度")
-        progress_row.addWidget(self.progress)
-        main.addLayout(progress_row)
 
         divider = QFrame()
         divider.setObjectName("WizardDivider")
         main.addWidget(divider)
 
-        # 页面
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll.setFrameShape(QFrame.NoFrame)
-        self.scroll.setAccessibleName("配置页面")
-        main.addWidget(self.scroll, 1)
-
-        self.stack = QStackedWidget()
-        self.stack.setObjectName("WizardPages")
-        self.scroll.setWidget(self.stack)
-
+        # 页面内容保留原有控件和配置收集逻辑，只把导航改为普通标签页。
         self.env_page = EnvCheckPage()
+        self.display_page = self._build_display_settings(initial_font_scale)
         self.llm_page = LLMPage()
         self.key_page_ds = ApiKeyPage(self, backend="deepseek")
         self.key_page_mimo = ApiKeyPage(self, backend="mimo")
         self.tts_page = TTSPage()
         self.vision_page = VisionPage()
-        self.summary_page = SummaryPage(self)
-
-        self.stack.addWidget(self.env_page)      # 0
-        self.stack.addWidget(self.llm_page)       # 1
-        self.stack.addWidget(self.key_page_ds)    # 2
-        self.stack.addWidget(self.key_page_mimo)  # 3
-        self.stack.addWidget(self.tts_page)       # 4
-        self.stack.addWidget(self.vision_page)    # 5
-        self.stack.addWidget(self.summary_page)   # 6
 
         for page in (
             self.env_page,
+            self.display_page,
             self.llm_page,
             self.key_page_ds,
             self.key_page_mimo,
             self.tts_page,
             self.vision_page,
-            self.summary_page,
         ):
             prepare_accessible_page(page)
 
         # 当前显示的 key_page 引用（指向 key_page_ds 或 key_page_mimo）
         self.key_page = self.key_page_ds
         self._existing_config = {}
+        self._missing_icon = self._build_missing_icon()
+
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(24, 12, 24, 4)
+        self.config_status = QLabel("正在检查必要配置…")
+        self.config_status.setObjectName("ConfigStatus")
+        self.config_status.setWordWrap(True)
+        self.config_status.setAccessibleName("必要配置状态")
+        status_row.addWidget(self.config_status, 1)
+        main.addLayout(status_row)
+
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("ConfigurationTabs")
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(False)
+        self.tabs.setIconSize(QSize(12, 12))
+        self.tabs.setAccessibleName("配置分类")
+        self.tabs.setAccessibleDescription("带红点的标签缺少必要配置，并有文字提示")
+        self.tabs.tabBar().setAccessibleName("环境、对话、语音和屏幕识图标签")
+        self.tabs.tabBar().setAccessibleDescription(
+            "红点表示该标签仍缺少必要配置；具体原因显示在标签提示和顶部状态中"
+        )
+        self.tabs.addTab(
+            self._make_scroll_tab(self.display_page, self.env_page),
+            "环境",
+        )
+        self.tabs.addTab(
+            self._make_scroll_tab(
+                self.llm_page,
+                self.key_page_ds,
+                self.key_page_mimo,
+            ),
+            "对话",
+        )
+        self.tabs.addTab(self._make_scroll_tab(self.tts_page), "语音")
+        self.tabs.addTab(self._make_scroll_tab(self.vision_page), "屏幕识图")
+        main.addWidget(self.tabs, 1)
 
         # 底部按钮
         footer = QFrame()
@@ -149,26 +191,18 @@ class SetupWizard(QWidget):
         btns.setContentsMargins(24, 12, 18, 18)
         btns.setSpacing(12)
 
-        footer_hint = QLabel("设置仅保存在本机，可随时再次打开向导修改")
+        footer_hint = QLabel("设置仅保存在本机，可随时再次打开配置页修改")
         footer_hint.setObjectName("HelperText")
         footer_hint.setWordWrap(True)
         btns.addWidget(footer_hint, 1)
 
-        self.back_btn = QPushButton("上一步")
-        self.back_btn.setObjectName("SecondaryButton")
-        self.back_btn.setMinimumSize(104, MIN_TARGET_SIZE)
-        self.back_btn.setAccessibleName("返回上一步")
-        self.back_btn.setToolTip("返回上一步（Alt+左方向键）")
-        self.back_btn.clicked.connect(self._back)
-        self.back_btn.setEnabled(False)
-        btns.addWidget(self.back_btn)
-
-        self.next_btn = QPushButton("继续")
-        self.next_btn.setObjectName("PrimaryButton")
-        self.next_btn.setMinimumSize(116, MIN_TARGET_SIZE)
-        self.next_btn.setAccessibleName("继续到下一步")
-        self.next_btn.clicked.connect(self._next)
-        btns.addWidget(self.next_btn)
+        self.save_btn = QPushButton("保存配置")
+        self.save_btn.setObjectName("PrimaryButton")
+        self.save_btn.setMinimumSize(124, MIN_TARGET_SIZE)
+        self.save_btn.setAccessibleName("保存全部配置")
+        self.save_btn.setToolTip("保存当前所有标签页中的配置")
+        self.save_btn.clicked.connect(self._save)
+        btns.addWidget(self.save_btn)
 
         size_grip = QSizeGrip(self.container)
         size_grip.setFixedSize(18, 18)
@@ -178,9 +212,8 @@ class SetupWizard(QWidget):
 
         self._close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self._close_shortcut.activated.connect(self.close)
-        self._back_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
-        self._back_shortcut.activated.connect(self._back)
-        self.setTabOrder(self.back_btn, self.next_btn)
+        self.setTabOrder(self.tabs, self.save_btn)
+        self.setTabOrder(self.save_btn, self.close_btn)
 
         # 窗口拖拽
         self._drag = None
@@ -189,10 +222,227 @@ class SetupWizard(QWidget):
             w.mouseMoveEvent = lambda e: self._drag_move(e)
             w.mouseReleaseEvent = lambda e: setattr(self, '_drag', None)
 
-        self._page = 0
-        self._update()
+        self._connect_required_field_updates()
+        self._sync_llm_key_panel()
+        self._refresh_required_tabs()
         # 再次配置：读取并回填上次 config.json
-        QTimer.singleShot(0, self._load_existing_config)
+        self._load_timer = QTimer(self)
+        self._load_timer.setSingleShot(True)
+        self._load_timer.timeout.connect(self._load_existing_config)
+        self._load_timer.start(0)
+        apply_ui_font_scale(self, initial_font_scale)
+
+    def _build_display_settings(self, initial_scale: float) -> QFrame:
+        """创建独立的界面字号设置卡，并提供即时预览。"""
+        card = QFrame()
+        card.setObjectName("PageCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(10)
+
+        title = QLabel("界面显示")
+        title.setObjectName("PageTitle")
+        title.setAccessibleName("界面显示")
+        layout.addWidget(title)
+
+        description = QLabel(
+            "调整配置页、聊天气泡、菜单和对话框的字体大小。"
+            "配置页会即时预览，桌宠重启后应用。"
+        )
+        description.setObjectName("PageDescription")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        label = QLabel("字体缩放")
+        label.setObjectName("FieldLabel")
+        label.setMinimumWidth(112)
+        row.addWidget(label)
+
+        self.font_scale_slider = QSlider(Qt.Horizontal)
+        self.font_scale_slider.setRange(80, 150)
+        self.font_scale_slider.setSingleStep(5)
+        self.font_scale_slider.setPageStep(10)
+        self.font_scale_slider.setTracking(True)
+        self.font_scale_slider.setValue(round(initial_scale * 100))
+        self.font_scale_slider.setAccessibleName("界面字体缩放")
+        self.font_scale_slider.setAccessibleDescription(
+            "可在百分之八十到百分之一百五十之间调整，步长百分之五"
+        )
+        row.addWidget(self.font_scale_slider, 1)
+
+        self.font_scale_value = QLabel(
+            f"{self.font_scale_slider.value()}%"
+        )
+        self.font_scale_value.setObjectName("FontScaleValue")
+        self.font_scale_value.setMinimumWidth(52)
+        self.font_scale_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.font_scale_value.setAccessibleName("当前字体缩放")
+        row.addWidget(self.font_scale_value)
+        layout.addLayout(row)
+
+        hint = QLabel("建议 100%；高分屏或阅读困难时可调至 120%–150%。")
+        hint.setObjectName("HelperText")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.font_scale_slider.valueChanged.connect(
+            self._on_font_scale_changed
+        )
+        return card
+
+    def _on_font_scale_changed(self, value: int) -> None:
+        value = int(value)
+        self.font_scale_value.setText(f"{value}%")
+        apply_ui_font_scale(self, value / 100.0)
+
+    def _make_scroll_tab(self, *pages: QWidget) -> QScrollArea:
+        """给每个标签提供独立滚动区域，避免高 DPI 或小窗口裁切表单。"""
+        content = QWidget()
+        content.setObjectName("ConfigurationTabContent")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 12, 16, 16)
+        layout.setSpacing(12)
+        for page in pages:
+            page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+            layout.addWidget(page)
+        layout.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("ConfigurationTabScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(content)
+        scroll.setAccessibleName("配置表单")
+        return scroll
+
+    @staticmethod
+    def _build_missing_icon() -> QIcon:
+        """绘制独立红点图标，避免用文字字符模拟状态。"""
+        pixmap = QPixmap(12, 12)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(PALETTE["danger"]))
+        painter.drawEllipse(2, 2, 8, 8)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _connect_required_field_updates(self) -> None:
+        for radio in (
+            self.llm_page.radio_ollama,
+            self.llm_page.radio_ds,
+            self.llm_page.radio_mimo,
+        ):
+            radio.toggled.connect(self._on_llm_backend_changed)
+        self.key_page_ds.key_input.textChanged.connect(self._refresh_required_tabs)
+        self.key_page_mimo.key_input.textChanged.connect(self._refresh_required_tabs)
+        self.tts_page.enable_cb.toggled.connect(self._refresh_required_tabs)
+        self.tts_page.backend_combo.currentIndexChanged.connect(
+            self._refresh_required_tabs
+        )
+        self.tts_page.mimo_api_key_input.textChanged.connect(
+            self._refresh_required_tabs
+        )
+        self.vision_page.enable_cb.toggled.connect(self._refresh_required_tabs)
+        self.vision_page.allow_cloud_cb.toggled.connect(
+            self._refresh_required_tabs
+        )
+        self.vision_page.backend_combo.currentIndexChanged.connect(
+            self._refresh_required_tabs
+        )
+        self.vision_page.api_key_input.textChanged.connect(
+            self._refresh_required_tabs
+        )
+
+    def _on_llm_backend_changed(self, checked: bool = True) -> None:
+        if not checked:
+            return
+        self._sync_llm_key_panel()
+        self._refresh_required_tabs()
+
+    def _sync_llm_key_panel(self) -> None:
+        backend = self.llm_page.get_backend()
+        self.key_page_ds.setVisible(backend == "deepseek")
+        self.key_page_mimo.setVisible(backend == "mimo")
+        if backend == "mimo":
+            self.key_page = self.key_page_mimo
+        elif backend == "deepseek":
+            self.key_page = self.key_page_ds
+
+    def _configuration_issues(self) -> dict[int, list[str]]:
+        issues = {
+            self.TAB_ENV: [],
+            self.TAB_CHAT: [],
+            self.TAB_VOICE: [],
+            self.TAB_VISION: [],
+        }
+        llm_backend = self.llm_page.get_backend()
+        llm_key = ""
+        if llm_backend == "deepseek":
+            llm_key = self.key_page_ds.key_input.text().strip()
+            if not llm_key:
+                issues[self.TAB_CHAT].append("DeepSeek API Key")
+        elif llm_backend == "mimo":
+            llm_key = self.key_page_mimo.key_input.text().strip()
+            if not llm_key:
+                issues[self.TAB_CHAT].append("MiMo API Key")
+
+        if (
+            self.tts_page.enable_cb.isChecked()
+            and self.tts_page.backend_combo.currentData() == "mimo"
+        ):
+            tts_key = self.tts_page.mimo_api_key_input.text().strip()
+            if not tts_key and llm_backend == "mimo":
+                tts_key = llm_key
+            if not tts_key:
+                issues[self.TAB_VOICE].append("MiMo TTS API Key")
+
+        if self.vision_page.enable_cb.isChecked():
+            selected_backend = self.vision_page.backend_combo.currentData() or "auto"
+            actual_backend = selected_backend
+            if selected_backend == "auto":
+                actual_backend = llm_backend if llm_backend in {"ollama", "mimo"} else "ollama"
+            if actual_backend == "mimo":
+                if not self.vision_page.allow_cloud_cb.isChecked():
+                    issues[self.TAB_VISION].append("云端识图授权")
+                vision_key = self.vision_page.api_key_input.text().strip()
+                if not vision_key and llm_backend == "mimo":
+                    vision_key = llm_key
+                if not vision_key:
+                    issues[self.TAB_VISION].append("云端识图 API Key")
+        return issues
+
+    def _refresh_required_tabs(self, *_args) -> None:
+        issues = self._configuration_issues()
+        labels = {
+            self.TAB_ENV: "环境",
+            self.TAB_CHAT: "对话",
+            self.TAB_VOICE: "语音",
+            self.TAB_VISION: "屏幕识图",
+        }
+        missing_sections = []
+        for index, label in labels.items():
+            missing = issues[index]
+            self.tabs.setTabIcon(index, self._missing_icon if missing else QIcon())
+            if missing:
+                detail = "、".join(missing)
+                self.tabs.setTabToolTip(index, f"{label}：缺少必要配置：{detail}")
+                missing_sections.append(f"{label}（{detail}）")
+            else:
+                self.tabs.setTabToolTip(index, f"{label}：必要配置已就绪")
+
+        if missing_sections:
+            message = "需要补充：" + "；".join(missing_sections)
+            set_status(self.config_status, "error", message)
+            self.config_status.setAccessibleDescription(message)
+        else:
+            message = "必要配置已就绪，可以直接保存"
+            set_status(self.config_status, "success", message)
+            self.config_status.setAccessibleDescription(message)
 
     def _load_existing_config(self):
         """打开向导时加载 config.json，恢复上次选择（再次配置不会丢）。"""
@@ -214,6 +464,18 @@ class SetupWizard(QWidget):
 
         llm = cfg.get("llm", {}) or {}
         tts = cfg.get("tts", {}) or {}
+        display = (
+            cfg.get("display", {})
+            if isinstance(cfg.get("display"), dict)
+            else {}
+        )
+
+        self.font_scale_slider.setValue(
+            round(
+                normalize_ui_font_scale(display.get("font_scale", 1.0))
+                * 100
+            )
+        )
 
         # AI 后端
         backend = (llm.get("backend") or "ollama").lower()
@@ -280,6 +542,8 @@ class SetupWizard(QWidget):
             )
         except Exception:
             pass
+        self._sync_llm_key_panel()
+        self._refresh_required_tabs()
 
     def _deep_merge(self, base: dict, override: dict) -> dict:
         """递归合并：override 覆盖 base，未涉及的旧字段保留。"""
@@ -299,95 +563,6 @@ class SetupWizard(QWidget):
         if self._drag:
             self.move(self.pos() + e.globalPos() - self._drag)
             self._drag = e.globalPos()
-
-    def _update(self):
-        p = self._page
-        self.progress.setValue(p + 1)
-        self.back_btn.setEnabled(p > 0)
-        names = ["环境检测", "AI 大脑", "API Key", "API Key", "语音设置", "识图设置", "确认"]
-        step_name = names[p] if p < len(names) else "完成"
-        self.step_label.setText(f"{p + 1} / 7 · {step_name}")
-        self.progress.setAccessibleDescription(f"第 {p + 1} 步，共 7 步：{step_name}")
-        if p == 0:
-            self.next_btn.setText("跳过检测")
-            self.next_btn.setAccessibleName("跳过环境检测")
-        elif p == 6:
-            self.next_btn.setText("保存配置")
-            self.next_btn.setAccessibleName("保存配置并完成")
-        else:
-            self.next_btn.setText("继续")
-            self.next_btn.setAccessibleName("继续到下一步")
-
-    def _back(self):
-        p = self._page
-        if p == 0:
-            return
-        if p == 1:
-            self._page = 0
-        elif p in (2, 3):
-            self._page = 1
-        elif p == 4:
-            b = self.llm_page.get_backend()
-            self._page = 2 if b == "deepseek" else (3 if b == "mimo" else 1)
-        elif p == 5:
-            self._page = 4
-        elif p == 6:
-            self._page = 5
-        self.stack.setCurrentIndex(self._page)
-        self._update()
-
-
-    def _next(self):
-        p = self._page
-
-        # 环境页 → AI
-        if p == 0:
-            self._page = 1
-            self.stack.setCurrentIndex(1)
-            self._update()
-            return
-
-        # LLM 页 → Key 或 语音
-        if p == 1:
-            b = self.llm_page.get_backend()
-            if b == "deepseek":
-                self.key_page = self.key_page_ds
-                self._page = 2
-            elif b == "mimo":
-                self.key_page = self.key_page_mimo
-                self._page = 3
-            else:
-                self._page = 4  # Ollama 跳过 API Key 页
-            self.stack.setCurrentIndex(self._page)
-            self._update()
-            return
-
-        # API Key 页 → 语音
-        if p in (2, 3):
-            self._page = 4
-            self.stack.setCurrentIndex(4)
-            self._update()
-            return
-
-        # 语音页 → 识图
-        if p == 4:
-            self._page = 5
-            self.stack.setCurrentIndex(5)
-            self._update()
-            return
-
-        # 识图页 → 确认
-        if p == 5:
-            self.summary_page.refresh()
-            self._page = 6
-            self.stack.setCurrentIndex(6)
-            self._update()
-            return
-
-        # 确认 → 保存
-        if p == 6:
-            self._save()
-
 
     def collect_config(self):
         config = {
@@ -436,7 +611,11 @@ class SetupWizard(QWidget):
                 ),
                 "clone_dir": "./voice_cache",
             },
-            "display": {"scale": 0.5, "fps": 30},
+            "display": {
+                "scale": 0.5,
+                "fps": 30,
+                "font_scale": self.font_scale_slider.value() / 100.0,
+            },
             "character": {"name": "梅尔", "default_outfit": "01", "default_direction": "A"},
             "sprite_dir": "./sprites",
             "live2d": {
@@ -645,7 +824,7 @@ class SetupWizard(QWidget):
                 "配置已保存！\n\n"
                 f"{launch_hint}\n"
                 f"当前平台：{PLATFORM['display']}\n\n"
-                "提示：再次打开向导会自动加载本次选择。"
+                "提示：再次打开配置页会自动加载本次选择。"
             )
             self.close()
         except Exception as e:

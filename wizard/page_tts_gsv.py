@@ -20,6 +20,7 @@ from wizard.styles import (
 )
 from wizard.platform_info import PLATFORM, CONFIG_PATH
 from wizard.env_utils import pip_install, check_installed
+from meapet.ui_theme import set_scaled_stylesheet
 
 class TtsPageGsvMixin:
     def _browse_gsv_dir(self):
@@ -116,7 +117,7 @@ class TtsPageGsvMixin:
         dialog = QDialog(self)
         dialog.setWindowTitle("语音功能怎么装")
         dialog.setMinimumSize(520, 520)
-        dialog.setStyleSheet(WIZARD_STYLESHEET)
+        set_scaled_stylesheet(dialog, WIZARD_STYLESHEET)
         dialog.setAccessibleName("GPT-SoVITS 安装说明")
         dl = QVBoxLayout(dialog)
         text = QTextBrowser()
