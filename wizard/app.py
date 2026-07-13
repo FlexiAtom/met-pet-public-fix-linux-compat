@@ -619,6 +619,7 @@ class SetupWizard(QWidget):
         self.backend_page.apply_config(
             llm,
             normalized.get("agent_control") or {},
+            normalized.get("ui") or {},
         )
         self.llm_page.apply_direct_profile(direct)
 
@@ -956,6 +957,9 @@ class SetupWizard(QWidget):
         llm["temperature"] = direct.get("temperature", 0.7)
         llm["max_tokens"] = direct.get("max_tokens", 512)
         config["agent_control"] = self.backend_page.collect_control()
+        config.setdefault("ui", {})["timeline_turns"] = (
+            self.backend_page.timeline_turns.value()
+        )
 
     def _save(self):
         try:

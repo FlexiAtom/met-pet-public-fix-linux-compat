@@ -1117,11 +1117,12 @@ class PetChatFlowMixin:
         if timeline is not None and key is not None and turn_id:
             timeline.fail_turn(key, turn_id, "对话请求失败")
         self._active_timeline_turn_id = ""
-        self.show_reply(
-            f"{status_language.chat_error_prefix()}{err}",
-            "annoyed",
-            duration_ms=10000,
+        self._show_bubble(
+            status_language.model_service_error(),
+            10000,
+            mood=None,
         )
+        self._position_bubble()
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
 

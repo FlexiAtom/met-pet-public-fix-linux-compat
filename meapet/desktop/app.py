@@ -227,14 +227,6 @@ class MeaPet(
         except (TypeError, ValueError):
             timeline_turns = 5
         timeline_turns = max(0, min(timeline_turns, 100))
-        if mode == "agent":
-            try:
-                history_turns = int(
-                    (llm_config.get("agent") or {}).get("history_turns", 5)
-                )
-            except (TypeError, ValueError):
-                history_turns = 5
-            timeline_turns = max(timeline_turns, max(0, min(history_turns, 50)))
 
         def persist_turn(turn):
             try:

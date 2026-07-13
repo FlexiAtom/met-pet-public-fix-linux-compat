@@ -25,6 +25,10 @@ def chat_error_prefix() -> str:
     return "出错啦："
 
 
+def model_service_error() -> str:
+    return "模型服务请求失败，请检查连接与配置后重试。"
+
+
 def watching() -> str:
     return "偷偷看一眼…"
 

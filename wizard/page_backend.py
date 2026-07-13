@@ -61,6 +61,27 @@ class BackendPage(QFrame):
         mode_row.addStretch()
         layout.addLayout(mode_row)
 
+        timeline_row = QHBoxLayout()
+        timeline_row.addWidget(QLabel("本地最近对话缓存轮数："))
+        self.timeline_turns = QSpinBox()
+        self.timeline_turns.setRange(0, 100)
+        self.timeline_turns.setValue(5)
+        self.timeline_turns.setSpecialValueText("关闭")
+        self.timeline_turns.setAccessibleName("本地最近对话缓存轮数")
+        self.timeline_turns.setAccessibleDescription(
+            "按后端与 Agent 会话隔离；零表示不恢复本地时间线"
+        )
+        self.timeline_turns.setMinimumHeight(MIN_TARGET_SIZE)
+        timeline_row.addWidget(self.timeline_turns)
+        timeline_row.addStretch()
+        layout.addLayout(timeline_row)
+        timeline_hint = QLabel(
+            "默认保留 5 轮，用于重启后的时间线与最近上下文；不同后端不会串线。"
+        )
+        timeline_hint.setObjectName("HelperText")
+        timeline_hint.setWordWrap(True)
+        layout.addWidget(timeline_hint)
+
         self.agent_frame = QFrame()
         self.agent_frame.setObjectName("SectionCard")
         agent_layout = QVBoxLayout(self.agent_frame)
@@ -265,7 +286,7 @@ class BackendPage(QFrame):
             and self.control_allow_http.isChecked()
         )
 
-    def apply_config(self, llm: dict, control: dict) -> None:
+    def apply_config(self, llm: dict, control: dict, ui: dict | None = None) -> None:
         llm = llm or {}
         agent = llm.get("agent") if isinstance(llm.get("agent"), dict) else {}
         mode = str(llm.get("mode") or "direct").lower()
@@ -287,6 +308,11 @@ class BackendPage(QFrame):
         tls = agent.get("tls") if isinstance(agent.get("tls"), dict) else {}
         self.agent_tls_verify.setChecked(bool(tls.get("verify", True)))
         self.agent_ca_file.setText(str(tls.get("ca_file") or ""))
+        ui = ui if isinstance(ui, dict) else {}
+        try:
+            self.timeline_turns.setValue(int(ui.get("timeline_turns", 5)))
+        except (TypeError, ValueError):
+            self.timeline_turns.setValue(5)
 
         control = control or {}
         self.control_enabled.setChecked(bool(control.get("enabled", False)))
