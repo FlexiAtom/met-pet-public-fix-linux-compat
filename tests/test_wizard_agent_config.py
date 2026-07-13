@@ -235,6 +235,58 @@ class TestWizardCaptureScope(unittest.TestCase):
             },
         )
 
+    def test_vision_modes_are_explicit_and_inherit_never_saves_relay_backend(self):
+        from wizard.page_vision import VisionPage
+
+        page = VisionPage()
+        self.addCleanup(page.deleteLater)
+        self.assertEqual(
+            [page.mode_combo.itemData(i) for i in range(page.mode_combo.count())],
+            ["disabled", "inherit", "relay"],
+        )
+
+        page.mode_combo.setCurrentIndex(page.mode_combo.findData("inherit"))
+        page.main_model_vision_cb.setChecked(True)
+        inherited = page.collect(
+            "custom",
+            {
+                "mode": "direct",
+                "direct": {
+                    "provider": "custom",
+                    "protocol": "openai_chat",
+                },
+            },
+        )
+
+        self.assertEqual(inherited["vision"]["mode"], "inherit")
+        self.assertTrue(inherited["vision"]["main_model_supports_images"])
+        self.assertEqual(inherited["vision"]["backend"], "")
+
+        page.mode_combo.setCurrentIndex(page.mode_combo.findData("relay"))
+        page.backend_combo.setCurrentIndex(page.backend_combo.findData("ollama"))
+        relayed = page.collect("custom", {"mode": "direct"})
+        self.assertEqual(relayed["vision"]["mode"], "relay")
+        self.assertEqual(relayed["vision"]["backend"], "ollama")
+
+    def test_apply_config_restores_inherit_capability_without_enabling_relay_fields(self):
+        from wizard.page_vision import VisionPage
+
+        page = VisionPage()
+        self.addCleanup(page.deleteLater)
+        page.advanced_toggle.setChecked(True)
+        page.apply_config(
+            {
+                "mode": "inherit",
+                "main_model_supports_images": True,
+                "backend": "mimo",
+            },
+            {"enabled": True},
+        )
+
+        self.assertEqual(page.mode_combo.currentData(), "inherit")
+        self.assertTrue(page.main_model_vision_cb.isChecked())
+        self.assertTrue(page.backend_combo.isHidden())
+
 
 if __name__ == "__main__":
     unittest.main()
