@@ -219,6 +219,45 @@ class TestOpenClawDeviceIdentity(unittest.TestCase):
             if os.name != "nt":
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
+    def test_corrupt_identity_files_fail_closed_instead_of_rotating_identity(self):
+        from meapet.agent.openclaw_identity import OpenClawDeviceIdentity
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            missing = root / "missing.json"
+            with self.assertRaisesRegex(ValueError, "cannot be read"):
+                OpenClawDeviceIdentity.load(missing)
+
+            invalid_json = root / "invalid-json.json"
+            invalid_json.write_text("{not-json", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "valid JSON"):
+                OpenClawDeviceIdentity.load(invalid_json)
+
+            invalid_key = root / "invalid-key.json"
+            invalid_key.write_text(
+                json.dumps({"version": 1, "privateKey": "not*base64"}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "base64url"):
+                OpenClawDeviceIdentity.load(invalid_key)
+
+            identity = OpenClawDeviceIdentity.from_private_bytes(bytes(range(32)))
+            mismatched = root / "mismatched.json"
+            mismatched.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "deviceId": "0" * 64,
+                        "privateKey": base64.urlsafe_b64encode(
+                            identity.private_key_bytes
+                        ).decode("ascii").rstrip("="),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                OpenClawDeviceIdentity.load(mismatched)
+
 
 class TestOpenClawAdapter(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import json
 import locale
@@ -29,7 +30,11 @@ from meapet.agent.openclaw_identity import (
     OpenClawDeviceIdentity,
     build_device_auth_payload_v3,
 )
-from meapet.agent.prompts import gateway_user_message
+from meapet.agent.prompts import (
+    MAX_REPAIR_INPUT_CHARS,
+    REPAIR_INSTRUCTION,
+    gateway_user_message,
+)
 from meapet.conversation.output_protocol import (
     MeaPetOutputStreamParser,
     ProtocolCompleted,
@@ -147,6 +152,7 @@ class OpenClawCapabilities:
 class _ActiveConnection:
     websocket: Any
     run_id: str = ""
+    session_key: str = ""
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -476,7 +482,9 @@ class OpenClawAdapter:
         active = self._active.get(safe_turn_id)
         if active is None:
             return
-        params: dict[str, object] = {"sessionKey": self.config.session_key}
+        params: dict[str, object] = {
+            "sessionKey": active.session_key or self.config.session_key
+        }
         if active.run_id:
             params["runId"] = active.run_id
         frame = {
@@ -499,6 +507,100 @@ class OpenClawAdapter:
                 await item.websocket.close()
             except (ConnectionClosed, OSError):
                 pass
+
+    def _repair_session_key(self, turn_id: str) -> str:
+        scope = hashlib.sha256(
+            f"{self.config.session_key}\x00{turn_id}".encode("utf-8")
+        ).hexdigest()[:24]
+        return f"agent:main:meapet:format-repair:{scope}"
+
+    async def _repair_result(
+        self,
+        *,
+        websocket: Any,
+        active: _ActiveConnection,
+        request: AgentTurnRequest,
+        malformed_output: str,
+        max_payload: int,
+    ):
+        """在独立 OpenClaw 会话中仅做一次格式转换。"""
+        repair_id = f"repair:{request.turn_id}"
+        repair_session = self._repair_session_key(request.turn_id)
+        active.run_id = ""
+        active.session_key = repair_session
+        await self._send_frame(
+            websocket,
+            {
+                "type": "req",
+                "id": repair_id,
+                "method": "chat.send",
+                "params": {
+                    "sessionKey": repair_session,
+                    "message": (
+                        f"{REPAIR_INSTRUCTION}\n\n待转换原文：\n"
+                        f"{malformed_output[:MAX_REPAIR_INPUT_CHARS]}"
+                    ),
+                    "deliver": False,
+                    "timeoutMs": max(
+                        0,
+                        int(self.config.timeout_seconds * 1000),
+                    ),
+                    "idempotencyKey": f"{request.turn_id}-format-repair",
+                },
+            },
+        )
+        parser = MeaPetOutputStreamParser()
+        raw_output = ""
+        for _ in range(10000):
+            frame = await self._recv_frame(websocket, max_bytes=max_payload)
+            if request.turn_id in self._cancelled_turns:
+                return None
+            if frame.get("type") == "res" and frame.get("id") == repair_id:
+                if not frame.get("ok"):
+                    return None
+                payload = frame.get("payload")
+                if isinstance(payload, Mapping):
+                    active.run_id = _safe_identifier(
+                        "run_id",
+                        payload.get("runId"),
+                    )
+                continue
+            if frame.get("type") != "event" or frame.get("event") != "chat":
+                continue
+            payload = frame.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            if str(payload.get("sessionKey") or "") != repair_session:
+                continue
+            run_id = _safe_identifier("run_id", payload.get("runId"))
+            if run_id:
+                if active.run_id and active.run_id != run_id:
+                    continue
+                active.run_id = run_id
+            state = str(payload.get("state") or "").strip().lower()
+            if state == "delta":
+                delta = payload.get("deltaText")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                if bool(payload.get("replace")):
+                    parser = MeaPetOutputStreamParser()
+                    raw_output = delta
+                else:
+                    raw_output += delta
+                parser.feed(delta)
+                continue
+            if state in {"aborted", "error"}:
+                return None
+            if state == "final":
+                if not raw_output:
+                    final_text = _message_text(payload.get("message"))
+                    if final_text:
+                        parser.feed(final_text)
+                result = parser.close(tts_enabled=request.tts_enabled)
+                if result.requires_repair(tts_enabled=request.tts_enabled):
+                    return None
+                return result
+        return None
 
     async def stream_turn(self, request: AgentTurnRequest) -> AsyncIterator[object]:
         if request.turn_id in self._cancelled_turns:
@@ -525,7 +627,10 @@ class OpenClawAdapter:
                         "protocol",
                         "OpenClaw Gateway 未提供 chat.send。",
                     )
-                active = _ActiveConnection(websocket)
+                active = _ActiveConnection(
+                    websocket,
+                    session_key=self.config.session_key,
+                )
                 self._active[request.turn_id] = active
                 params: dict[str, object] = {
                     "sessionKey": self.config.session_key,
@@ -620,9 +725,23 @@ class OpenClawAdapter:
                     if state == "error":
                         raise _chat_error(event_payload)
 
-            result = parser.close(tts_enabled=request.tts_enabled)
-            if result.requires_repair(tts_enabled=request.tts_enabled):
-                yield FormatRepairRequired(result)
+                result = parser.close(tts_enabled=request.tts_enabled)
+                if result.requires_repair(tts_enabled=request.tts_enabled):
+                    yield FormatRepairRequired(result)
+                    repaired = await self._repair_result(
+                        websocket=websocket,
+                        active=active,
+                        request=request,
+                        malformed_output=raw_output,
+                        max_payload=max_payload,
+                    )
+                    if request.turn_id in self._cancelled_turns:
+                        self._cancelled_turns.discard(request.turn_id)
+                        yield TurnCancelled(request.turn_id)
+                        return
+                    if repaired is not None:
+                        result = repaired
+
             for segment in result.segments:
                 if segment.index not in completed_indices:
                     yield SegmentCompleted(segment)
