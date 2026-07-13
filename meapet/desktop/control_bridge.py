@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import secrets
 import threading
 
 from PyQt5.QtCore import QTimer
@@ -134,6 +135,25 @@ class PetControlBridgeMixin:
             "[control] Companion MCP 已启动: "
             f"endpoint={server_config.endpoint} agent_ip={server_config.allowed_agent_ip}"
         )
+
+    def _rotate_control_token(self) -> str:
+        """停止旧监听、持久化新 token，再启动当前唯一 Agent 监听。"""
+        stop = getattr(self, "_stop_control", None)
+        if callable(stop):
+            stop()
+        token = secrets.token_urlsafe(48)
+        control = self.config.setdefault("agent_control", {})
+        control["auth_token"] = token
+        save = getattr(self, "_save_config", None)
+        if callable(save):
+            save()
+        llm = self.config.get("llm") or {}
+        if (
+            str(llm.get("mode") or "direct").strip().lower() == "agent"
+            and bool(control.get("enabled", False))
+        ):
+            self._init_control()
+        return token
 
     def _poll_control(self) -> None:
         """在 Qt 主线程消费远端命令；网络线程从不直接触碰窗口。"""

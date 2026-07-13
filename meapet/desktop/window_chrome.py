@@ -413,6 +413,19 @@ class PetWindowChromeMixin:
         timeline_action = QAction("对话时间线…", self)
         timeline_action.triggered.connect(self._show_timeline)
         settings_menu.addAction(timeline_action)
+        llm_mode = str(
+            ((self.config.get("llm") or {}).get("mode") or "direct")
+        ).strip().lower()
+        control_enabled = bool(
+            (self.config.get("agent_control") or {}).get("enabled", False)
+        )
+        if llm_mode == "agent" and control_enabled:
+            copy_token_action = QAction("复制 Agent 控制令牌", self)
+            copy_token_action.triggered.connect(self._copy_agent_control_token)
+            settings_menu.addAction(copy_token_action)
+            rotate_token_action = QAction("重新生成 Agent 控制令牌…", self)
+            rotate_token_action.triggered.connect(self._regenerate_agent_control_token)
+            settings_menu.addAction(rotate_token_action)
         settings_menu.addSeparator()
         reset_label = (
             "新建 Agent 会话…"
@@ -555,10 +568,43 @@ class PetWindowChromeMixin:
             safe_print(f"[agent] 新建会话失败: {type(exc).__name__}: {exc}")
             self._show_bubble("新建 Agent 会话失败，请检查配置。", 8000, mood=None)
 
+    def _copy_agent_control_token(self) -> None:
+        from meapet.config.store import resolve_secret
+
+        raw = str(
+            (self.config.get("agent_control") or {}).get("auth_token") or ""
+        ).strip()
+        token = resolve_secret(raw, ("MEAPET_CONTROL_TOKEN",))
+        if not token:
+            self._show_bubble("当前没有可复制的 Agent 控制令牌。", 3500, mood=None)
+            return
+        QApplication.clipboard().setText(token)
+        self._show_bubble("Agent 控制令牌已复制。", 3000, mood=None)
+
+    def _regenerate_agent_control_token(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "重新生成 Agent 控制令牌",
+            "重新生成后，旧令牌会立即失效，当前 Agent 需要改用新令牌。继续吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        rotate = getattr(self, "_rotate_control_token", None)
+        if not callable(rotate):
+            self._show_bubble("令牌重新生成失败。", 5000, mood=None)
+            return
+        rotate()
+        self._show_bubble("已重新生成 Agent 控制令牌，旧令牌已失效。", 4500, mood=None)
+
     def _reopen_setup_wizard(self):
         try:
             from wizard.app import SetupWizard
             self._setup_wizard = SetupWizard()
+            apply_config = getattr(self, "_apply_runtime_config", None)
+            if callable(apply_config):
+                self._setup_wizard.config_saved.connect(apply_config)
             self._setup_wizard.show()
         except Exception as e:
             safe_print(f"[pet] 打开配置页失败: {e}")

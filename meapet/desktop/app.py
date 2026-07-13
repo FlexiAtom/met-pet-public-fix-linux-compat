@@ -215,8 +215,9 @@ class MeaPet(
         self.bubble = None
 
     def _init_chat(self):
-        self.memory = MeaMemory()
-        self._schedule_memory_maintenance()
+        if getattr(self, "memory", None) is None:
+            self.memory = MeaMemory()
+            self._schedule_memory_maintenance()
         from meapet.conversation.timeline import ConversationTimeline
 
         llm_config = self.config.get("llm") or {}

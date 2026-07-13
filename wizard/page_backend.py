@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import secrets
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFrame,
@@ -11,6 +14,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QRadioButton,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
 )
@@ -211,6 +215,30 @@ class BackendPage(QFrame):
             self.control_auth_token,
             "Companion MCP 访问令牌",
         )
+        token_actions = QHBoxLayout()
+        self.control_token_visibility = QPushButton("查看")
+        self.control_token_visibility.setMinimumHeight(MIN_TARGET_SIZE)
+        self.control_token_visibility.setAccessibleName("查看 Companion MCP 令牌")
+        self.control_token_visibility.clicked.connect(
+            self._toggle_control_token_visibility
+        )
+        token_actions.addWidget(self.control_token_visibility)
+        self.control_token_copy = QPushButton("复制")
+        self.control_token_copy.setMinimumHeight(MIN_TARGET_SIZE)
+        self.control_token_copy.setAccessibleName("复制 Companion MCP 令牌")
+        self.control_token_copy.clicked.connect(self._copy_control_token)
+        token_actions.addWidget(self.control_token_copy)
+        self.control_token_regenerate = QPushButton("重新生成")
+        self.control_token_regenerate.setMinimumHeight(MIN_TARGET_SIZE)
+        self.control_token_regenerate.setAccessibleName(
+            "重新生成 Companion MCP 令牌"
+        )
+        self.control_token_regenerate.clicked.connect(
+            self._regenerate_control_token
+        )
+        token_actions.addWidget(self.control_token_regenerate)
+        token_actions.addStretch()
+        control_layout.addLayout(token_actions)
 
         self.control_allow_http = QCheckBox("明确允许不安全的内网 HTTP")
         control_layout.addWidget(self.control_allow_http)
@@ -251,6 +279,21 @@ class BackendPage(QFrame):
 
     def mode(self) -> str:
         return "agent" if self.agent_radio.isChecked() else "direct"
+
+    def _toggle_control_token_visibility(self) -> None:
+        visible = self.control_auth_token.echoMode() == QLineEdit.Normal
+        self.control_auth_token.setEchoMode(
+            QLineEdit.Password if visible else QLineEdit.Normal
+        )
+        self.control_token_visibility.setText("查看" if visible else "隐藏")
+
+    def _copy_control_token(self) -> None:
+        token = self.control_auth_token.text().strip()
+        if token:
+            QApplication.clipboard().setText(token)
+
+    def _regenerate_control_token(self) -> None:
+        self.control_auth_token.setText(secrets.token_urlsafe(48))
 
     def set_agent_kind(self, kind: str) -> None:
         index = self.agent_kind.findData(str(kind or "hermes").lower())

@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QFrame, QScrollArea, QSizeGrip, QSizePolicy, QTabWidget,
     QSlider, QCheckBox,
 )
-from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap
 from PyQt5.QtWidgets import QShortcut
 
@@ -38,6 +38,8 @@ from wizard.pages import (
 )
 
 class SetupWizard(QWidget):
+    config_saved = pyqtSignal(dict)
+
     TAB_ENV = 0
     TAB_CHAT = 1
     TAB_VOICE = 2
@@ -1006,6 +1008,7 @@ class SetupWizard(QWidget):
                 # 原子保存失败时保留旧配置，交由外层显示错误；禁止退化为截断式覆盖。
                 raise
 
+            self.config_saved.emit(final_cfg)
             if PLATFORM["is_windows"]:
                 launch_hint = "现在双击「启动桌宠.bat」或运行 python pet.py 就能开玩啦 🐱"
             elif PLATFORM["is_linux"]:
