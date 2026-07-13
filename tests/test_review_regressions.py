@@ -114,6 +114,90 @@ class TestProviderKeyIsolation(unittest.TestCase):
         )
         self.assertEqual(base, "https://api.xiaomimimo.com/v1")
 
+
+class TestRuntimeConfigurationSwitch(unittest.TestCase):
+    def test_saved_configuration_cancels_old_generation_and_rebuilds_one_backend(self):
+        from meapet.desktop.config_bridge import PetConfigBridgeMixin
+
+        class Timer:
+            def __init__(self, name, events):
+                self.name = name
+                self.events = events
+
+            def stop(self):
+                self.events.append(f"stop:{self.name}")
+
+        class Worker:
+            def __init__(self, events):
+                self.events = events
+
+            def terminate(self):
+                self.events.append("terminate:worker")
+
+            @staticmethod
+            def wait(_timeout):
+                return True
+
+            def deleteLater(self):
+                self.events.append("delete:worker")
+
+        class Host(PetConfigBridgeMixin):
+            def __init__(self):
+                self.config = {"llm": {"mode": "direct"}}
+                self.events = []
+                self._chat_worker = Worker(self.events)
+                self._chat_poll = Timer("poll", self.events)
+                self._chat_timeout = Timer("timeout", self.events)
+
+            def _invalidate_active_conversation(self):
+                self.events.append("invalidate")
+
+            def _stop_control(self):
+                self.events.append("stop:control")
+
+            def _disconnect_watcher_signals(self):
+                self.events.append("stop:watcher")
+
+            def _apply_motion_preference(self):
+                self.events.append("motion")
+
+            def _init_tts(self):
+                self.events.append("init:tts")
+
+            def _init_chat(self):
+                self.events.append("init:chat")
+
+            def _init_watcher(self):
+                self.events.append("init:watcher")
+
+            def _init_control(self):
+                self.events.append("init:control")
+
+            def _show_bubble(self, text, duration, mood=None):
+                self.events.append((text, duration, mood))
+
+        host = Host()
+        applied = host._apply_runtime_config(
+            {
+                "llm": {
+                    "mode": "agent",
+                    "agent": {
+                        "kind": "hermes",
+                        "base_url": "http://127.0.0.1:8642",
+                    },
+                }
+            }
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(host.config["llm"]["mode"], "agent")
+        self.assertLess(host.events.index("invalidate"), host.events.index("init:chat"))
+        self.assertEqual(
+            [event for event in host.events if event in {"init:chat", "init:control"}],
+            ["init:chat", "init:control"],
+        )
+        self.assertIn(("新配置已应用。", 3500, None), host.events)
+
     def test_unsupported_follow_backend_falls_back_to_local_vision(self):
         from meapet.config.store import (
             resolve_vision_backend,

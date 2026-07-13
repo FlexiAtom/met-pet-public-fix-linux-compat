@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from PyQt5.QtWidgets import QApplication
+from PyQt5.QtTest import QSignalSpy
 
 
 class TestWizardConversationConfig(unittest.TestCase):
@@ -191,6 +192,54 @@ class TestWizardConversationConfig(unittest.TestCase):
 
         self.wizard.apply_conversation_config(config)
         self.assertTrue(page.agent_allow_insecure_ws.isChecked())
+
+    def test_control_token_can_be_revealed_copied_and_regenerated_before_save(self):
+        from PyQt5.QtWidgets import QLineEdit
+
+        page = self.wizard.backend_page
+        page.control_auth_token.setText("old-control-token-value-long-enough")
+
+        page._toggle_control_token_visibility()
+        self.assertEqual(page.control_auth_token.echoMode(), QLineEdit.Normal)
+        page._copy_control_token()
+        self.assertEqual(
+            QApplication.clipboard().text(),
+            "old-control-token-value-long-enough",
+        )
+        page._regenerate_control_token()
+
+        regenerated = page.control_auth_token.text()
+        self.assertNotEqual(regenerated, "old-control-token-value-long-enough")
+        self.assertGreaterEqual(len(regenerated), 43)
+
+    def test_saving_emits_normalized_config_for_the_running_desktop(self):
+        spy = QSignalSpy(self.wizard.config_saved)
+        payload = {
+            "llm": {
+                "mode": "agent",
+                "agent": {
+                    "kind": "hermes",
+                    "base_url": "http://127.0.0.1:8642",
+                },
+            }
+        }
+
+        with (
+            unittest.mock.patch.object(
+                self.wizard,
+                "collect_config",
+                return_value=payload,
+            ),
+            unittest.mock.patch("wizard.app.os.path.isfile", return_value=False),
+            unittest.mock.patch("meapet.config.store.save_config"),
+            unittest.mock.patch("wizard.app.QMessageBox.information"),
+        ):
+            self.wizard._save()
+
+        self.assertEqual(len(spy), 1)
+        emitted = spy[0][0]
+        self.assertEqual(emitted["llm"]["mode"], "agent")
+        self.assertIn("direct", emitted["llm"])
 
 
 class TestWizardCaptureScope(unittest.TestCase):

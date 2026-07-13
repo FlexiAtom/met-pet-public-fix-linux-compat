@@ -151,6 +151,38 @@ class TestControlLifecycle(unittest.TestCase):
         self.assertEqual(runtimes[0].starts, 1)
         self.assertTrue(host._control_poll_timer.started)
 
+    def test_rotating_control_token_restarts_listener_and_revokes_old_value(self):
+        from meapet.desktop.control_bridge import PetControlBridgeMixin
+
+        class Host(PetControlBridgeMixin):
+            def __init__(self):
+                self.config = {
+                    "llm": {"mode": "agent"},
+                    "agent_control": {
+                        "enabled": True,
+                        "auth_token": "o" * 48,
+                    },
+                }
+                self.events = []
+
+            def _stop_control(self):
+                self.events.append("stop")
+
+            def _save_config(self):
+                self.events.append("save")
+
+            def _init_control(self):
+                self.events.append("start")
+
+        host = Host()
+        old_token = host.config["agent_control"]["auth_token"]
+        new_token = host._rotate_control_token()
+
+        self.assertNotEqual(new_token, old_token)
+        self.assertEqual(host.config["agent_control"]["auth_token"], new_token)
+        self.assertGreaterEqual(len(new_token), 43)
+        self.assertEqual(host.events, ["stop", "save", "start"])
+
 
 class TestControlPresentation(unittest.IsolatedAsyncioTestCase):
     def _host(self, *, tts_enabled=False):
