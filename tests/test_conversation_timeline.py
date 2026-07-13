@@ -29,6 +29,35 @@ def _segment(index: int, text: str):
 
 
 class TestConversationTimeline(unittest.TestCase):
+    def test_lowering_limit_prunes_existing_turns_immediately(self):
+        from meapet.conversation.timeline import ConversationKey, ConversationTimeline
+
+        key = ConversationKey("direct", "ollama", "local")
+        timeline = ConversationTimeline(max_turns=5)
+        for index in range(4):
+            turn_id = f"turn-{index}"
+            timeline.start_turn(
+                key,
+                turn_id,
+                source="user_reply",
+                user_text=f"问题 {index}",
+            )
+            timeline.complete_segment(
+                key,
+                turn_id,
+                _segment(0, f"回答 {index}"),
+            )
+            timeline.finish_turn(key, turn_id)
+
+        timeline.set_max_turns(2)
+        self.assertEqual(
+            [turn.turn_id for turn in timeline.recent(key)],
+            ["turn-2", "turn-3"],
+        )
+
+        timeline.set_max_turns(0)
+        self.assertEqual(timeline.all_recent(), ())
+
     def test_turns_are_isolated_by_conversation_key_and_evicted_per_key(self):
         from meapet.conversation.timeline import ConversationKey, ConversationTimeline
 
