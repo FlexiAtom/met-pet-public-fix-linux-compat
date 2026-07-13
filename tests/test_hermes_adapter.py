@@ -69,6 +69,13 @@ def _valid_sse() -> bytes:
     ).encode("utf-8")
 
 
+def _text_sse(content: str) -> bytes:
+    return (
+        f"data: {_chat_chunk(content)}\n\n"
+        "data: [DONE]\n\n"
+    ).encode("utf-8")
+
+
 class TestHermesConfig(unittest.TestCase):
     def test_base_url_accepts_host_or_v1_without_duplicating_path(self):
         from meapet.agent.hermes import HermesConfig
@@ -451,20 +458,25 @@ class TestHermesAdapter(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(events[0].retryable)
         self.assertNotIn("private network details", repr(events[0]))
 
-    async def test_unformatted_text_requests_one_repair_but_keeps_best_effort_result(self):
+    async def test_unformatted_text_is_repaired_once_without_repeating_original_task(self):
         from meapet.agent.base import FormatRepairRequired, TurnCompleted
         from meapet.agent.hermes import HermesAdapter, HermesConfig
 
-        body = (
-            f"data: {_chat_chunk('先保住这句文字')}\n\n"
-            "data: [DONE]\n\n"
-        ).encode("utf-8")
+        malformed = "先保住这句文字"
+        repaired = (
+            "<MEAPET_SEGMENT><DISPLAY>先保住这句文字</DISPLAY>"
+            '<META>{"voice_text":"先保住这句文字","voice_language":"zh",'
+            '"mood":"neutral","tts_style":""}</META>'
+            "</MEAPET_SEGMENT><MEAPET_DONE />"
+        )
+        requests = []
 
-        def handler(_request: httpx.Request) -> httpx.Response:
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(json.loads(request.content))
             return httpx.Response(
                 200,
                 headers={"Content-Type": "text/event-stream"},
-                content=body,
+                content=_text_sse(malformed if len(requests) == 1 else repaired),
             )
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -479,8 +491,46 @@ class TestHermesAdapter(unittest.IsolatedAsyncioTestCase):
         repairs = [event for event in events if isinstance(event, FormatRepairRequired)]
         completed = [event for event in events if isinstance(event, TurnCompleted)]
         self.assertEqual(len(repairs), 1)
+        self.assertEqual(len(requests), 2)
+        repair_body = requests[1]
+        self.assertEqual(repair_body["tool_choice"], "none")
+        self.assertNotIn("现在几点", json.dumps(repair_body, ensure_ascii=False))
+        self.assertIn(malformed, json.dumps(repair_body, ensure_ascii=False))
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0].result.segments[0].display_text, "先保住这句文字")
+        self.assertFalse(completed[0].result.requires_repair(tts_enabled=True))
+
+    async def test_failed_format_repair_falls_back_without_a_third_request(self):
+        from meapet.agent.base import FormatRepairRequired, TurnCompleted
+        from meapet.agent.hermes import HermesAdapter, HermesConfig
+
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=_text_sse("仍然没有格式"),
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(client.aclose)
+        adapter = HermesAdapter(
+            HermesConfig(base_url="http://127.0.0.1:8642", auth_token="secret"),
+            client=client,
+        )
+
+        events = [event async for event in adapter.stream_turn(self._request())]
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(
+            sum(isinstance(event, FormatRepairRequired) for event in events),
+            1,
+        )
+        completed = [event for event in events if isinstance(event, TurnCompleted)]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].result.segments[0].display_text, "仍然没有格式")
 
     async def test_malformed_sse_json_becomes_protocol_failure(self):
         from meapet.agent.base import TurnFailed
