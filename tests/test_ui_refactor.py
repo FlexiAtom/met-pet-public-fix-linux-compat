@@ -1340,6 +1340,51 @@ class UiRefactorTests(unittest.TestCase):
         self.assertEqual(dialog.approval.scope, "application")
         self.assertEqual(dialog.approval.application, "项目 - 记事本")
 
+    def test_capture_consent_pauses_while_scope_menu_is_open(self) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+
+        dialog = self._track(
+            CaptureScopeConsentDialog(
+                timeout_seconds=5,
+                region_selector=lambda _parent, _initial: None,
+                window_provider=lambda: (),
+            )
+        )
+        dialog.show()
+        QApplication.processEvents()
+        remaining = dialog.remaining_seconds
+
+        dialog.scope_combo.popup_opened.emit()
+        dialog._tick()
+        self.assertEqual(dialog.remaining_seconds, remaining)
+        self.assertTrue(dialog.countdown_paused)
+        self.assertIn("已暂停", dialog.countdown_label.text())
+
+        dialog.scope_combo.popup_closed.emit()
+        dialog._timer.stop()
+        dialog._tick()
+        self.assertEqual(dialog.remaining_seconds, remaining - 1)
+        self.assertFalse(dialog.countdown_paused)
+
+    def test_agent_requested_region_still_requires_a_local_mouse_drag(self) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+
+        dialog = self._track(
+            CaptureScopeConsentDialog(
+                requested_scope="region",
+                requested_region={"x": 10, "y": 20, "width": 800, "height": 600},
+                region_selector=lambda _parent, _initial: None,
+                window_provider=lambda: (),
+            )
+        )
+        self.assertIn("仍需由你重新拖拽确认", dialog.region_summary.text())
+
+        dialog.allow_button.click()
+
+        self.assertEqual(dialog.result(), QDialog.Rejected)
+        self.assertIsNone(dialog.approval)
+        self.assertIn("拖拽选择区域", dialog.validation_label.text())
+
     def test_cloud_capture_consent_includes_scope_and_uses_five_seconds(self) -> None:
         from meapet.desktop.dialogs import CloudCaptureScopeConsentDialog
         from meapet.ui_theme import get_ui_font_scale, set_ui_font_scale

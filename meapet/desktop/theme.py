@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from meapet.ui_theme import (
     BUNDLED_CHEVRON_DOWN_PATH,
-    BUNDLED_CHEVRON_UP_PATH,
     DISPLAY_FONT_FAMILY,
     FONT_FAMILY,
     MONO_FONT_FAMILY,
@@ -262,6 +261,14 @@ CONSENT_DIALOG_STYLE = f"""
         color: {COLOR_MUTED};
         font-size: 11px;
     }}
+    QLabel#SelectionSummary {{
+        color: {COLOR_SECONDARY};
+        font-size: 12px;
+        padding: 7px 9px;
+        background: {COLOR_INPUT};
+        border: 1px solid {COLOR_BORDER};
+        border-radius: {RADIUS_SMALL}px;
+    }}
     QLabel#ConsentValidation {{
         color: {COLOR_ERR};
         font-size: 12px;
@@ -280,9 +287,7 @@ CONSENT_DIALOG_STYLE = f"""
         border: 1px solid {rgba(COLOR_WARN, 70)};
         border-radius: {RADIUS_SMALL}px;
     }}
-    QComboBox,
-    QLineEdit,
-    QSpinBox {{
+    QComboBox {{
         min-height: 42px;
         color: {COLOR_TEXT};
         background: {COLOR_INPUT};
@@ -291,14 +296,10 @@ CONSENT_DIALOG_STYLE = f"""
         padding: 0 12px;
         selection-background-color: {rgba(COLOR_ACCENT, 105)};
     }}
-    QComboBox:hover,
-    QLineEdit:hover,
-    QSpinBox:hover {{
+    QComboBox:hover {{
         border-color: {COLOR_MUTED};
     }}
-    QComboBox:focus,
-    QLineEdit:focus,
-    QSpinBox:focus {{
+    QComboBox:focus {{
         border: 2px solid {COLOR_FOCUS};
     }}
     QComboBox::drop-down {{
@@ -324,41 +325,6 @@ CONSENT_DIALOG_STYLE = f"""
         selection-background-color: {rgba(COLOR_FOCUS, 45)};
         padding: 4px;
     }}
-    QSpinBox {{
-        padding-right: 32px;
-    }}
-    QSpinBox::up-button,
-    QSpinBox::down-button {{
-        subcontrol-origin: border;
-        width: 26px;
-        color: {COLOR_SECONDARY};
-        background: {COLOR_CARD};
-        border-left: 1px solid {COLOR_BORDER_STRONG};
-    }}
-    QSpinBox::up-button {{
-        subcontrol-position: top right;
-        border-bottom: 1px solid {COLOR_BORDER};
-        border-top-right-radius: {RADIUS_SMALL - 1}px;
-    }}
-    QSpinBox::down-button {{
-        subcontrol-position: bottom right;
-        border-bottom-right-radius: {RADIUS_SMALL - 1}px;
-    }}
-    QSpinBox::up-button:hover,
-    QSpinBox::down-button:hover {{
-        background: {rgba(COLOR_FOCUS, 40)};
-        border-left-color: {COLOR_FOCUS};
-    }}
-    QSpinBox::up-arrow {{
-        image: url("{BUNDLED_CHEVRON_UP_PATH}");
-        width: 10px;
-        height: 7px;
-    }}
-    QSpinBox::down-arrow {{
-        image: url("{BUNDLED_CHEVRON_DOWN_PATH}");
-        width: 10px;
-        height: 7px;
-    }}
     QPushButton {{
         min-width: 112px;
         min-height: 44px;
@@ -375,6 +341,22 @@ CONSENT_DIALOG_STYLE = f"""
     }}
     QPushButton:focus {{
         border: 2px solid {COLOR_FOCUS};
+    }}
+    QPushButton#SelectRegionButton,
+    QPushButton#RefreshWindowsButton {{
+        color: {COLOR_TEXT};
+        background: {rgba(COLOR_FOCUS, 22)};
+        border-color: {COLOR_BORDER_STRONG};
+    }}
+    QPushButton#SelectRegionButton:hover,
+    QPushButton#RefreshWindowsButton:hover {{
+        background: {rgba(COLOR_FOCUS, 42)};
+        border-color: {COLOR_FOCUS};
+    }}
+    QPushButton#RefreshWindowsButton {{
+        min-width: 72px;
+        padding-left: 10px;
+        padding-right: 10px;
     }}
     QPushButton#AllowUploadButton {{
         font-family: {DISPLAY_FONT_FAMILY};

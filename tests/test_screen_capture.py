@@ -31,6 +31,30 @@ class TestScreenCapture(unittest.TestCase):
             {"x": -1900, "y": -170, "width": 640, "height": 360},
         )
 
+    def test_region_selector_accepts_a_mouse_drag_and_not_keyboard_default(self):
+        from PyQt5.QtCore import QPoint, QRect, Qt
+        from PyQt5.QtTest import QTest
+        from PyQt5.QtWidgets import QApplication, QDialog
+
+        from meapet.desktop.capture_selection import ScreenRegionSelector
+
+        app = QApplication.instance() or QApplication([])
+        selector = ScreenRegionSelector(
+            desktop_geometry=QRect(-100, -50, 400, 300),
+        )
+        selector.show()
+        app.processEvents()
+        QTest.mousePress(selector, Qt.LeftButton, pos=QPoint(10, 20))
+        QTest.mouseMove(selector, QPoint(110, 100))
+        QTest.mouseRelease(selector, Qt.LeftButton, pos=QPoint(110, 100))
+
+        self.assertEqual(selector.result(), QDialog.Accepted)
+        self.assertEqual(
+            selector.selected_region,
+            {"x": -90, "y": -30, "width": 101, "height": 81},
+        )
+        selector.close()
+
     def test_visible_windows_are_listed_with_process_names_and_filtered(self):
         from meapet.watcher.capture import list_capture_windows
 
