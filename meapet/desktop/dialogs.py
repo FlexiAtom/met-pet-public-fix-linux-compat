@@ -691,6 +691,12 @@ class CaptureScopeConsentDialog(QDialog):
             self.minimumSizeHint().height(),
         )
         self.resize(self.width(), target_height)
+        # Windows/Qt 偶尔会在可见对话框刚切换子面板时忽略第一次
+        # resize（此时布局的 sizeHint 已更新，但原生窗口仍保留旧高度）。
+        # adjustSize 会按刚激活过的布局再次同步原生窗口；仅在实际高度
+        # 没有跟上时调用，避免无意义的几何抖动。
+        if self.isVisible() and self.height() != target_height:
+            self.adjustSize()
 
     def _update_countdown(self) -> None:
         if self._countdown_disabled:
