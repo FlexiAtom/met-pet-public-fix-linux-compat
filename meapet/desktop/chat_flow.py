@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys  # 鏂板
 import threading
 import uuid
 
@@ -95,14 +94,13 @@ class PetChatFlowMixin:
         return key
 
     def _turn_context_is_current(self, context=None) -> bool:
+        """旧宿主无编排器时保持兼容；真实桌面严格校验代次。"""
         if context is None:
             context = getattr(self, "_active_turn_context", None)
         orchestrator = getattr(self, "_conversation_orchestrator", None)
         if orchestrator is None or context is None:
-            result = True
-            return result
-        result = orchestrator.accepts(context)
-        return result
+            return True
+        return orchestrator.accepts(context)
 
     def _complete_turn_context(self, context=None) -> None:
         if context is None:
@@ -114,6 +112,7 @@ class PetChatFlowMixin:
             self._active_turn_context = None
 
     def _invalidate_active_conversation(self) -> None:
+        """取消当前请求并使已排队的网络、TTS 和音频回调失效。"""
         context = getattr(self, "_active_turn_context", None)
         timeline = getattr(self, "_conversation_timeline", None)
         if context is not None and timeline is not None:
@@ -209,10 +208,12 @@ class PetChatFlowMixin:
             return
         try:
             signal.connect(lambda current=turn_id: opener(current))
-        except (AttributeError, RuntimeError, TypeError) as exc:
+        except (AttributeError, RuntimeError, TypeError):
+            pass
 
     def _start_chat(self):
-        log.info("[chat] 鍚姩瀵硅瘽缂栬緫鍣?)
+        """双击触发：在桌宠附近打开消息编辑器。"""
+        log.info("[chat] 启动对话编辑器")
         clear_bubbles = getattr(self, "_clear_bubbles", None)
         if callable(clear_bubbles):
             clear_bubbles()
@@ -228,15 +229,18 @@ class PetChatFlowMixin:
         if getattr(self, "_awaiting_reply", False):
             self._chat_input.set_busy(True, status_language.thinking_busy())
 
+        # 以编辑器实际尺寸居中，避免 UI 调整后仍依赖旧的硬编码宽度。
         input_x = self.pos().x() + (self.width() - self._chat_input.width()) // 2
         input_y = self.pos().y() - self._chat_input.height() - 20
         if input_y < 30:
             input_y = self.pos().y() + self.height() + 20
+
         self._chat_input.move(max(0, input_x), max(0, input_y))
         self._chat_input.text_submitted.connect(self._on_input_submit)
         self._chat_input.show()
 
     def _on_input_submit(self, text: str):
+        """用户提交了输入"""
         if getattr(self, "_awaiting_reply", False):
             log.warning("[chat] 瀵硅瘽琚嫆缁濓細姝ｅ湪绛夊緟鍥炲涓?)
             self._show_bubble(status_language.thinking_busy(), 2500)
@@ -251,10 +255,10 @@ class PetChatFlowMixin:
 
     def _is_agent_mode(self) -> bool:
         llm = (getattr(self, "config", {}) or {}).get("llm") or {}
-        result = str(llm.get("mode") or "direct").strip().lower() == "agent"
-        return result
+        return str(llm.get("mode") or "direct").strip().lower() == "agent"
 
     def _build_agent_frontend_context(self) -> dict:
+        """生成本轮只读前端能力与角色状态摘要。"""
         from meapet.desktop.renderer import MOOD_TO_EXPRESSION
 
         tts = getattr(self, "tts", None)
@@ -265,7 +269,9 @@ class PetChatFlowMixin:
             try:
                 languages = tuple(tts.supported_languages())
             except Exception as exc:
-                log.warning(f"[agent] 璇诲彇 TTS 璇█鑳藉姏澶辫触: {type(exc).__name__}")
+                log.warning(
+                    f"[agent] 读取 TTS 语言能力失败: {type(exc).__name__}"
+                )
         if not languages:
             voice_language = normalize_voice_language(
                 getattr(tts, "voice_lang", "")
@@ -303,10 +309,10 @@ class PetChatFlowMixin:
             current_mood=current_mood,
             busy=bool(getattr(self, "_awaiting_reply", False)),
         )
-        result = build_agent_frontend_context(capabilities, state)
-        return result
+        return build_agent_frontend_context(capabilities, state)
 
     def _make_chat_worker(self, message: str):
+        """按显式模式选择直连模型或 Agent worker。"""
         if getattr(self, "_conversation_key", None) is None:
             self._refresh_conversation_key()
         agent_mode = self._is_agent_mode()
@@ -366,6 +372,7 @@ class PetChatFlowMixin:
         return worker
 
     def _do_chat(self, message: str):
+        """执行 LLM 对话（后台线程）"""
         if self._awaiting_reply:
             log.warning("[chat] 瀵硅瘽琚嫆缁濓細姝ｅ湪绛夊緟鍥炲涓?)
             self._show_bubble(status_language.thinking_busy(), 2500)
@@ -383,12 +390,14 @@ class PetChatFlowMixin:
         self._last_user_msg = message
         _log_private_text("[chat] 鍙戦€佺粰 LLM", message)
 
+        # 显示思考中提示
         self._show_bubble(
             status_language.thinking(),
             self.config["bubble_duration_ms"]["thinking"],
-        )
+        )  # 0 = 持久显示
         self._position_bubble()
 
+        # 停止旧 worker（防止泄漏）
         if hasattr(self, '_chat_worker') and self._chat_worker is not None:
             if self._chat_worker.isRunning():
                 self._chat_worker.terminate()
@@ -397,6 +406,7 @@ class PetChatFlowMixin:
         if hasattr(self, '_chat_poll'):
             self._chat_poll.stop()
 
+        # 超时保护（匹配 Ollama 读取超时 120s + 缓冲）
         if hasattr(self, '_chat_timeout'):
             self._chat_timeout.stop()
         self._chat_timeout = QTimer(self)
@@ -408,20 +418,22 @@ class PetChatFlowMixin:
             self._chat_worker = self._make_chat_worker(message)
             self._chat_worker.start()
         except Exception as exc:
-            log.error(f"[chat] worker 鍚姩澶辫触: {type(exc).__name__}: {exc}")
+            log.error(f"[chat] worker 启动失败: {type(exc).__name__}: {exc}")
             self._chat_worker = None
             if self._is_agent_mode():
                 self._fail_agent_turn("Agent 鍚姩澶辫触锛岃妫€鏌ラ厤缃€?)
             else:
                 self._on_chat_error(f"{type(exc).__name__}: {exc}")
             return
+        # 轮询 timer：每 100ms 检查 worker 是否完成
         self._chat_poll = QTimer(self)
         self._chat_poll.timeout.connect(self._poll_chat)
         self._chat_poll.start(100)
         worker_name = type(self._chat_worker).__name__
-        log.info(f"[chat] {worker_name} 宸插惎鍔?)
+        log.info(f"[chat] {worker_name} 已启动")
 
     def _poll_chat(self):
+        """主线程轮询直连结果，或增量消费 Agent 事件。"""
         if not hasattr(self, '_chat_worker') or self._chat_worker is None:
             if hasattr(self, '_chat_poll') and self._chat_poll:
                 self._chat_poll.stop()
@@ -436,7 +448,7 @@ class PetChatFlowMixin:
                 worker.deleteLater()
                 if getattr(self, "_chat_worker", None) is worker:
                     self._chat_worker = None
-            log.info("[chat] 宸蹭涪寮冮潪娲诲姩浼氳瘽鐨勮繜鍒颁簨浠?)
+            log.info("[chat] 已丢弃非活动会话的迟到事件")
             return
         if callable(getattr(worker, "take_events", None)):
             self._poll_agent_chat(worker)
@@ -453,12 +465,14 @@ class PetChatFlowMixin:
             reply, mood = result
             self._on_chat_done(reply, mood)
         else:
-            log.warning("[chat] _poll_chat: 绌虹粨鏋滐紝閲婃斁瀵硅瘽閿?)
+            # result 和 error 都为空（异常路径未捕获到）→ 释放锁，防止死锁
+            log.warning("[chat] _poll_chat: 空结果，释放对话锁")
             set_awaiting_reply_state(self, False)
             if hasattr(self, '_chat_timeout') and self._chat_timeout:
                 self._chat_timeout.stop()
+
     def _poll_agent_chat(self, worker) -> None:
-        """鎶婂悗鍙?Agent 浜嬩欢杞垚浜ょ粰 Qt 涓荤嚎绋嬫墽琛岀殑鍛堢幇鍔ㄤ綔銆?""
+        """把后台 Agent 事件转成交给 Qt 主线程执行的呈现动作。"""
         context = getattr(worker, "turn_context", None)
         if context is not None and not self._turn_context_is_current(context):
             worker.take_events()
@@ -492,8 +506,8 @@ class PetChatFlowMixin:
             self._chat_worker = None
 
         if error and getattr(self, "_awaiting_reply", False):
-            log.error("[chat] 浜嬩欢娴佸紓甯革紝宸茶浆涓哄畨鍏ㄧ郴缁熼敊璇?)
-            backend_name = "Agent" if self._is_agent_mode() else "妯″瀷鏈嶅姟"
+            log.error("[chat] 事件流异常，已转为安全系统错误")
+            backend_name = "Agent" if self._is_agent_mode() else "模型服务"
             self._fail_agent_turn(
                 f"{backend_name}杩炴帴鎰忓涓柇锛岃绋嶅悗鍐嶈瘯銆?,
                 context=context,
@@ -506,11 +520,12 @@ class PetChatFlowMixin:
             and getattr(self, "_agent_turn_result", None) is None
             and not (getattr(self, "_agent_tts_workers", {}) or {})
         ):
-            # --- Ollama 鍚庣锛氳烦杩囧紓甯告娴嬶紝瑙嗕负姝ｅ父瀹屾垚 ---
+            # --- Ollama 后端：跳过异常检测，视为正常完成 ---
             llm_cfg = (getattr(self, "config", {}) or {}).get("llm") or {}
             backend = str(llm_cfg.get("backend") or "").strip().lower()
             if backend == "ollama":
-                log.info("[agent] Ollama 鍚庣锛氫簨浠舵祦鏈骇鐢?TurnCompleted锛岃涓烘甯稿畬鎴?)
+                log.info("[agent] Ollama 后端：事件流未产生 TurnCompleted，视为正常完成")
+                # 构造一个空的 ParseResult 以避免 _finish_agent_turn 出错
                 from meapet.conversation.output_protocol import ParseResult
                 self._agent_turn_result = ParseResult((), (), True, "ollama")
                 self._finish_agent_turn(
@@ -560,7 +575,7 @@ class PetChatFlowMixin:
             self._apply_agent_action(action, context=context)
 
     def _apply_agent_action(self, action: object, *, context=None) -> None:
-        """鎵ц绾姸鎬佹満鍔ㄤ綔锛涚郴缁熺姸鎬佷笉杩涘叆瑙掕壊鍘嗗彶銆乀TS 鎴栨儏缁€?""
+        """执行纯状态机动作；系统状态不进入角色历史、TTS 或情绪。"""
         if context is not None and not self._turn_context_is_current(context):
             return
         stack = getattr(self, "_bubble_stack", None)
@@ -605,17 +620,18 @@ class PetChatFlowMixin:
             return
         if isinstance(action, ShowStatus):
             safe_text = str(action.safe_text or "").strip() or {
-                "started": "姝ｅ湪澶勭悊",
-                "running": "浠嶅湪澶勭悊",
-                "succeeded": "澶勭悊瀹屾垚",
-                "failed": "澶勭悊澶辫触",
-            }.get(str(action.state or "").lower(), "鐘舵€佸凡鏇存柊")
+                "started": "正在处理",
+                "running": "仍在处理",
+                "succeeded": "处理完成",
+                "failed": "处理失败",
+            }.get(str(action.state or "").lower(), "状态已更新")
             self._show_bubble(safe_text, 4500, mood=None)
             self._position_bubble()
             return
         if isinstance(action, RequestFormatRepair):
+            # 适配器层随后负责一次格式修复；这里仅记录，不把协议细节暴露给用户。
             self._agent_format_repair_pending = True
-            log.warning("[agent] 鍥炲鍗忚瀛楁涓嶅畬鏁达紝绛夊緟鏍煎紡淇")
+            log.warning("[agent] 回复协议字段不完整，等待格式修复")
             return
         if isinstance(action, FinishTurn):
             self._finish_agent_turn(action.turn_id, context=context)
@@ -645,7 +661,8 @@ class PetChatFlowMixin:
             try:
                 self._ensure_tts_poll()
             except (RuntimeError, TypeError) as exc:
-                log.debug(f"[agent] TTS timer 鏆傛湭鍒涘缓: {type(exc).__name__}")
+                # 非 QWidget 的测试宿主可手动轮询；真实桌面对象不会走到这里。
+                log.debug(f"[agent] TTS timer 暂未创建: {type(exc).__name__}")
         except Exception as exc:
             workers.pop(segment.index, None)
             log.error(
@@ -662,9 +679,8 @@ class PetChatFlowMixin:
                     ),
                     context=context,
                 )
-
     def _cleanup_after_turn(self, turn_id: str, context=None) -> None:
-        """娓呯悊鏈疆瀵硅瘽鐘舵€侊紝涓嶆墽琛岃蹇嗘搷浣溿€?""
+        """清理本轮对话状态，不执行记忆操作。"""
         timeline = getattr(self, "_conversation_timeline", None)
         key = (
             getattr(context, "conversation_key", None)
@@ -678,7 +694,9 @@ class PetChatFlowMixin:
             self._chat_timeout.stop()
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
-        log.info(f"[chat] 鏈疆鍛堢幇瀹屾垚 (Ollama 绌哄洖澶?: turn={turn_id[:24]}")
+        log.info(f"[chat] 本轮呈现完成 (Ollama 空回复): turn={turn_id[:24]}")
+
+
     def _finish_agent_turn(self, turn_id: str, *, context=None) -> None:
         if context is not None and not self._turn_context_is_current(context):
             return
@@ -689,11 +707,11 @@ class PetChatFlowMixin:
             for segment in sorted(segments, key=lambda item: item.index)
             if segment.display_text
         ).strip()
-        # --- Ollama 鍚庣锛氬鏋?result 涓虹┖鎴?segments 涓虹┖锛岃烦杩囪蹇嗘搷浣?---
+        # --- Ollama 后端：如果 result 为空或 segments 为空，跳过记忆操作 ---
         llm_cfg = (getattr(self, "config", {}) or {}).get("llm") or {}
         backend = str(llm_cfg.get("backend") or "").strip().lower()
         if backend == "ollama" and not reply:
-            # 鐩存帴娓呯悊鐘舵€侊紝涓嶆墽琛岃蹇嗘搷浣?
+            # 直接清理状态，不执行记忆操作
             self._cleanup_after_turn(turn_id, context)
             return
         user_text = str(getattr(self, "_last_user_msg", "") or "").strip()
@@ -736,7 +754,7 @@ class PetChatFlowMixin:
             self._chat_timeout.stop()
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
-        log.info(f"[chat] 鏈疆鍛堢幇瀹屾垚: turn={turn_id[:24]}")
+        log.info(f"[chat] 本轮呈现完成: turn={turn_id[:24]}")
 
     def _fail_agent_turn(self, safe_message: str, *, context=None) -> None:
         if context is not None and not self._turn_context_is_current(context):
@@ -758,7 +776,7 @@ class PetChatFlowMixin:
         self._agent_format_repair_pending = False
         if hasattr(self, '_chat_timeout') and self._chat_timeout:
             self._chat_timeout.stop()
-        self._show_bubble(str(safe_message or "鍥炲璇锋眰澶辫触銆?), 10000, mood=None)
+        self._show_bubble(str(safe_message or "回复请求失败。"), 10000, mood=None)
         self._position_bubble()
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
@@ -787,6 +805,7 @@ class PetChatFlowMixin:
         self._complete_turn_context(context)
 
     def _do_memory_ops(self, reply: str, mood: str, user_msg: str = ""):
+        """记忆操作放后台线程执行，不阻塞主线程。通过串行锁避免竞态。"""
         t = threading.Thread(target=self._do_memory_ops_sync, args=(reply, mood, user_msg), daemon=True)
         t.start()
 
@@ -816,7 +835,7 @@ class PetChatFlowMixin:
                 upgrade_msg = engine.memory.add_affection(delta)
                 full_system = SYSTEM_PROMPT + "\n\n" + engine.memory.build_context_prompt(current_query=user_msg)
                 if upgrade_msg:
-                    full_system += f"\n\n[鍐呴儴锛氬ソ鎰熷害鍗囪嚦{engine.memory.get_affection_tier()[1]}銆傝鐢ㄧ◢鏆栫殑璇皵鍥炲簲銆俔"
+                    full_system += f"\n\n[内部：好感度升至{engine.memory.get_affection_tier()[1]}。请用稍暖的语气回应。]"
                 engine.history[0] = {"role": "system", "content": full_system}
                 engine.memory.mark_today_chatted()
                 engine.memory.increment_message_counter()
@@ -824,7 +843,7 @@ class PetChatFlowMixin:
                 engine._summarize_if_needed()
                 engine.memory.store_chat_exchange(user_msg, reply)
             except Exception as e:
-                log.error(f"[memory] 鎿嶄綔澶辫触: {e}")
+                log.error(f"[memory] 操作失败: {e}")
 
     def _on_chat_done(self, reply: str, mood: str):
         context = getattr(self, "_active_turn_context", None)
@@ -837,6 +856,7 @@ class PetChatFlowMixin:
         eng = getattr(self, "chat_engine", None)
         known_moods = getattr(eng, "_MOOD_TAGS", ())
         detected = mood if mood in known_moods else self._detect_mood(reply)
+        # 气泡只显示中文；TTS 优先用模型附带的日语行（无则回退整段 reply，由 TTS 再翻译）
         voice_text = reply
         tts_style = ""
         try:
@@ -844,14 +864,14 @@ class PetChatFlowMixin:
                 jp = (eng.take_voice_text() or "").strip()
                 if jp:
                     voice_text = jp
-                    _log_private_text("[tts] TTS 浣跨敤妯″瀷鏃ヨ琛?, jp)
+                    _log_private_text("[tts] TTS 使用模型日语行", jp)
         except Exception as e:
-            log.error(f"[tts] 鍙栨棩璇澶辫触: {e}")
+            log.error(f"[tts] 取日语行失败: {e}")
         try:
             if eng is not None and hasattr(eng, "take_tts_style"):
                 tts_style = (eng.take_tts_style() or "").strip()
         except Exception as e:
-            log.error(f"[tts] 鍙?TTS 椋庢牸澶辫触: {e}")
+            log.error(f"[tts] 取 TTS 风格失败: {e}")
         timeline = getattr(self, "_conversation_timeline", None)
         key = (
             getattr(context, "conversation_key", None)
@@ -883,17 +903,19 @@ class PetChatFlowMixin:
                     tts_style=tts_style,
                 ),
             )
+        # 捕获本轮用户消息，记忆操作与 TTS 并行且由上游串行锁保护。
         user_msg = getattr(self, '_last_user_msg', '') or ''
         QTimer.singleShot(
             0,
             lambda: self._do_memory_ops(reply, detected, user_msg),
         )
 
+        # 最终回复必须等音频文件真正生成后再显示；否则文字和声音会明显错位。
+        # TTS 关闭或启动失败时仍立即显示文字，不能让回复永久卡住。
         self._pending_chat_reply = (reply, detected)
         self._pending_chat_context = context
         tts = getattr(self, "tts", None)
-        tts_enabled = tts is not None and bool(getattr(tts, "enabled", True))
-        if tts is None or not tts_enabled:
+        if tts is None or not bool(getattr(tts, "enabled", True)):
             self._complete_pending_chat_reply()
             return
 
@@ -913,18 +935,19 @@ class PetChatFlowMixin:
             self._tts_worker.start()
             self._ensure_tts_poll()
         except Exception as e:
-            log.error(f"[tts] 璇煶鍚堟垚鍚姩澶辫触锛屽洖閫€鏂囧瓧: {type(e).__name__}: {e}")
+            log.error(f"[tts] 语音合成启动失败，回退文字: {type(e).__name__}: {e}")
             self._tts_worker = None
             self._complete_pending_chat_reply()
 
     def _ensure_tts_poll(self):
+        """确保 TTS 轮询 timer 在运行"""
         if not hasattr(self, '_tts_poll') or not self._tts_poll:
             self._tts_poll = QTimer(self)
             self._tts_poll.timeout.connect(self._poll_tts)
             self._tts_poll.start(100)
-        else:
 
     def _poll_tts(self):
+        """轮询所有 TTSWorker 完成状态"""
         if hasattr(self, '_tts_worker') and self._tts_worker and self._tts_worker.done:
             context = getattr(self._tts_worker, "turn_context", None)
             if context is not None and not self._turn_context_is_current(context):
@@ -937,9 +960,10 @@ class PetChatFlowMixin:
                 try:
                     result = self._tts_worker.get_result()
                 except Exception as e:
-                    log.error(f"[tts] 璇诲彇鍚堟垚缁撴灉澶辫触: {type(e).__name__}: {e}")
+                    log.error(f"[tts] 读取合成结果失败: {type(e).__name__}: {e}")
                     result = None
                 self._tts_worker = None
+                # 空结果同样必须进入完成处理，以显示等待中的文字回复。
                 self._on_tts_audio(result)
         if hasattr(self, '_speak_worker') and self._speak_worker and self._speak_worker.done:
             result = self._speak_worker.get_result()
@@ -949,6 +973,7 @@ class PetChatFlowMixin:
         if hasattr(self, '_watch_tts_worker') and self._watch_tts_worker and self._watch_tts_worker.done:
             result = self._watch_tts_worker.get_result()
             self._watch_tts_worker = None
+            # 取走 _pending_reply 后立即删除，避免回调内部二次读取
             pending = getattr(self, '_pending_reply', None)
             if pending:
                 reply, mood = pending
@@ -994,14 +1019,13 @@ class PetChatFlowMixin:
                         context=context,
                     )
 
-        # 娌℃湁寰呭鐞嗙殑 worker 灏卞仠姝?
-        any_workers = any([
+        # 没有待处理的 worker 就停止
+        if not any([
             getattr(self, '_tts_worker', None),
             getattr(self, '_speak_worker', None),
             getattr(self, '_watch_tts_worker', None),
             getattr(self, '_agent_tts_workers', None),
-        ])
-        if not any_workers:
+        ]):
             if hasattr(self, '_tts_poll') and self._tts_poll:
                 self._tts_poll.stop()
                 self._tts_poll.deleteLater()
@@ -1019,22 +1043,24 @@ class PetChatFlowMixin:
         )
 
     def _detect_mood(self, text: str) -> str:
+        """从回复文本推测情绪（替代后端 mood 检测）"""
         t = text.lower()
-        if any(k in t for k in ["鍢垮樋","濂藉悆","寮€蹇?,"楂樺叴","妫?,"鍝堝搱","鍠滄"]):
+        if any(k in t for k in ["嘿嘿","好吃","开心","高兴","棒","哈哈","喜欢"]):
             return "happy"
-        if any(k in t for k in ["鐑?,"鏃犺亰","娌″叴瓒?,"鍒惖","鍝?,"鍒?]):
+        if any(k in t for k in ["烦","无聊","没兴趣","别吵","哼","切"]):
             return "annoyed"
-        if any(k in t for k in ["鍝︼紵","鍜?,"璇?,"鐪熺殑锛?,"鎰忓"]):
+        if any(k in t for k in ["哦？","咦","诶","真的？","意外"]):
             return "surprised"
-        if any(k in t for k in ["鏈夋剰鎬?,"鏈夎叮","璁╂垜鐪嬬湅","濂藉"]):
+        if any(k in t for k in ["有意思","有趣","让我看看","好奇"]):
             return "curious"
-        if any(k in t for k in ["鍞?,"闅捐繃","浼ゅ績","鍙儨"]):
+        if any(k in t for k in ["唉","难过","伤心","可惜"]):
             return "sad"
-        if any(k in t for k in ["鍙堟病鍦?,"闅忎究","鈥︹€?,"鑴哥孩","瀹崇緸"]):
+        if any(k in t for k in ["又没在","随便","……","脸红","害羞"]):
             return "shy"
         return "neutral"
 
     def _complete_pending_chat_reply(self, wav_path: str = "") -> None:
+        """显示等待中的聊天回复，并在同一事件循环节拍开始播放音频。"""
         pending = getattr(self, "_pending_chat_reply", None)
         context = getattr(self, "_pending_chat_context", None)
         if context is not None and not self._turn_context_is_current(context):
@@ -1072,7 +1098,7 @@ class PetChatFlowMixin:
             else:
                 self.show_reply(reply, mood, duration_ms=duration_ms)
         except Exception as e:
-            log.error(f"[chat] 鏄剧ず绛夊緟鍥炲澶辫触: {type(e).__name__}: {e}")
+            log.error(f"[chat] 显示等待回复失败: {type(e).__name__}: {e}")
         finally:
             set_awaiting_reply_state(self, False)
 
@@ -1093,14 +1119,15 @@ class PetChatFlowMixin:
 
         if wav_path:
             self._play_audio(wav_path)
+
     def _on_tts_audio(self, raw: str | None):
-        """TTS 瀹屾垚鍚庡啀鏄剧ず鏈€缁堟皵娉★紱澶辫触鏃舵樉绀烘棤澹版枃瀛楀厹搴曘€?""
+        """TTS 完成后再显示最终气泡；失败时显示无声文字兜底。"""
         value = str(raw or "")
         wav_path = value.rsplit("|", 1)[0] if "|" in value else value
         if not wav_path or not os.path.exists(wav_path):
             log.warning(f"[audio] TTS 鏈敓鎴愭湁鏁堟枃浠讹紝鍥為€€鏂囧瓧: chars={len(value)}")
             if debug_enabled():
-                log.debug(f"[audio] 鏃犳晥 TTS 杩斿洖: {raw!r}")
+                log.debug(f"[audio] 无效 TTS 返回: {raw!r}")
             self._complete_pending_chat_reply()
             return
         self._complete_pending_chat_reply(wav_path)
@@ -1115,7 +1142,7 @@ class PetChatFlowMixin:
             if debug_enabled()
             else f"error_chars={len(err or '')}"
         )
-        log.error(f"[chat] 瀵硅瘽閿欒: {error_summary}")
+        log.error(f"[chat] 对话错误: {error_summary}")
         if hasattr(self, '_chat_timeout'):
             self._chat_timeout.stop()
         log_error(
@@ -1133,7 +1160,7 @@ class PetChatFlowMixin:
             or ""
         )
         if timeline is not None and key is not None and turn_id:
-            timeline.fail_turn(key, turn_id, "瀵硅瘽璇锋眰澶辫触")
+            timeline.fail_turn(key, turn_id, "对话请求失败")
         self._active_timeline_turn_id = ""
         self._show_bubble(
             status_language.model_service_error(),
@@ -1145,11 +1172,11 @@ class PetChatFlowMixin:
         self._complete_turn_context(context)
 
     def _on_chat_timeout(self):
-        """ChatWorker 瓒呮椂 鈥?寮哄埗缁堟绾跨▼骞堕噴鏀鹃攣"""
+        """ChatWorker 超时 — 强制终止线程并释放锁"""
         context = getattr(self, "_active_turn_context", None)
         if context is not None and not self._turn_context_is_current(context):
             return
-        log.warning("[chat] ChatWorker 瓒呮椂锛岄噴鏀鹃攣")
+        log.warning("[chat] ChatWorker 超时，释放锁")
         set_awaiting_reply_state(self, False)
         self._show_bubble(status_language.chat_timeout(), 3000)
         self._position_bubble()
@@ -1168,29 +1195,30 @@ class PetChatFlowMixin:
         self._active_timeline_turn_id = ""
         if hasattr(self, '_chat_worker') and self._chat_worker:
             if self._chat_worker.isRunning():
+                # quit() 协作取消 async 任务 / future
+                # 用 terminate() 强制终止
                 self._chat_worker.terminate()
                 if not self._chat_worker.wait(2000):
-                    log.warning("[chat] ChatWorker 鏃犳硶缁堟")
+                    log.warning("[chat] ChatWorker 无法终止")
             self._chat_worker.deleteLater()
             self._chat_worker = None
         self._complete_turn_context(context)
 
     def _speak_and_show(self, text: str, duration_ms: int, mood: str = "neutral"):
-        """鏄剧ず鏂囧瓧 + 鍚庡彴鍚堟垚璇煶鎾斁锛堝紓甯镐笉鎶涘嚭锛?""
+        """显示文字 + 后台合成语音播放（异常不抛出）"""
         try:
             self.show_reply(text, mood)
         except Exception as e:
-            log.error(f"[speak] 鏄剧ず鏂囧瓧澶辫触: {type(e).__name__}: {e}")
+            log.error(f"[speak] 显示文字失败: {type(e).__name__}: {e}")
         try:
             tts = getattr(self, "tts", None)
-            tts_enabled = tts is not None and getattr(tts, "enabled", False)
-            if tts and tts_enabled and len((text or "").strip()) >= 2:
+            if tts and getattr(tts, "enabled", False) and len((text or "").strip()) >= 2:
                 self._current_speaking_text = text
                 cached = None
                 try:
                     cached = tts.get_cached(text)
                 except Exception as e:
-                    log.error(f"[speak] 缂撳瓨鏌ヨ澶辫触: {type(e).__name__}: {e}")
+                    log.error(f"[speak] 缓存查询失败: {type(e).__name__}: {e}")
                 if cached:
                     self._play_audio(cached)
                     return
@@ -1198,10 +1226,10 @@ class PetChatFlowMixin:
                 self._speak_worker.start()
                 self._ensure_tts_poll()
         except Exception as e:
-            log.error(f"[speak] 璇煶鍚堟垚鍚姩澶辫触: {type(e).__name__}: {e}")
+            log.error(f"[speak] 语音合成启动失败: {type(e).__name__}: {e}")
 
     def _on_speak_audio_ready(self, raw: str):
-        """鍚庡彴璇煶鍚堟垚瀹屾垚锛屾挱鏀惧苟缂撳瓨"""
+        """后台语音合成完成，播放并缓存"""
         wav_path = raw
         tts_lang = ""
         if "|" in raw:
@@ -1222,10 +1250,9 @@ class PetChatFlowMixin:
                     cache_path = os.path.join(cache_dir, f"{tts_lang}_{safe}.wav")
                     try:
                         shutil.copy2(wav_path, cache_path)
-                    except Exception as exc:
-                        log.warning(f"[speak] 缂撳瓨鍐欏叆澶辫触: {type(exc).__name__}")
+                    except Exception:
+                        pass
             self._play_audio(wav_path)
-        else:
 
     def show_reply(self, text: str, mood: str = "neutral", duration_ms: int = None):
         if duration_ms is None:
@@ -1237,4 +1264,3 @@ class PetChatFlowMixin:
             str(getattr(self, "_active_timeline_turn_id", "") or ""),
         )
         self._position_bubble()
-
