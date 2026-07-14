@@ -1,6 +1,6 @@
 """
 梅尔桌宠 - LLM 对话模块
-支持多种后端：Ollama、DeepSeek API
+支持多种后端：Ollama、DeepSeek API、MiMo API
 """
 import json
 import sys
@@ -489,6 +489,7 @@ class ChatEngine:
             # ========== 注入养成记忆上下文（语义检索） ==========
             if self.memory:
                 ctx = self.memory.build_context_prompt(current_query=message)
+                log.debug(f"[Chat] 获取记忆上下文，长度={len(ctx)}，为：{ctx}")
                 full_system = SYSTEM_PROMPT + "\n\n" + ctx
                 self.history[0] = {"role": "system", "content": full_system}
                 log.debug(f"[Chat] 注入记忆上下文，prompt 长度={len(full_system)}")
@@ -865,6 +866,7 @@ class ChatEngine:
             # ========== 注入养成记忆上下文（语义检索） ==========
             if self.memory:
                 ctx = self.memory.build_context_prompt(current_query=message)
+                log.debug(f"[Chat] 获取记忆上下文，长度={len(ctx)}，为：{ctx}")
                 full_system = SYSTEM_PROMPT + "\n\n" + ctx
                 self.history[0] = {"role": "system", "content": full_system}
                 log.debug(f"[Chat] 注入记忆上下文，prompt 长度={len(full_system)}")

@@ -514,9 +514,33 @@ class MeaPet(
 
 
 
+def _ensure_jieba():
+    """启动时预检 jieba 依赖，缺失时弹出错误提示。"""
+    try:
+        import jieba  # noqa: F401
+    except ImportError:
+        log.error("[boot] jieba 未安装，中文分词功能不可用")
+        try:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None,
+                "依赖缺失",
+                "缺少核心依赖 jieba（中文分词库）。\n\n"
+                "请在终端执行：\n"
+                "  pip install jieba\n\n"
+                "或使用 uv：\n"
+                "  uv pip install jieba\n\n"
+                "然后重新启动桌宠。",
+            )
+        except Exception:
+            pass
+        raise SystemExit(1)
+
+
 def main():
     """启动桌宠：托盘 + 屏外保活 + boot 日志。"""
     _install_excepthook()
+    _ensure_jieba()
     import signal
     import traceback
     from datetime import datetime

@@ -40,6 +40,7 @@ def check_installed(package: str) -> bool:
         "pillow": ("PIL",),
         "requests": ("requests",),
         "httpx": ("httpx",),
+        "jieba": ("jieba",),
         "pip": ("pip",),
     }
     names = import_aliases.get(package, (package.replace("-", "_"),))

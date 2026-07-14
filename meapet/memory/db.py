@@ -1,6 +1,6 @@
 """
-梅尔桌宠 - 记忆与养成系统 v2
-语义检索 · 生命周期管理 · 对话摘要 · CRUD · JSON 导入导出
+梅尔桌宠 - 记忆与养成系统 v3
+语义检索（jieba 词级） · 嵌入缓存 · 生命周期管理 · 对话摘要 · CRUD · JSON 导入导出
 """
 import sqlite3
 import json
@@ -10,6 +10,7 @@ import time
 import random
 import threading
 import hashlib
+import jieba  # type: ignore[import-untyped]
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from meapet.log import get_color_logger
@@ -19,8 +20,9 @@ log = get_color_logger("memory")
 from meapet.paths import project_path
 
 DB_PATH = project_path("mea_memory.db")
-SCHEMA_VERSION = 4
-VECTOR_DIM = 1024
+SCHEMA_VERSION = 5  # v5: jieba 词级 embedding 替代 trigram hash
+VECTOR_DIM = 2048   # 词级 hash 空间更大减少碰撞
+MAX_MEMORIES = 2000 # 记忆总量软上限
 
 # ========================
 # 好感度系统配置
@@ -53,26 +55,50 @@ PRUNE_DAYS = 30
 PRUNE_IMPORTANCE_FLOOR = 1
 SUMMARIZE_EVERY_N = 20
 SUMMARY_CHAT_LIMIT = 20
-MIN_SEARCH_SCORE = 0.001
 EXCHANGE_TRUNCATE = 150
+MAX_CONSOLIDATION_MEMORIES = 200  # 合并时只处理 top-N 高重要度记忆，避免 O(N²)
 
 
-def _trigram_hash(tri: str) -> int:
+_JIEBA_INITED = False
+
+
+def _ensure_jieba():
+    global _JIEBA_INITED
+    if not _JIEBA_INITED:
+        t0 = time.perf_counter()
+        _ = jieba.lcut("预热 jieba 词典")
+        elapsed = (time.perf_counter() - t0) * 1000
+        log.debug(f"[EMB] jieba 词典加载完成 ({elapsed:.0f}ms)")
+        _JIEBA_INITED = True
+
+
+def _token_hash(token: str) -> int:
+    """将词 token 哈希到 VECTOR_DIM 桶中。"""
     h = 0
-    for c in tri:
+    for c in token:
         h = (h * 31 + ord(c)) & 0xFFFFFFFF
     return h % VECTOR_DIM
 
 
 def _compute_embedding(text: str) -> List[Tuple[int, float]]:
-    if not text:
+    """混合嵌入：jieba 词级 + 字符级特征，保障 OOV 子词匹配。"""
+    if not text or not text.strip():
         return []
+    _ensure_jieba()
+    cleaned = text.strip()
     freq = {}
-    padded = "  " + text + "  "
-    for i in range(len(padded) - 2):
-        tri = padded[i:i + 3]
-        idx = _trigram_hash(tri)
-        freq[idx] = freq.get(idx, 0) + 1
+    # 词级特征（主信号）
+    for w in jieba.lcut(cleaned):
+        w = w.strip()
+        if not w:
+            continue
+        idx = _token_hash(w)
+        freq[idx] = freq.get(idx, 0) + 1.0
+    # 字符级特征（保障单字/OOV 子词匹配，权重 0.5）
+    for ch in cleaned:
+        if ch.strip():
+            idx = _token_hash(ch)
+            freq[idx] = freq.get(idx, 0) + 0.5
     if not freq:
         return []
     norm = math.sqrt(sum(v * v for v in freq.values()))
@@ -89,7 +115,8 @@ def _cosine_similarity_sparse(
         return 0.0
     i = j = 0
     dot = 0.0
-    while i < len(a) and j < len(b):
+    len_a, len_b = len(a), len(b)
+    while i < len_a and j < len_b:
         if a[i][0] < b[j][0]:
             i += 1
         elif a[i][0] > b[j][0]:
@@ -101,12 +128,23 @@ def _cosine_similarity_sparse(
     return dot
 
 
+def _hybrid_score(
+    sim: float,
+    importance: int,
+    days_since_recall: float,
+    decay_factor: float,
+) -> float:
+    """混合语义相似度 + 重要度 + 时间衰减，永不回退到纯重要度排序。"""
+    recency = max(0.3, 1.0 - days_since_recall * 0.02)
+    return sim * (importance / 5.0) * decay_factor * recency + importance * 0.01
+
+
 def _content_hash(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
 class MeaMemory:
-    """梅尔的持久化记忆系统 v2"""
+    """梅尔的持久化记忆系统 v3（jieba 词级嵌入 · 嵌入缓存 · 混合排序）"""
 
     def __init__(self):
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -117,14 +155,43 @@ class MeaMemory:
         except sqlite3.Error:
             pass
         self._lock = threading.RLock()
+        self._emb_cache: Dict[int, List[Tuple[int, float]]] = {}
         self._init_tables()
         self._migrate_schema()
         self._ensure_defaults()
+        self._load_emb_cache()
+        log.debug(f"[DB] 嵌入缓存已加载 ({len(self._emb_cache)} 条)")
 
     # ── 私有：加锁执行 ──
     def _write(self, func, *args, **kwargs):
         with self._lock:
             return func(*args, **kwargs)
+
+    # ── 嵌入缓存 ──
+    def _load_emb_cache(self):
+        """从数据库加载全部 embedding 到内存缓存。"""
+        with self._lock:
+            c = self.conn.cursor()
+            c.execute("SELECT id, embedding FROM memories")
+            count = 0
+            for row in c.fetchall():
+                emb_str = row["embedding"]
+                if isinstance(emb_str, str) and emb_str:
+                    try:
+                        self._emb_cache[row["id"]] = json.loads(emb_str)
+                        count += 1
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            return count
+
+    def _emb_cache_put(self, mid: int, emb: List[Tuple[int, float]]):
+        self._emb_cache[mid] = emb
+
+    def _emb_cache_remove(self, mid: int):
+        self._emb_cache.pop(mid, None)
+
+    def _emb_cache_get(self, mid: int) -> List[Tuple[int, float]]:
+        return self._emb_cache.get(mid, [])
 
     def _init_tables(self):
         """建表"""
@@ -267,8 +334,23 @@ class MeaMemory:
 
         # 迁移 4 的 conversation_turns 表由 _init_tables 幂等创建。
 
-        # 为没有 embedding 的记忆计算 embedding
-        c.execute("SELECT id, content, embedding FROM memories WHERE embedding IS NULL OR embedding = ''")
+        # 迁移 5: v4→v5，jieba 词级 embedding 替代 trigram hash + VECTOR_DIM 1024→2048
+        if current_version < 5:
+            log.debug(f"[DB] v4→v5 迁移：重算全部记忆的 embedding（jieba 词级, dim={VECTOR_DIM}）")
+            c.execute("SELECT id, content FROM memories")
+            rows = c.fetchall()
+            count = 0
+            for row in rows:
+                emb = _compute_embedding(row["content"])
+                emb_json = json.dumps(emb, ensure_ascii=False)
+                c.execute("UPDATE memories SET embedding = ? WHERE id = ?", (emb_json, row["id"]))
+                count += 1
+            if count:
+                log.debug(f"[DB] v5 迁移：已重算 {count} 条记忆的 embedding")
+            self.conn.commit()
+
+        # 为没有 embedding 的记忆计算 embedding（兜底，仅旧数据或异常空值）
+        c.execute("SELECT id, content FROM memories WHERE embedding IS NULL OR embedding = ''")
         rows = c.fetchall()
         for row in rows:
             emb = _compute_embedding(row["content"])
@@ -668,6 +750,7 @@ class MeaMemory:
         source_ids: Optional[List[int]] = None,
         decay_factor: float = 1.0,
     ) -> int:
+        t0 = time.perf_counter()
         emb = _compute_embedding(content)
         now = time.time()
         with self._lock:
@@ -692,9 +775,15 @@ class MeaMemory:
                     json.dumps(source_ids or [], ensure_ascii=False),
                 ),
             )
+            mid = c.lastrowid
+            self._emb_cache_put(mid, emb)
             self.conn.commit()
-            log.debug(f"[DB] 创建记忆 id={c.lastrowid} type={memory_type} imp={importance}")
-            return c.lastrowid
+            # 总量上限裁剪
+            pruned = self._enforce_memory_cap(avoid_type=("milestone",))
+            elapsed = (time.perf_counter() - t0) * 1000
+            log.debug(f"[DB] 创建记忆 id={mid} type={memory_type} imp={importance} "
+                      f"emb_dims={len(emb)} pruned={pruned} ({elapsed:.1f}ms)")
+            return mid
 
     def get_memory(self, memory_id: int) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -728,9 +817,8 @@ class MeaMemory:
             return False
         updates["updated"] = time.time()
         if "content" in updates:
-            updates["embedding"] = json.dumps(
-                _compute_embedding(updates["content"]), ensure_ascii=False,
-            )
+            emb = _compute_embedding(updates["content"])
+            updates["embedding"] = json.dumps(emb, ensure_ascii=False)
         # Serialize complex fields
         for field in ("tags", "metadata", "source_ids"):
             if field in updates and not isinstance(updates[field], str):
@@ -742,6 +830,12 @@ class MeaMemory:
             c.execute(f"UPDATE memories SET {set_clause} WHERE id = ?", values)
             self.conn.commit()
             ok = c.rowcount > 0
+            if ok:
+                # 刷新缓存
+                if "content" in updates:
+                    self._emb_cache_put(memory_id, emb)
+                else:
+                    self._emb_cache_remove(memory_id)
             log.debug(f"[DB] 更新记忆 id={memory_id} → {'成功' if ok else '未找到'} fields={list(updates.keys())}")
             return ok
 
@@ -751,6 +845,8 @@ class MeaMemory:
             c.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             self.conn.commit()
             ok = c.rowcount > 0
+            if ok:
+                self._emb_cache_remove(memory_id)
             log.debug(f"[DB] 删除记忆 id={memory_id} → {'成功' if ok else '未找到'}")
             return ok
 
@@ -854,6 +950,7 @@ class MeaMemory:
         memory_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
+        t0 = time.perf_counter()
         query_emb = _compute_embedding(query)
         conditions = []
         params = []
@@ -868,41 +965,51 @@ class MeaMemory:
 
         with self._lock:
             c = self.conn.cursor()
-            c.execute(f"SELECT * FROM memories{where}", params)
-            rows = [self._row_to_memory_dict(r) for r in c.fetchall()]
+            c.execute(f"SELECT id, importance, memory_type, content, tags, metadata, "
+                      f"source_ids, created, last_recalled, updated, access_count, decay_factor "
+                      f"FROM memories{where}", params)
+            rows = [dict(r) for r in c.fetchall()]
 
-        if not query_emb or not rows:
-            rows.sort(key=lambda r: (r["importance"], r.get("last_recalled") or 0), reverse=True)
+        total_candidates = len(rows)
+        if not rows:
+            log.debug(f"[SRCH] query={query!r} → 空结果集 (type={memory_type}, tags={tags})")
+            return []
+
+        # 无 query embedding → 纯重要度排序
+        if not query_emb:
+            rows.sort(key=lambda r: (r.get("importance", 1), r.get("last_recalled") or 0), reverse=True)
             top = rows[:limit]
             self._mark_recalled(top)
+            elapsed = (time.perf_counter() - t0) * 1000
+            log.debug(f"[SRCH] query={query!r} → 无嵌入, 纯重要度排序 {len(top)}条/共{total_candidates} ({elapsed:.1f}ms)")
             return top
 
         scored = []
         for r in rows:
-            stored_emb = r.get("embedding") or []
-            if isinstance(stored_emb, str):
-                try:
-                    stored_emb = json.loads(stored_emb) if stored_emb else []
-                except (json.JSONDecodeError, TypeError):
-                    stored_emb = []
+            mid = r["id"]
+            stored_emb = self._emb_cache_get(mid)
+            if not stored_emb:
+                # 缓存缺失（新数据或异常）→ 即时解析一次
+                r["embedding"] = self._row_to_memory_dict(r).get("embedding", [])
+                if isinstance(r["embedding"], list):
+                    stored_emb = r["embedding"]
+                    self._emb_cache_put(mid, stored_emb)
             sim = _cosine_similarity_sparse(query_emb, stored_emb)
-            days_since = (time.time() - (r.get("last_recalled") or r["created"])) / 86400
-            recency_bonus = max(0.3, 1.0 - days_since * 0.02)
-            score = sim * (r["importance"] / 5.0) * r.get("decay_factor", 1.0) * recency_bonus
-            scored.append((score, r))
+            days_since = (time.time() - (r.get("last_recalled") or r["created"] or time.time())) / 86400
+            imp = r.get("importance", 1)
+            df = r.get("decay_factor", 1.0)
+            score = _hybrid_score(sim, imp, days_since, df)
+            scored.append((score, sim, r))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        # 有语义分数合格的记录时按分数返回；否则退回到重要度排序
-        # （trigram 方法对短中文查询区分度有限，score=0 不等于无关）
-        meaningful = [s for s in scored if s[0] >= MIN_SEARCH_SCORE]
-        if meaningful:
-            result = [r for _, r in meaningful[:limit]]
-        else:
-            rows.sort(key=lambda r: (r["importance"], r.get("last_recalled") or 0), reverse=True)
-            result = rows[:limit]
+        result = [r for _, _, r in scored[:limit]]
 
         self._mark_recalled(result)
-        log.debug(f"[DB] 语义检索 → {len(result)}条 (共{len(rows)}候选)")
+        elapsed = (time.perf_counter() - t0) * 1000
+        max_sim = scored[0][1] if scored else 0.0
+        min_sim = scored[-1][1] if scored else 0.0
+        log.debug(f"[SRCH] query={query!r} → {len(result)}条/共{total_candidates}候选 "
+                  f"sim范围=[{min_sim:.3f},{max_sim:.3f}] query_emb_dims={len(query_emb)} ({elapsed:.1f}ms)")
         return result
 
     def _mark_recalled(self, memories: List[Dict[str, Any]]):
@@ -922,11 +1029,55 @@ class MeaMemory:
             self.conn.commit()
 
     # ========================
+    # 记忆总量上限
+    # ========================
+    def _enforce_memory_cap(self, avoid_type: Tuple[str, ...] = ()) -> int:
+        """当记忆数超过 MAX_MEMORIES 时，裁剪最旧低重要度记录。
+        返回本次裁剪数量。"""
+        with self._lock:
+            c = self.conn.cursor()
+            c.execute("SELECT COUNT(*) FROM memories")
+            total = c.fetchone()[0]
+            if total <= MAX_MEMORIES:
+                return 0
+            excess = total - MAX_MEMORIES
+            # 裁剪重要性最低且最久未召回的（排除 protect_type）
+            type_expr = ""
+            params: list = []
+            if avoid_type:
+                placeholders = ", ".join("?" for _ in avoid_type)
+                type_expr = f"AND memory_type NOT IN ({placeholders})"
+                params = list(avoid_type)
+            c.execute(
+                f"SELECT id FROM memories WHERE importance <= 2 {type_expr} "
+                f"ORDER BY importance ASC, last_recalled ASC, id ASC LIMIT ?",
+                params + [excess],
+            )
+            ids = [r["id"] for r in c.fetchall()]
+            if not ids:
+                # 重要度裁剪不够，直接按 last_recalled 裁
+                c.execute(
+                    f"SELECT id FROM memories {type_expr if avoid_type else ''} "
+                    f"ORDER BY last_recalled ASC, id ASC LIMIT ?",
+                    params + [excess],
+                )
+                ids = [r["id"] for r in c.fetchall()]
+            for mid in ids:
+                c.execute("DELETE FROM memories WHERE id = ?", (mid,))
+                self._emb_cache_remove(mid)
+            self.conn.commit()
+            pruned = len(ids)
+            if pruned:
+                log.debug(f"[CAP] 记忆总量 {total}>{MAX_MEMORIES}，裁剪 {pruned} 条")
+            return pruned
+
+    # ========================
     # 生命周期管理
     # ========================
     def lifecycle_maintenance(self):
+        t0 = time.perf_counter()
         now = time.time()
-        log.debug("[DB] 开始生命周期维护")
+        log.debug("[LIFY] 开始生命周期维护")
 
         # 1. 重要性衰减（幂等：用 last_decay 做衰减检查点，避免重复衰减）
         decay_count = 0
@@ -948,7 +1099,7 @@ class MeaMemory:
                                       (new_imp, now, row["id"]))
                             decay_count += 1
         if decay_count:
-            log.debug(f"[DB] 生命周期：{decay_count} 条记忆重要性衰减（幂等）")
+            log.debug(f"[LIFY] 重要性衰减：{decay_count} 条（幂等）")
 
         # 2. 哈希精确去重（低成本）
         with self._lock:
@@ -968,14 +1119,21 @@ class MeaMemory:
                 c = self.conn.cursor()
                 for did in dup_ids:
                     c.execute("DELETE FROM memories WHERE id = ?", (did,))
+                    self._emb_cache_remove(did)
                 self.conn.commit()
-            log.debug(f"[DB] 精确去重：删除了 {len(dup_ids)} 条完全重复记忆")
+            log.debug(f"[LIFY] 精确去重：删除 {len(dup_ids)} 条完全重复")
 
-        # 3. 合并相似记忆（安全版）
+        # 3. 合并相似记忆（安全版，限制 top-N 避免 O(N²)）
         with self._lock:
             c = self.conn.cursor()
-            c.execute("SELECT id, content, embedding, importance, memory_type, tags, metadata, access_count, created, updated, source_ids FROM memories ORDER BY importance DESC")
+            c.execute(
+                "SELECT id, content, importance, memory_type, tags, metadata, "
+                "access_count, created, updated, source_ids FROM memories "
+                "ORDER BY importance DESC LIMIT ?",
+                (MAX_CONSOLIDATION_MEMORIES,),
+            )
             all_mems = [dict(r) for r in c.fetchall()]
+        total_considered = len(all_mems)
         merged_ids = set()
         merge_count = 0
         for i in range(len(all_mems)):
@@ -984,95 +1142,118 @@ class MeaMemory:
             for j in range(i + 1, len(all_mems)):
                 if all_mems[j]["id"] in merged_ids or all_mems[j]["id"] in dup_ids:
                     continue
-                a = all_mems[i]
-                b = all_mems[j]
-                # 类型不同不合并
+                a, b = all_mems[i], all_mems[j]
                 if a.get("memory_type") != b.get("memory_type"):
                     continue
-                emb_a = self._parse_emb(a.get("embedding"))
-                emb_b = self._parse_emb(b.get("embedding"))
+                emb_a = self._emb_cache_get(a["id"])
+                emb_b = self._emb_cache_get(b["id"])
+                if not emb_a or not emb_b:
+                    continue
                 sim = _cosine_similarity_sparse(emb_a, emb_b)
                 if sim < CONSOLIDATION_SIMILARITY:
                     continue
-                # 检测语义矛盾（否定/偏好变化）
                 if self._has_contradiction(a.get("content", ""), b.get("content", "")):
-                    log.debug(f"[DB] 跳过矛盾记忆对 id=({a['id']},{b['id']}) sim={sim:.2f}")
                     continue
-                # 保留较新的记录作为目标
                 created_a = a.get("created") or 0
                 created_b = b.get("created") or 0
-                if created_a >= created_b:
-                    target, victim = a, b
-                else:
-                    target, victim = b, a
-                tags_t = self._parse_json_list(target.get("tags"))
-                tags_v = self._parse_json_list(victim.get("tags"))
-                merged_tags = list(set(tags_t + tags_v))
-                meta_t = self._parse_json_dict(target.get("metadata"))
-                meta_v = self._parse_json_dict(victim.get("metadata"))
-                merged_meta = {**meta_v, **meta_t}
+                target, victim = (a, b) if created_a >= created_b else (b, a)
+                merged_tags = list(set(
+                    self._parse_json_list(target.get("tags")) +
+                    self._parse_json_list(victim.get("tags"))
+                ))
+                merged_meta = {**self._parse_json_dict(victim.get("metadata")),
+                               **self._parse_json_dict(target.get("metadata"))}
                 merged_access = (target.get("access_count") or 1) + (victim.get("access_count") or 1)
                 merged_imp = max(target["importance"], victim["importance"])
-                source_t = self._parse_json_list(target.get("source_ids"))
-                source_v = self._parse_json_list(victim.get("source_ids"))
-                merged_source = list(set(source_t + source_v))
+                merged_source = list(set(
+                    self._parse_json_list(target.get("source_ids")) +
+                    self._parse_json_list(victim.get("source_ids"))
+                ))
                 merge_count += 1
                 with self._lock:
                     c = self.conn.cursor()
                     c.execute(
-                        "UPDATE memories SET tags=?, metadata=?, access_count=?, importance=?, source_ids=?, updated=? WHERE id=?",
+                        "UPDATE memories SET tags=?, metadata=?, access_count=?, "
+                        "importance=?, source_ids=?, updated=? WHERE id=?",
                         (
                             json.dumps(merged_tags, ensure_ascii=False),
                             json.dumps(merged_meta, ensure_ascii=False),
-                            merged_access,
-                            merged_imp,
+                            merged_access, merged_imp,
                             json.dumps(merged_source, ensure_ascii=False),
-                            now,
-                            target["id"],
+                            now, target["id"],
                         ),
                     )
-                    c.execute("UPDATE memories SET importance=0, updated=? WHERE id=?", (now, victim["id"]))
+                    c.execute("UPDATE memories SET importance=0, updated=? WHERE id=?",
+                              (now, victim["id"]))
                     self.conn.commit()
                 merged_ids.add(victim["id"])
+                self._emb_cache_remove(victim["id"])
         if merge_count:
-            log.debug(f"[DB] 生命周期：安全合并了 {merge_count} 组相似记忆")
+            log.debug(f"[LIFY] 合并相似记忆：{merge_count} 组（扫描 {total_considered} 条 top 高重要度）")
 
         # 4. 清理过期低重要性记忆（含合并后 importance=0 的记录）
         prune_count = 0
         with self._lock:
             c = self.conn.cursor()
             c.execute(
-                "SELECT id, memory_type, importance, last_recalled FROM memories "
-                "WHERE importance <= ? AND memory_type NOT IN ('summary', 'milestone')",
-                (PRUNE_IMPORTANCE_FLOOR,),
+                "SELECT id FROM memories WHERE importance <= ? "
+                "AND memory_type NOT IN ('summary', 'milestone') "
+                "AND (last_recalled IS NULL OR ? - last_recalled >= ?)",
+                (PRUNE_IMPORTANCE_FLOOR, now, PRUNE_DAYS * 86400),
             )
             for row in c.fetchall():
-                lr = row["last_recalled"] or 0
-                if (now - lr) / 86400 >= PRUNE_DAYS:
-                    c.execute("DELETE FROM memories WHERE id = ?", (row["id"],))
-                    prune_count += 1
+                c.execute("DELETE FROM memories WHERE id = ?", (row["id"],))
+                self._emb_cache_remove(row["id"])
+                prune_count += 1
             self.conn.commit()
         if prune_count:
-            log.debug(f"[DB] 生命周期：清理了 {prune_count} 条过期记忆")
+            log.debug(f"[LIFY] 清理过期：{prune_count} 条低重要度旧记忆")
 
+        elapsed = (time.perf_counter() - t0) * 1000
+        log.debug(f"[LIFY] 生命周期维护完成 ({elapsed:.1f}ms)")
+
+    # jieba 词级矛盾检测对
+    # jieba 会将 "不喜欢" 切为 ["不", "喜欢"]，故用 ("不", base) 形式 + 反义词对
     CONTRADICTION_PAIRS = [
-        ("喜欢", "不喜欢"), ("喜欢", "不喜欢"), ("喜欢", "讨厌"),
-        ("讨厌", "不讨厌"), ("想要", "不想要"), ("想", "不想"),
-        ("是", "不是"), ("会", "不会"), ("能", "不能"),
-        ("可以", "不可以"), ("愿意", "不愿意"),
+        # 否定对：("不", base_word)  →  检测一方有 base_word 且无 "不"，另一方有 "不"+base
+        ("不", "喜欢"),  # 喜欢 ↔ 不喜欢
+        ("不", "讨厌"),  # 讨厌 ↔ 不讨厌
+        ("不", "想要"),  # 想要 ↔ 不想要
+        ("不", "想"),    # 想 ↔ 不想
+        ("不", "会"),    # 会 ↔ 不会
+        ("不", "能"),    # 能 ↔ 不能
+        ("不", "可以"),  # 可以 ↔ 不可以
+        ("不", "愿意"),  # 愿意 ↔ 不愿意
+        # 反义词对：存在任一方向即矛盾
+        ("喜欢", "讨厌"),
     ]
 
     @staticmethod
     def _has_contradiction(text_a: str, text_b: str) -> bool:
-        a_low = text_a.lower()
-        b_low = text_b.lower()
-        for pos, neg in MeaMemory.CONTRADICTION_PAIRS:
-            has_pos_a = pos in a_low
-            has_pos_b = pos in b_low
-            has_neg_a = neg in a_low
-            has_neg_b = neg in b_low
-            if (has_pos_a and has_neg_b) or (has_pos_b and has_neg_a):
-                return True
+        """词级矛盾检测：jieba 分词后检查词级否定/反义关系，避免子串误判。"""
+        _ensure_jieba()
+        toks_a = set(jieba.lcut(text_a.strip().lower()))
+        toks_b = set(jieba.lcut(text_b.strip().lower()))
+        has_not_a = "不" in toks_a
+        has_not_b = "不" in toks_b
+
+        for x, y in MeaMemory.CONTRADICTION_PAIRS:
+            if x == "不":
+                # 否定对：y 是 base word
+                a_pos = y in toks_a and not has_not_a
+                b_pos = y in toks_b and not has_not_b
+                a_neg = y in toks_a and has_not_a
+                b_neg = y in toks_b and has_not_b
+                if (a_pos and b_neg) or (b_pos and a_neg):
+                    log.debug(f"[CTR] 矛盾否定对 base={y} "
+                              f"a={text_a[:30]!r} b={text_b[:30]!r}")
+                    return True
+            else:
+                # 反义词对
+                if (x in toks_a and y in toks_b) or (x in toks_b and y in toks_a):
+                    log.debug(f"[CTR] 矛盾反义对 ({x},{y}) "
+                              f"a={text_a[:30]!r} b={text_b[:30]!r}")
+                    return True
         return False
 
     def _parse_emb(self, emb):
@@ -1294,7 +1475,7 @@ class MeaMemory:
         lines.append(f"- 关系描述：{tier[2]}")
         lines.append(f"- 当前心情：{mood}")
         if nickname:
-            lines.append(f"- 梅尔对你的昵称：{nickname}")
+            lines.append(f"- 主人对你的昵称：{nickname}")
         lines.append(f"- 相识天数：{days}天，共对话{total_chats}次")
 
         # 语义检索：用当前查询或最近对话内容
@@ -1335,13 +1516,16 @@ class MeaMemory:
                     lines.append(f"你：{chat['content'][:80]}")
 
         result = "\n".join(lines)
-        log.debug(f"[DB] 构建上下文提示词完成，共 {len(lines)} 行，记忆 {len(relevant)} 条")
+        log.debug(f"[CTX] build_context: query={current_query!r} "
+                  f"memories={len(relevant)} exchanges={len(exchanges)} recent_chats={len(recent)} "
+                  f"aff={aff} mood={mood} tier={tier[1]}")
         return result
 
     # ========================
     # 每日维护
     # ========================
     def daily_maintenance(self):
+        t0 = time.perf_counter()
         mood_updated = float(self._get_state("mood_updated", "0"))
         if time.time() - mood_updated > 14400:
             if random.random() < 0.3:
@@ -1353,7 +1537,10 @@ class MeaMemory:
             self._set_state(today_key, "0")
         # 运行生命周期维护
         self.lifecycle_maintenance()
-        log.debug("[DB] 每日维护完成")
+        # 检查总量上限
+        capped = self._enforce_memory_cap(avoid_type=("summary", "milestone"))
+        elapsed = (time.perf_counter() - t0) * 1000
+        log.debug(f"[MAINT] 每日维护完成（容量裁剪={capped}, {elapsed:.1f}ms）")
 
     def mark_today_chatted(self):
         today = datetime.now().strftime("%Y-%m-%d")
@@ -1368,9 +1555,11 @@ class MeaMemory:
         return count
 
     def close(self):
+        cache_size = len(self._emb_cache)
         with self._lock:
             self.conn.close()
-        log.debug("[DB] 数据库连接已关闭")
+        self._emb_cache.clear()
+        log.debug(f"[DB] 数据库连接已关闭（缓存 {cache_size} 条已释放）")
 
     def reset_all(self):
         with self._lock:
@@ -1381,5 +1570,6 @@ class MeaMemory:
             c.execute("DELETE FROM memories")
             c.execute("DELETE FROM conversation_turns")
             self.conn.commit()
+            self._emb_cache.clear()
         self._ensure_defaults()
-        log.debug("[DB] 所有数据已重置")
+        log.debug("[DB] 所有数据已重置，缓存已清空")

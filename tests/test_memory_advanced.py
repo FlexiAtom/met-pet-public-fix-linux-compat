@@ -502,10 +502,10 @@ class TestMemoryUtils(unittest.TestCase):
         self.assertEqual(_content_hash("同一段文字"), _content_hash("同一段文字"))
         self.assertNotEqual(_content_hash("文字A"), _content_hash("文字B"))
 
-    def test_trigram_hash_deterministic(self):
-        from meapet.memory.db import _trigram_hash
-        self.assertEqual(_trigram_hash("abc"), _trigram_hash("abc"))
-        self.assertNotEqual(_trigram_hash("abc"), _trigram_hash("xyz"))
+    def test_token_hash_deterministic(self):
+        from meapet.memory.db import _token_hash
+        self.assertEqual(_token_hash("abc"), _token_hash("abc"))
+        self.assertNotEqual(_token_hash("abc"), _token_hash("xyz"))
 
     def test_compute_embedding_short_text(self):
         from meapet.memory.db import _compute_embedding

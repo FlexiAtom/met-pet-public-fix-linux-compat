@@ -77,6 +77,7 @@ def platform_checklist() -> list:
         ("PyQt5", "窗口界面库", True),
         ("requests", "HTTP 请求库（兼容）", True),
         ("httpx", "异步 HTTP（对话/TTS/识图必需）", True),
+        ("jieba", "中文分词库（记忆/嵌入必需）", True),
     ]
     if PLATFORM["is_windows"]:
         items.append(("pywin32", "Windows 窗口控制（命中区域等）", True))
