@@ -457,17 +457,12 @@ class ScreenWatcher(QThread):
             )
             ratio = 1280 / max(1, image.width)
             if ratio < 1.0:
-                image = image.resize(
-                    (1280, max(1, int(image.height * ratio)))
-                )
-            buffer = io.BytesIO()
-            image.convert("RGB").save(buffer, format="JPEG", quality=72)
-            encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-            attachment = ImageAttachment(
-                media_type="image/jpeg",
-                data=encoded,
-                file_name="screenshot.jpg",
-            )
+                img = img.resize((320, int(img.height * ratio)))
+            buf = io.BytesIO()
+            img.convert('RGB').save(buf, format="JPEG", quality=50)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            log.info(f"[screenshot] encoded base64 length={len(b64)}")
+
             if self._stop:
                 return
 

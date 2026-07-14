@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
@@ -309,9 +310,6 @@ class PetRenderHostMixin:
                 return
             except Exception as exc:
                 safe_print(f"[pet] Live2D 初始化失败，使用 PNG: {exc}")
-                import traceback
-
-                safe_print(traceback.format_exc())
                 self._fallback_to_png(str(exc))
                 return
 
