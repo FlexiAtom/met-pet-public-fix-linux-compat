@@ -565,47 +565,14 @@ class TestWizardCaptureScope(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_screen_observer_collects_application_and_region_scope(self):
+    def test_screen_observer_scope_is_chosen_per_confirmation_not_persisted(self):
         from wizard.page_vision import VisionPage
 
         page = VisionPage()
         self.addCleanup(page.deleteLater)
-        page.capture_scope_combo.setCurrentIndex(
-            page.capture_scope_combo.findData("application")
-        )
-        page.capture_application_input.setText("Visual Studio Code")
-
-        application = page.collect("ollama", {})["watcher"]["capture"]
-        self.assertEqual(
-            application,
-            {
-                "scope": "application",
-                "region": None,
-                "application": "Visual Studio Code",
-            },
-        )
-
-        page.capture_scope_combo.setCurrentIndex(
-            page.capture_scope_combo.findData("region")
-        )
-        page.capture_x.setValue(-120)
-        page.capture_y.setValue(40)
-        page.capture_width.setValue(1280)
-        page.capture_height.setValue(720)
-        region = page.collect("ollama", {})["watcher"]["capture"]
-        self.assertEqual(
-            region,
-            {
-                "scope": "region",
-                "region": {
-                    "x": -120,
-                    "y": 40,
-                    "width": 1280,
-                    "height": 720,
-                },
-                "application": "",
-            },
-        )
+        watcher = page.collect("ollama", {})["watcher"]
+        self.assertNotIn("capture", watcher)
+        self.assertFalse(hasattr(page, "capture_scope_combo"))
 
     def test_vision_modes_are_explicit_and_inherit_never_saves_relay_backend(self):
         from wizard.page_vision import VisionPage
@@ -645,7 +612,6 @@ class TestWizardCaptureScope(unittest.TestCase):
 
         page = VisionPage()
         self.addCleanup(page.deleteLater)
-        page.advanced_toggle.setChecked(True)
         page.apply_config(
             {
                 "mode": "inherit",

@@ -1246,24 +1246,41 @@ class UiRefactorTests(unittest.TestCase):
         )
         self.assertEqual(dialog.approval.application, "")
 
+    def test_cloud_capture_consent_includes_scope_and_uses_five_seconds(self) -> None:
+        from meapet.desktop.dialogs import CloudCaptureScopeConsentDialog
+
+        dialog = self._track(CloudCaptureScopeConsentDialog())
+        self.assertEqual(dialog.remaining_seconds, 5)
+        self.assertEqual(dialog.scope_combo.currentData(), "full_screen")
+        self.assertIn("云端", dialog.windowTitle())
+
     def test_watcher_cloud_confirmation_uses_themed_safe_dialog(self) -> None:
+        from meapet.desktop.dialogs import CaptureApproval
         from meapet.desktop.watch_ctrl import PetWatcherMixin
 
         pet = type("WatcherHost", (PetWatcherMixin,), {})()
         pet.config = {"watcher": {"allow_cloud": True}}
         pet._is_cloud_vision = lambda: True
         pet._show_bubble = unittest.mock.Mock()
+        pet._watcher = unittest.mock.Mock()
+        approval = CaptureApproval(
+            "region",
+            {"x": 10, "y": 20, "width": 800, "height": 600},
+            "",
+        )
 
         with patch(
-            "meapet.desktop.watch_ctrl.confirm_cloud_vision",
-            return_value=False,
+            "meapet.desktop.watch_ctrl.confirm_cloud_capture_scope",
+            return_value=approval,
         ) as confirm, patch(
             "PyQt5.QtWidgets.QMessageBox.question",
             side_effect=AssertionError("不应调用系统确认框"),
         ):
-            self.assertFalse(pet._confirm_cloud_capture())
+            self.assertTrue(pet._confirm_cloud_capture())
         confirm.assert_called_once()
         self.assertEqual(confirm.call_args.kwargs["timeout_seconds"], 5)
+        self.assertEqual(pet._watcher.capture_scope, "region")
+        self.assertEqual(pet._watcher.capture_region, approval.region)
 
 
 
@@ -1488,7 +1505,7 @@ class UiRefactorTests(unittest.TestCase):
         self.assertFalse(bubble.isVisible())
         self.assertEqual(dismissed, [True])
 
-    def test_loading_disabled_vision_config_keeps_advanced_options_collapsed(self) -> None:
+    def test_loading_disabled_vision_config_keeps_mode_options_collapsed(self) -> None:
         from wizard.page_vision import VisionPage
 
         page = self._track(VisionPage())
@@ -1497,7 +1514,6 @@ class UiRefactorTests(unittest.TestCase):
         page.apply_config({}, {"enabled": False})
         QApplication.processEvents()
 
-        self.assertFalse(page.advanced_toggle.isChecked())
         self.assertTrue(page.advanced_frame.isHidden())
         for widget in (
             page.model_label,
