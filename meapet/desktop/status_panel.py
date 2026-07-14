@@ -6,8 +6,10 @@ import os
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QProgressBar, QFrame, QPushButton,
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPixmap, QPainter, QColor
+from PyQt5.QtCore import Qt, QTimer, QRectF
+from PyQt5.QtGui import (
+    QPixmap, QPainter, QPainterPath, QPen, QColor, QLinearGradient,
+)
 from meapet.desktop import status_language
 from meapet.desktop.icons import standard_icon
 from meapet.desktop.theme import STATUS_PANEL_STYLE
@@ -169,18 +171,33 @@ class StatusPanel(QWidget):
         self.setLayout(main_layout)
 
     def paintEvent(self, event):
-        """自定义绘制：先画背景图，再画半透明整体暗化层（不覆盖文字）"""
+        """圆角裁切背景图，覆一层竖向墨纱，最后描内亮环（双环装置）。"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
+        radius = 20
+        clip = QPainterPath()
+        clip.addRoundedRect(
+            QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+            radius,
+            radius,
+        )
+        painter.setClipPath(clip)
+
         if self.bg_pix:
-            # 绘制背景图
             painter.drawPixmap(0, 0, self.bg_pix)
-            # 【修改】只保留整体暗化，去掉底部渐变遮罩
-            painter.fillRect(0, 0, self.width(), self.height(),
-                             QColor(0, 0, 0, 70))  # 略微加深以保证文字可读
+            veil = QLinearGradient(0, 0, 0, self.height())
+            veil.setColorAt(0.00, QColor(22, 17, 31, 150))
+            veil.setColorAt(0.45, QColor(22, 17, 31, 205))
+            veil.setColorAt(1.00, QColor(16, 12, 24, 238))
+            painter.fillRect(self.rect(), veil)
         else:
-            painter.fillRect(self.rect(), QColor(20, 20, 40, 230))
+            painter.fillRect(self.rect(), QColor(22, 17, 31, 238))
+
+        painter.setClipping(False)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor("#7C69A0"), 1))
+        painter.drawPath(clip)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.RightButton:

@@ -154,7 +154,7 @@ class ScreenRegionSelector(QDialog):
         selection = self._selection_rect().intersected(self.rect())
 
         dim = QColor(PALETTE["canvas"])
-        dim.setAlpha(178)
+        dim.setAlpha(190)
         if selection.isEmpty():
             painter.fillRect(self.rect(), dim)
         else:
@@ -181,8 +181,11 @@ class ScreenRegionSelector(QDialog):
                 ),
                 dim,
             )
+            # 双环：外圈焦点色压边，内圈樱色提示这是“正在确认”的选区。
             painter.setPen(QPen(QColor(PALETTE["focus"]), 2))
             painter.drawRect(selection.adjusted(1, 1, -1, -1))
+            painter.setPen(QPen(QColor(PALETTE["primary"]), 1))
+            painter.drawRect(selection.adjusted(3, 3, -3, -3))
 
         instruction = "按住鼠标左键拖选区域 · Esc / 右键取消"
         if not selection.isEmpty():
@@ -190,10 +193,10 @@ class ScreenRegionSelector(QDialog):
         box_width = min(max(320, painter.fontMetrics().horizontalAdvance(instruction) + 32), max(320, self.width() - 32))
         box = QRect(max(16, (self.width() - box_width) // 2), 20, box_width, 44)
         background = QColor(PALETTE["surface"])
-        background.setAlpha(235)
+        background.setAlpha(244)
         painter.setPen(QPen(QColor(PALETTE["border_strong"]), 1))
         painter.setBrush(background)
-        painter.drawRoundedRect(box, 10, 10)
+        painter.drawRoundedRect(box, 14, 14)
         painter.setPen(QColor(PALETTE["text_primary"]))
         painter.drawText(box.adjusted(12, 0, -12, 0), Qt.AlignCenter, instruction)
 

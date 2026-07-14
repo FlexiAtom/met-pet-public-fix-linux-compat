@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 from unittest.mock import patch
 
@@ -101,6 +102,67 @@ class UiRefactorTests(unittest.TestCase):
                     contrast_ratio(PALETTE[foreground], PALETTE[background]),
                     minimum,
                 )
+
+    def test_interactive_borders_meet_ui_graphic_contrast(self) -> None:
+        from meapet.ui_theme import PALETTE, contrast_ratio
+
+        required_pairs = (
+            ("border_strong", "surface", 3.0),
+            ("border_strong", "surface_input", 3.0),
+            ("border_strong", "surface_elevated", 3.0),
+            ("focus", "surface", 3.0),
+            ("focus", "canvas", 3.0),
+        )
+        for foreground, background, minimum in required_pairs:
+            with self.subTest(foreground=foreground, background=background):
+                self.assertGreaterEqual(
+                    contrast_ratio(PALETTE[foreground], PALETTE[background]),
+                    minimum,
+                )
+
+    def test_input_surface_reads_as_recessed_well(self) -> None:
+        from meapet.ui_theme import PALETTE, _relative_luminance
+
+        self.assertLess(
+            _relative_luminance(PALETTE["surface_input"]),
+            _relative_luminance(PALETTE["canvas"]),
+        )
+
+    def test_wizard_check_controls_have_visible_focus_ring(self) -> None:
+        from wizard.styles import WIZARD_STYLESHEET
+
+        focus_rules = re.findall(
+            r"QCheckBox:focus[^{]*\{([^}]*)\}",
+            WIZARD_STYLESHEET,
+        )
+        self.assertTrue(focus_rules)
+        self.assertTrue(
+            any("2px solid" in rule for rule in focus_rules),
+            "QCheckBox/QRadioButton 聚焦时必须出现 2px 可见焦点环，而不是只变字色",
+        )
+
+    def test_live_refreshing_surfaces_avoid_pixel_effects(self) -> None:
+        """光标闪烁/倒计时/进度刷新会让 QGraphicsEffect 反复整容器重模糊，导致卡顿。"""
+        from meapet.desktop.dialogs import CloudVisionConsentDialog
+        from meapet.desktop.splash import StartupSplash
+        from meapet.desktop.status_panel import StatusPanel
+        from wizard.app import SetupWizard
+
+        wizard = self._track(SetupWizard())
+        self.assertIsNone(wizard.container.graphicsEffect())
+
+        splash = self._track(StartupSplash())
+        self.assertIsNone(splash.card.graphicsEffect())
+
+        panel = self._track(StatusPanel(_MemoryStub()))
+        for card in panel.findChildren(QFrame):
+            if card.objectName() == "StatusCard":
+                self.assertIsNone(card.graphicsEffect())
+
+        consent = self._track(CloudVisionConsentDialog(timeout_seconds=5))
+        for card in consent.findChildren(QFrame):
+            if card.objectName() == "CloudConsentCard":
+                self.assertIsNone(card.graphicsEffect())
 
     def test_theme_helpers_validate_color_inputs(self) -> None:
         from meapet.ui_theme import contrast_ratio, rgba
@@ -2221,13 +2283,23 @@ class UiRefactorTests(unittest.TestCase):
 
     def test_bubble_mood_accent_changes_border_color(self) -> None:
         from meapet.desktop.widgets import DialogueBox, MOOD_BORDER_COLORS
+        from meapet.ui_theme import PALETTE
 
         bubble = self._track(DialogueBox())
         bubble.show_text("今天也要加油喵", duration_ms=0, mood="happy")
         self.assertEqual(bubble._container.mood, "happy")
+        # 情绪描边色跟随语义令牌，而不是写死的裸色值。
         self.assertEqual(
             MOOD_BORDER_COLORS["happy"].lower(),
-            "#ffb36b",
+            PALETTE["secondary"].lower(),
+        )
+        self.assertEqual(
+            MOOD_BORDER_COLORS["neutral"].lower(),
+            PALETTE["primary"].lower(),
+        )
+        self.assertNotEqual(
+            MOOD_BORDER_COLORS["happy"].lower(),
+            MOOD_BORDER_COLORS["neutral"].lower(),
         )
         bubble.set_mood("annoyed")
         self.assertEqual(bubble._container.mood, "annoyed")

@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap
 from PyQt5.QtWidgets import QShortcut
 
@@ -619,14 +619,16 @@ class SetupWizard(QWidget):
 
     @staticmethod
     def _build_missing_icon() -> QIcon:
-        """绘制独立红点图标，避免用文字字符模拟状态。"""
+        """带墨环的红点：在选中/未选中标签底上都保持清晰边界。"""
         pixmap = QPixmap(12, 12)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(11, 7, 19))
+        painter.drawEllipse(QRectF(0.5, 0.5, 11.0, 11.0))
         painter.setBrush(QColor(PALETTE["danger"]))
-        painter.drawEllipse(2, 2, 8, 8)
+        painter.drawEllipse(QRectF(2.0, 2.0, 8.0, 8.0))
         painter.end()
         return QIcon(pixmap)
 

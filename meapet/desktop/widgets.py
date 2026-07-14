@@ -54,10 +54,10 @@ DIALOGUE_MIN_WIDTH = 164
 DIALOGUE_MAX_WIDTH = 420
 DIALOGUE_MAX_HEIGHT = 240
 DIALOGUE_TAIL_SIZE = 16
-DIALOGUE_TAIL_BASE = 28
+DIALOGUE_TAIL_BASE = 24
 DIALOGUE_TAIL_DEPTH = 26
 DIALOGUE_TAIL_REACH = 22
-DIALOGUE_RADIUS = 20
+DIALOGUE_RADIUS = 22
 DIALOGUE_HORIZONTAL_PADDING = 18
 DIALOGUE_VERTICAL_PADDING = 14
 DIALOGUE_STACK_LIMIT = 3
@@ -70,16 +70,25 @@ DIALOGUE_FADE_FRAME_MS = 25
 
 # 情绪只影响描边色，必须配合角色表情/文案，不作为唯一语义。
 MOOD_BORDER_COLORS = {
-    "happy": "#FFB36B",
-    "annoyed": "#FF8892",
-    "sad": "#8FA4D6",
-    "shy": "#FF91B4",
-    "curious": "#A69BFF",
-    "surprised": "#F4CC75",
-    "melancholy": "#9FA3BC",
-    "talking": "#FF91B4",
-    "neutral": "#FF91B4",
+    "happy": "#FFC48F",
+    "annoyed": "#FF8FA0",
+    "sad": "#8FA8DE",
+    "shy": "#FF9DBE",
+    "curious": "#B7A6FF",
+    "surprised": "#FFD37A",
+    "melancholy": "#A79BB8",
+    "talking": "#FF9DBE",
+    "neutral": "#FF9DBE",
 }
+
+# 双环浮层（装置 C）：外墨环压亮壁纸，内樱环提亮暗壁纸。
+BUBBLE_INK_RING_COLOR = "#0B0713"
+BUBBLE_INK_RING_WIDTH = 2.6
+BUBBLE_MOOD_RING_WIDTH = 1.6
+BUBBLE_MOOD_RING_ALPHA = 235
+# 双叠墨影：无 box-shadow 时的伪模糊投影，(纵向偏移, alpha) 由外到内。
+# 流式回复时气泡每个增量都会整帧重绘，层数直接进每帧成本，保持最少。
+BUBBLE_SHADOW_LAYERS = ((3, 56), (2, 84))
 
 
 def _reduced_motion_enabled() -> bool:
@@ -179,7 +188,8 @@ class SpeechBubbleFrame(QFrame):
         return self.tail_anchor >= self.width() / 2
 
     def _body_rect(self) -> QRectF:
-        edge = 1.5
+        # 给外墨环留出向外溢出的一半线宽，避免描边被窗口边裁掉。
+        edge = 2.0
         half_tail = DIALOGUE_TAIL_SIZE / 2
         width = max(0.0, self.width() - 2 * edge)
         height = max(0.0, self.height() - 2 * edge)
@@ -324,20 +334,27 @@ class SpeechBubbleFrame(QFrame):
         painter.setRenderHint(QPainter.Antialiasing, True)
         path = self._bubble_path()
 
-        shadow = QColor(0, 0, 0, 82)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(shadow)
-        painter.drawPath(path.translated(0, 2))
+        for offset, alpha in BUBBLE_SHADOW_LAYERS:
+            painter.setBrush(QColor(6, 4, 12, alpha))
+            painter.drawPath(path.translated(0, offset))
 
         body = self._body_rect()
-        gradient = QLinearGradient(body.topLeft(), body.bottomRight())
-        gradient.setColorAt(0.0, QColor(PALETTE["surface_elevated"]).lighter(108))
-        gradient.setColorAt(1.0, QColor(PALETTE["surface"]))
-        accent = MOOD_BORDER_COLORS.get(getattr(self, "mood", "neutral"), PALETTE["primary"])
-        border = QColor(accent)
-        border.setAlpha(210)
-        painter.setPen(QPen(border, 1.5))
+        gradient = QLinearGradient(body.topLeft(), body.bottomLeft())
+        gradient.setColorAt(0.0, QColor(PALETTE["surface_elevated"]))
+        gradient.setColorAt(0.42, QColor("#251C33"))
+        gradient.setColorAt(1.0, QColor("#1A1426"))
+        painter.setPen(
+            QPen(QColor(BUBBLE_INK_RING_COLOR), BUBBLE_INK_RING_WIDTH)
+        )
         painter.setBrush(gradient)
+        painter.drawPath(path)
+
+        accent = MOOD_BORDER_COLORS.get(getattr(self, "mood", "neutral"), PALETTE["primary"])
+        mood_ring = QColor(accent)
+        mood_ring.setAlpha(BUBBLE_MOOD_RING_ALPHA)
+        painter.setPen(QPen(mood_ring, BUBBLE_MOOD_RING_WIDTH))
+        painter.setBrush(Qt.NoBrush)
         painter.drawPath(path)
 
 
