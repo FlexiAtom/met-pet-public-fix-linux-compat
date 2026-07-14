@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Dict, List, Tuple
 from meapet.log import get_color_logger
 from meapet.utils import debug_enabled, redact_mapping, redact_text
 
+from meapet.ollama import build_ollama_messages
+
 log = get_color_logger("chat")
 
 if TYPE_CHECKING:
@@ -186,7 +188,29 @@ class ChatEngine:
             await self._direct_adapter.close()
 
     def _prepare_direct_turn(self, message: str) -> List[Dict[str, str]]:
-        """追加当前用户消息，并生成仅由 MeaPet 管理的角色/记忆上下文。"""
+        if self.backend == "ollama":
+            # Ollama 专用路径
+            with self._history_lock:
+                self.history.append({"role": "user", "content": str(message or "")})
+                if len(self.history) > 16:
+                    saved_system = self.history[0]
+                    self.history = [saved_system] + self.history[-14:]
+            memory_context = ""
+            if self.memory:
+                memory_context = self.memory.build_context_prompt(current_query=message)
+            from meapet.ollama import build_ollama_messages
+            filtered_history = [msg for msg in self.history if msg.get("role") != "system"]
+            messages = build_ollama_messages(
+                user_text=message,
+                history=tuple(filtered_history),
+                memory_context=memory_context,
+                frontend_context=None,
+            )
+            with self._history_lock:
+                self.history[0] = {"role": "system", "content": messages[0]["content"]}
+            return messages
+
+        # 非 Ollama 后端（原有逻辑）
         with self._history_lock:
             self.history.append({"role": "user", "content": str(message or "")})
             if len(self.history) > 16:
@@ -201,6 +225,8 @@ class ChatEngine:
                 system += "\n\n" + context
         snapshot[0] = {"role": "system", "content": system}
         return snapshot
+
+
 
     def _rollback_direct_turn(self, message: str) -> None:
         with self._history_lock:

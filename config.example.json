@@ -51,9 +51,9 @@
   "vision": {
     "enabled": false,
     "mode": "disabled",
-    "main_model_supports_images": false,
+    "main_model_supports_images": true,
     "backend": "",
-    "model": "qwen3.5:4b",
+    "model": "minicpm-v",
     "host": "",
     "api_key": "",
     "api_base": ""
@@ -127,10 +127,10 @@
     }
   },
   "bubble_duration_ms": {
-    "default": 5000,
-    "reply": 8000,
-    "watch": 7000,
-    "interaction": 3000,
+    "default": 100000,
+    "reply": 100000,
+    "watch": 100000,
+    "interaction": 100000,
     "thinking": 0
   }
 }

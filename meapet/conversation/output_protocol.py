@@ -40,9 +40,20 @@ class ParseResult:
     done: bool
     source_format: str
 
-    def requires_repair(self, *, tts_enabled: bool) -> bool:
+    def requires_repair(self, *, tts_enabled: bool, backend: str = "") -> bool:
         if not self.segments:
             return True
+
+        # Ollama 后端：只要求 display_text
+        if str(backend or "").strip().lower() == "ollama":
+            missing = [
+                field
+                for segment in self.segments
+                for field in segment.missing_required_fields
+            ]
+            return "display_text" in missing
+
+        # 非 Ollama 后端：原有逻辑
         missing = [
             field
             for segment in self.segments
@@ -243,10 +254,37 @@ def _parse_plain(source: str) -> ParseResult:
         "plain",
     )
 
+def _parse_ollama(source: str) -> ParseResult:
+    """Ollama 专用宽松解析：只提取 display_text，不要求 voice/meta 字段。"""
+    display = source.strip()
+    if not display:
+        return ParseResult((), (ProtocolIssue("empty_output"),), True, "ollama")
+    segment = ReplySegment(
+        display_text=display,
+        voice_text="",
+        voice_language="",
+        mood="neutral",
+        tts_style="",
+        index=0,
+        provided_fields=frozenset({"display_text"}),
+    )
+    return ParseResult(
+        (segment,),
+        (),  # 不产生任何 issue
+        True,
+        "ollama",
+    )
 
-def parse_reply_output(source: object) -> ParseResult:
+
+def parse_reply_output(source: object, backend: str = "") -> ParseResult:
     """宽容解析完整回复，同时保留是否需要修复的验证信息。"""
     text = str(source or "").strip()
+
+    # Ollama 后端：使用宽松解析
+    if str(backend or "").strip().lower() == "ollama":
+        return _parse_ollama(text)
+
+    # 非 Ollama 后端：原有逻辑
     if _SEGMENT_START_RE.search(text):
         return _parse_meapet(text)
     if _TTS_RE.search(text) or (_MOOD_RE.match(text) and "\n" in text):
@@ -321,12 +359,12 @@ class MeaPetOutputStreamParser:
 
         return tuple(events)
 
-    def close(self, *, tts_enabled: bool) -> ParseResult:
+    def close(self, *, tts_enabled: bool, backend: str = "") -> ParseResult:
         self._closed = True
-        result = parse_reply_output(self._raw)
-        # 参数属于调用契约：此处强制计算一次，尽早暴露类型/验证错误。
-        result.requires_repair(tts_enabled=bool(tts_enabled))
+        result = parse_reply_output(self._raw, backend=backend)
+        result.requires_repair(tts_enabled=bool(tts_enabled), backend=backend)
         return result
+
 
 
 def collect_text_deltas(events: Iterable[object], index: int) -> str:

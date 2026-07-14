@@ -9,6 +9,7 @@
 设计参考：Sakura（Rvosy/sakura）的主动搭话 prompt 架构
 """
 import io
+import sys  # 新增
 import traceback
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -230,6 +231,11 @@ class ScreenWatcher(QThread):
                  capture_region: dict | None = None,
                  capture_application: str = ""):
         super().__init__()
+        print(f"[DEBUG screen] __init__ called: host={ollama_host}, vision_model={vision_model}, chat_model={chat_model}, "
+              f"idle_minutes={idle_minutes}, backend={backend}, api_base={redact_text(api_base)}, "
+              f"api_key={'***' if api_key else ''}, mimo_model={mimo_model}, mode={mode}, "
+              f"capture_scope={capture_scope}, capture_region={capture_region}, "
+              f"capture_application={capture_application}", file=sys.stderr, flush=True)
         self.host = ollama_host
         self.vision_model = vision_model
         self.chat_model = chat_model
@@ -251,6 +257,7 @@ class ScreenWatcher(QThread):
         self._reply_adapter = None
         self._frontend_context = {}
         self._tts_enabled = False
+        print(f"[DEBUG screen] __init__ done: mode={self.mode}, backend={self.backend}", file=sys.stderr, flush=True)
 
     def configure_reply(
         self,
@@ -260,40 +267,56 @@ class ScreenWatcher(QThread):
         tts_enabled: bool = False,
     ) -> None:
         """在主线程为本轮截图写入回复后端与只读上下文快照。"""
+        print(f"[DEBUG screen] configure_reply called: adapter={type(adapter).__name__}, "
+              f"frontend_context keys={list(frontend_context.keys()) if frontend_context else []}, "
+              f"tts_enabled={tts_enabled}", file=sys.stderr, flush=True)
         self._reply_adapter = adapter
         self._frontend_context = dict(frontend_context or {})
         self._tts_enabled = bool(tts_enabled)
+        print(f"[DEBUG screen] configure_reply done: _reply_adapter set, _frontend_context size={len(self._frontend_context)}", file=sys.stderr, flush=True)
 
     def set_idle_minutes(self, minutes: float):
         """外部更新冷落时长"""
+        print(f"[DEBUG screen] set_idle_minutes called: minutes={minutes}", file=sys.stderr, flush=True)
         self.idle_minutes = minutes
+        print(f"[DEBUG screen] set_idle_minutes done: idle_minutes={self.idle_minutes}", file=sys.stderr, flush=True)
 
     def stop(self, timeout_ms: int = 3000) -> bool:
         """请求线程停止，并报告是否已在超时时间内退出。"""
+        print(f"[DEBUG screen] stop called: timeout_ms={timeout_ms}, isRunning={self.isRunning()}", file=sys.stderr, flush=True)
         self._stop = True
         if self.isRunning():
-            return bool(self.wait(timeout_ms))
+            result = bool(self.wait(timeout_ms))
+            print(f"[DEBUG screen] stop waited, result={result}", file=sys.stderr, flush=True)
+            return result
+        print(f"[DEBUG screen] stop not running, returning True", file=sys.stderr, flush=True)
         return True
 
     def prepare_start(self) -> bool:
         """在重新启动前复位停止标志；仍在运行时拒绝启动。"""
+        print(f"[DEBUG screen] prepare_start called: isRunning={self.isRunning()}", file=sys.stderr, flush=True)
         if self.isRunning():
+            print(f"[DEBUG screen] prepare_start: refusing because still running", file=sys.stderr, flush=True)
             return False
         self._stop = False
+        print(f"[DEBUG screen] prepare_start: reset _stop=False, returning True", file=sys.stderr, flush=True)
         return True
 
     def _capture_image(self):
         """与手动/MCP 路径复用同一个范围截图后端。"""
-        return capture_screen_image(
+        print(f"[DEBUG screen] _capture_image called: scope={self.capture_scope}, region={self.capture_region}, "
+              f"application={self.capture_application}", file=sys.stderr, flush=True)
+        img = capture_screen_image(
             scope=self.capture_scope,
             region=self.capture_region,
             application=self.capture_application,
         ).image
-
-
+        print(f"[DEBUG screen] _capture_image got image: size={img.size}, mode={img.mode}", file=sys.stderr, flush=True)
+        return img
 
     @staticmethod
     def _mimo_extract_text(message: dict) -> str:
+        print(f"[DEBUG screen] _mimo_extract_text called: message keys={list(message.keys()) if message else []}", file=sys.stderr, flush=True)
         content = (message or {}).get("content") or ""
         if isinstance(content, list):
             parts = []
@@ -305,30 +328,42 @@ class ScreenWatcher(QThread):
             content = "".join(parts)
         content = str(content).strip()
         if content:
+            print(f"[DEBUG screen] _mimo_extract_text: found content length={len(content)}", file=sys.stderr, flush=True)
             return content
         # thinking 开启且 content 空时，弱兜底从 reasoning 取尾
         reasoning = ((message or {}).get("reasoning_content") or "").strip()
         if not reasoning:
+            print(f"[DEBUG screen] _mimo_extract_text: no content nor reasoning, returning empty", file=sys.stderr, flush=True)
             return ""
         for sep in ("最终答案", "最终回复", "Final answer", "final answer", "回复：", "回复:"):
             if sep in reasoning:
                 tail = reasoning.split(sep)[-1].strip(" :：\n")
                 if tail:
+                    print(f"[DEBUG screen] _mimo_extract_text: extracted tail from reasoning, length={len(tail)}", file=sys.stderr, flush=True)
                     return tail[:800]
         lines = [ln.strip() for ln in reasoning.splitlines() if ln.strip()]
-        return "\n".join(lines[-6:])[:800] if lines else ""
+        result = "\n".join(lines[-6:])[:800] if lines else ""
+        print(f"[DEBUG screen] _mimo_extract_text: extracted from reasoning lines, length={len(result)}", file=sys.stderr, flush=True)
+        return result
 
     def _http_post(self, url: str, *, headers=None, json=None, timeout=90):
         """所有网络统一走 httpx 异步客户端（在后台 loop 上执行）。"""
+        print(f"[DEBUG screen] _http_post called: url={redact_text(url)}, timeout={timeout}, "
+              f"json_keys={list(json.keys()) if json else []}", file=sys.stderr, flush=True)
         from meapet.async_runtime import run
         from meapet.http_async import post_json
-        return run(
+        result = run(
             post_json(url, headers=headers or {}, json=json, timeout=float(timeout)),
             timeout=float(timeout) + 30,
         )
+        print(f"[DEBUG screen] _http_post response: type={type(result).__name__}, "
+              f"status={getattr(result, 'status_code', 'N/A')}", file=sys.stderr, flush=True)
+        return result
 
     def _request_visual_observation(self, image_base64: str) -> str:
         """仅 relay 模式调用：独立视觉模型只产生观察 JSON。"""
+        print(f"[DEBUG screen] _request_visual_observation called: backend={self.backend}, "
+              f"image_base64_len={len(image_base64)}", file=sys.stderr, flush=True)
         if self.backend == "mimo":
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -336,6 +371,7 @@ class ScreenWatcher(QThread):
             }
             if self.api_key:
                 headers["api-key"] = self.api_key
+            print(f"[DEBUG screen] _request_visual_observation: calling MiMo at {self.api_base}/chat/completions", file=sys.stderr, flush=True)
             response = self._http_post(
                 f"{self.api_base}/chat/completions",
                 headers=headers,
@@ -375,8 +411,11 @@ class ScreenWatcher(QThread):
                 (response.json().get("choices") or [{}])[0].get("message")
                 or {}
             )
-            return self._mimo_extract_text(message)
+            text = self._mimo_extract_text(message)
+            print(f"[DEBUG screen] _request_visual_observation: MiMo response length={len(text)}", file=sys.stderr, flush=True)
+            return text
 
+        print(f"[DEBUG screen] _request_visual_observation: calling Ollama at {self.host}/api/generate", file=sys.stderr, flush=True)
         response = self._http_post(
             f"{self.host}/api/generate",
             json={
@@ -390,12 +429,17 @@ class ScreenWatcher(QThread):
         )
         if response.status_code != 200:
             raise RuntimeError(f"vision relay HTTP {response.status_code}")
-        return str(response.json().get("response") or "").strip()
+        result = str(response.json().get("response") or "").strip()
+        print(f"[DEBUG screen] _request_visual_observation: Ollama response length={len(result)}", file=sys.stderr, flush=True)
+        return result
 
     def _emit_vision_reply(self, reply) -> None:
+        print(f"[DEBUG screen] _emit_vision_reply called: reply type={type(reply).__name__}, "
+              f"silent={getattr(reply, 'silent', None)}, segments count={len(getattr(reply, 'segments', ()))}", file=sys.stderr, flush=True)
         if reply.silent:
             self.progress.emit(STAGE_SILENT)
             self.silent.emit()
+            print(f"[DEBUG screen] _emit_vision_reply: emitted silent signal", file=sys.stderr, flush=True)
             return
         segments = tuple(reply.segments)
         if not segments:
@@ -416,10 +460,10 @@ class ScreenWatcher(QThread):
                 if segment.voice_text
             ).strip()
         else:
-            # 旧 watcher 呈现一次只播放一条音频；多语段不强行错配。
             self.last_voice_language = ""
             self.last_voice_text = ""
             log.warning("[watcher] 多语段回复跳过合并语音")
+            print(f"[DEBUG screen] _emit_vision_reply: multiple languages, cleared voice fields", file=sys.stderr, flush=True)
         self.last_tts_style = " ".join(
             segment.tts_style
             for segment in segments
@@ -428,78 +472,148 @@ class ScreenWatcher(QThread):
         mood = segments[0].mood or "neutral"
         self.progress.emit(STAGE_ROAST)
         self.result_ready.emit(display, mood)
+        print(f"[DEBUG screen] _emit_vision_reply: emitted result_ready, display_len={len(display)}, mood={mood}", file=sys.stderr, flush=True)
 
     def run(self):
         """截图后按 inherit/relay 路由，最终统一交给主回复后端。"""
+        print(f"[DEBUG screen] run started: mode={self.mode}, backend={self.backend}, "
+              f"_reply_adapter={self._reply_adapter is not None}, _stop={self._stop}", file=sys.stderr, flush=True)
         try:
             import base64
 
             from meapet.agent.base import ImageAttachment
             from meapet.async_runtime import run as run_async
-            from meapet.vision.coordinator import VisionCoordinator
+            from meapet.vision.coordinator import VisionCoordinator, SILENT_DISPLAY_TOKEN, VisionReply
             from meapet.vision.observation import parse_vision_observation
+            from meapet.conversation.types import ReplySegment
 
             self.last_voice_text = ""
             self.last_voice_language = ""
             self.last_tts_style = ""
             if self.mode == "disabled":
+                print(f"[DEBUG screen] run: mode disabled, emitting silent", file=sys.stderr, flush=True)
                 self.silent.emit()
                 return
             if self._reply_adapter is None:
                 raise RuntimeError("主回复后端未就绪")
             if self._stop:
+                print(f"[DEBUG screen] run: _stop flag set, exiting early", file=sys.stderr, flush=True)
                 return
 
             self.progress.emit(STAGE_CAPTURE)
+            print(f"[DEBUG screen] run: capturing image...", file=sys.stderr, flush=True)
             image = self._capture_image()
             log.info(
                 f"[screenshot] captured in memory: size={image.size}, mode={image.mode}"
             )
             ratio = 1280 / max(1, image.width)
             if ratio < 1.0:
-                img = img.resize((320, int(img.height * ratio)))
+                image = image.resize((320, int(image.height * ratio)))
+                print(f"[DEBUG screen] run: resized image to width=320, height={image.height}", file=sys.stderr, flush=True)
             buf = io.BytesIO()
-            img.convert('RGB').save(buf, format="JPEG", quality=50)
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            log.info(f"[screenshot] encoded base64 length={len(b64)}")
+            image.convert('RGB').save(buf, format="JPEG", quality=50)
+            encoded = base64.b64encode(buf.getvalue()).decode()
+            log.info(f"[screenshot] encoded base64 length={len(encoded)}")
+            print(f"[DEBUG screen] run: encoded base64 length={len(encoded)}", file=sys.stderr, flush=True)
 
             if self._stop:
+                print(f"[DEBUG screen] run: _stop set after capture, exiting", file=sys.stderr, flush=True)
                 return
 
-            coordinator = VisionCoordinator(self._reply_adapter)
             self.progress.emit(STAGE_SUMMARY)
+
             if self.mode == "inherit":
-                operation = coordinator.inherit(
-                    attachment,
-                    idle_minutes=self.idle_minutes,
-                    frontend_context=self._frontend_context,
-                    tts_enabled=self._tts_enabled,
+                print(f"[DEBUG screen] run: entering inherit mode", file=sys.stderr, flush=True)
+                # 构造 ImageAttachment
+                attachment = ImageAttachment(
+                    media_type="image/jpeg",
+                    data=encoded,
                 )
+                if self.backend == "ollama":
+                    print(f"[DEBUG screen] run: using Ollama inherit path", file=sys.stderr, flush=True)
+                    from meapet.ollama.vision import handle_ollama_vision_attachment
+                    print(f"[DEBUG screen] run: calling handle_ollama_vision_attachment...", file=sys.stderr, flush=True)
+                    reply_text = run_async(
+                        handle_ollama_vision_attachment(
+                            attachment,
+                            idle_minutes=self.idle_minutes,
+                            frontend_context=self._frontend_context,
+                            tts_enabled=self._tts_enabled,
+                            reply_adapter=self._reply_adapter,
+                        ),
+                        timeout=660,
+                    )
+                    print(f"[DEBUG screen] run: handle_ollama_vision_attachment returned: len={len(reply_text)}, "
+                          f"silent_token={reply_text == SILENT_DISPLAY_TOKEN}", file=sys.stderr, flush=True)
+                    if reply_text == SILENT_DISPLAY_TOKEN:
+                        vision_reply = VisionReply((), True)
+                        print(f"[DEBUG screen] run: constructed silent VisionReply", file=sys.stderr, flush=True)
+                    else:
+                        segment = ReplySegment(
+                            display_text=reply_text,
+                            voice_text="",
+                            voice_language="",
+                            mood="neutral",
+                            tts_style="",
+                            index=0,
+                            provided_fields=frozenset({"display_text"}),
+                        )
+                        vision_reply = VisionReply((segment,), False)
+                        print(f"[DEBUG screen] run: constructed speaking VisionReply", file=sys.stderr, flush=True)
+                else:
+                    print(f"[DEBUG screen] run: using non-Ollama inherit path", file=sys.stderr, flush=True)
+                    coordinator = VisionCoordinator(self._reply_adapter)
+                    print(f"[DEBUG screen] run: calling coordinator.inherit...", file=sys.stderr, flush=True)
+                    vision_reply = run_async(
+                        coordinator.inherit(
+                            attachment,
+                            idle_minutes=self.idle_minutes,
+                            frontend_context=self._frontend_context,
+                            tts_enabled=self._tts_enabled,
+                        ),
+                        timeout=660,
+                    )
+                    print(f"[DEBUG screen] run: coordinator.inherit returned, silent={vision_reply.silent}", file=sys.stderr, flush=True)
             elif self.mode == "relay":
+                print(f"[DEBUG screen] run: entering relay mode", file=sys.stderr, flush=True)
+                print(f"[DEBUG screen] run: calling _request_visual_observation...", file=sys.stderr, flush=True)
                 raw_observation = self._request_visual_observation(encoded)
+                print(f"[DEBUG screen] run: raw_observation length={len(raw_observation)}", file=sys.stderr, flush=True)
                 observation = parse_vision_observation(raw_observation)
                 if observation is None:
                     raise RuntimeError("视觉模型未返回可用观察")
-                operation = coordinator.relay(
-                    observation,
-                    idle_minutes=self.idle_minutes,
-                    frontend_context=self._frontend_context,
-                    tts_enabled=self._tts_enabled,
+                print(f"[DEBUG screen] run: parsed observation: summary_len={len(observation.summary)}, activity={observation.activity}", file=sys.stderr, flush=True)
+                coordinator = VisionCoordinator(self._reply_adapter)
+                print(f"[DEBUG screen] run: calling coordinator.relay...", file=sys.stderr, flush=True)
+                vision_reply = run_async(
+                    coordinator.relay(
+                        observation,
+                        idle_minutes=self.idle_minutes,
+                        frontend_context=self._frontend_context,
+                        tts_enabled=self._tts_enabled,
+                    ),
+                    timeout=660,
                 )
+                print(f"[DEBUG screen] run: coordinator.relay returned, silent={vision_reply.silent}", file=sys.stderr, flush=True)
             else:
                 raise RuntimeError(f"不支持的视觉模式: {self.mode}")
 
-            reply = run_async(operation, timeout=660)
             if self._stop:
+                print(f"[DEBUG screen] run: _stop set after inference, exiting", file=sys.stderr, flush=True)
                 return
-            self._emit_vision_reply(reply)
+            print(f"[DEBUG screen] run: calling _emit_vision_reply", file=sys.stderr, flush=True)
+            self._emit_vision_reply(vision_reply)
+            print(f"[DEBUG screen] run: completed successfully", file=sys.stderr, flush=True)
         except Exception as exc:
             self.progress.emit(STAGE_ERROR)
             log.error(f"[run] exception: {type(exc).__name__}: {exc}")
+            print(f"[DEBUG screen] run: EXCEPTION: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             if debug_enabled():
                 log.debug(f"[run] traceback:\n{traceback.format_exc()}")
+                traceback.print_exc(file=sys.stderr)
             safe_message = getattr(exc, "safe_message", "") or str(exc)
             self.error.emit(safe_message)
+            print(f"[DEBUG screen] run: emitted error signal", file=sys.stderr, flush=True)
 
     # ---- 搜索回传接口 ----
     _search_pending = True
@@ -507,20 +621,24 @@ class ScreenWatcher(QThread):
 
     def set_search_result(self, result: str):
         """外部（pet.py）回传 Web 搜索结果"""
+        print(f"[DEBUG screen] set_search_result called: result_len={len(result)}", file=sys.stderr, flush=True)
         self._search_pending = False
         self._search_result = result
+        print(f"[DEBUG screen] set_search_result done", file=sys.stderr, flush=True)
 
     def _mimo_chat(self, messages: list, max_tokens: int = 2048, temperature: float = 0.3, timeout: int = 180) -> str:
         """调用 MiMo 聊天补全 API，返回 content 文本（httpx 异步客户端）"""
+        print(f"[DEBUG screen] _mimo_chat called: messages_count={len(messages)}, max_tokens={max_tokens}, "
+              f"temperature={temperature}, timeout={timeout}", file=sys.stderr, flush=True)
         try:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             }
-            # 与 TTS 对齐：部分网关只认 api-key
             if self.api_key:
                 headers["api-key"] = self.api_key
             log.info(f"[mimo_chat] sending {len(messages)} messages, max_tokens={max_tokens}")
+            print(f"[DEBUG screen] _mimo_chat: calling {self.api_base}/chat/completions", file=sys.stderr, flush=True)
             resp = self._http_post(
                 f"{self.api_base}/chat/completions",
                 headers=headers,
@@ -535,6 +653,7 @@ class ScreenWatcher(QThread):
                 timeout=timeout,
             )
             log.info(f"[mimo_chat] response status={resp.status_code}")
+            print(f"[DEBUG screen] _mimo_chat: response status={resp.status_code}", file=sys.stderr, flush=True)
             if resp.status_code == 200:
                 msg = (resp.json().get("choices") or [{}])[0].get("message") or {}
                 text = self._mimo_extract_text(msg)
@@ -544,6 +663,7 @@ class ScreenWatcher(QThread):
                     f"[mimo_chat] content_len={len(text)} "
                     f"reasoning_len={len(rc)}"
                 )
+                print(f"[DEBUG screen] _mimo_chat: extracted text length={len(text)}", file=sys.stderr, flush=True)
                 return text
             body = (resp.text or "").replace("\n", " ").strip()
             log.warning(
@@ -551,30 +671,43 @@ class ScreenWatcher(QThread):
                 f"model={self.mimo_model} body_len={len(body)}"
             )
             log.debug(f"[mimo_chat] error body: {body[:500]}")
+            print(f"[DEBUG screen] _mimo_chat: HTTP error {resp.status_code}, body_len={len(body)}", file=sys.stderr, flush=True)
             return ""
         except Exception as e:
             log.error(f"[mimo_chat] error: {type(e).__name__}: {e!r}")
+            print(f"[DEBUG screen] _mimo_chat: exception {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             return ""
 
     def _guess_mood(self, text: str, strategy: str = "", idle_minutes: float = 0) -> str:
+        print(f"[DEBUG screen] _guess_mood called: text_len={len(text)}, strategy={strategy}, idle_minutes={idle_minutes}", file=sys.stderr, flush=True)
         if idle_minutes > 30:
+            print(f"[DEBUG screen] _guess_mood: idle>30 => melancholy", file=sys.stderr, flush=True)
             return "melancholy"
         if strategy == '毒舌吐槽':
+            print(f"[DEBUG screen] _guess_mood: strategy=毒舌吐槽 => annoyed", file=sys.stderr, flush=True)
             return "annoyed"
         if strategy == '关心进度':
+            print(f"[DEBUG screen] _guess_mood: strategy=关心进度 => curious", file=sys.stderr, flush=True)
             return "curious"
         if strategy == '轻微吃醋':
+            print(f"[DEBUG screen] _guess_mood: strategy=轻微吃醋 => melancholy", file=sys.stderr, flush=True)
             return "melancholy"
         if strategy == '轻松陪聊':
+            print(f"[DEBUG screen] _guess_mood: strategy=轻松陪聊 => happy", file=sys.stderr, flush=True)
             return "happy"
         if strategy == '好奇询问':
+            print(f"[DEBUG screen] _guess_mood: strategy=好奇询问 => curious", file=sys.stderr, flush=True)
             return "curious"
         if any(w in text for w in ["傻", "笨", "垃圾", "烂"]):
+            print(f"[DEBUG screen] _guess_mood: detected negative keywords => annoyed", file=sys.stderr, flush=True)
             return "annoyed"
         if any(w in text for w in ["摸鱼", "偷懒"]):
+            print(f"[DEBUG screen] _guess_mood: detected 摸鱼/偷懒 => curious", file=sys.stderr, flush=True)
             return "curious"
         if any(w in text for w in ["哼", "……", "懒得"]):
+            print(f"[DEBUG screen] _guess_mood: detected 哼/……/懒得 => melancholy", file=sys.stderr, flush=True)
             return "melancholy"
+        print(f"[DEBUG screen] _guess_mood: default => neutral", file=sys.stderr, flush=True)
         return "neutral"
 
 
@@ -587,3 +720,4 @@ if __name__ == "__main__":
     w.search_request.connect(lambda q: log.info(f"[test] 搜索请求: {q}"))
     w.start()
     w.wait()
+
