@@ -10,7 +10,6 @@ from meapet.desktop.audio import bubble_duration_for_audio
 from meapet.desktop.chat_input import set_awaiting_reply_state
 from meapet.utils import (
     cloud_vision_allowed,
-    debug_enabled,
     is_loopback_url,
 )
 from meapet.desktop.workers import TTSWorker
@@ -32,10 +31,8 @@ log = get_color_logger("watch_ctrl")
 def _log_private_text(label: str, text: str) -> None:
     """默认仅记录识图文本长度，调试模式才打印正文。"""
     value = str(text or "")
-    if debug_enabled():
-        log.debug(f"{label}: chars={len(value)}\n{value}")
-    else:
-        log.debug(f"{label}: chars={len(value)}")
+    log.debug(f"{label}: chars={len(value)}")
+    log.track(lambda: f"{label}: chars={len(value)}\n{value}")
 
 
 class PetWatcherMixin:
@@ -244,7 +241,8 @@ class PetWatcherMixin:
             self._watch_tts_worker.start()
             self._ensure_tts_poll()
         except Exception as e:
-            log.error(f"[watch] _on_watch_result 异常: {type(e).__name__}" + (f": {e}" if debug_enabled() else ""))
+            log.error(f"[watch] _on_watch_result 异常: {type(e).__name__}")
+            log.track(lambda: f"[watch] _on_watch_result 异常: {type(e).__name__}: {e}")
             self.show_reply(text, mood, duration_ms=self.config["bubble_duration_ms"]["watch"])
             set_awaiting_reply_state(self, False)
             self._start_watcher_timer()

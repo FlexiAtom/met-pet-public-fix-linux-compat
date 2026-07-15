@@ -5,7 +5,6 @@ import os
 from typing import Optional
 from meapet.paths import project_path
 from meapet.log import get_color_logger
-from meapet.utils import debug_enabled
 
 log = get_color_logger("tts")
 
@@ -116,8 +115,7 @@ class TtsMimoMixin:
                 f"MiMo TTS HTTP {resp.status_code} ({elapsed:.1f}s) "
                 f"body_len={len(resp.text or '')}"
             )
-            if debug_enabled():
-                log.debug(f"MiMo TTS error body [debug]: {(resp.text or '')[:300]}")
+            log.track(lambda: f"MiMo TTS error body [debug]: {(resp.text or '')[:300]}")
             return None, ""
         try:
             data = resp.json()
@@ -296,8 +294,7 @@ class TtsMimoMixin:
             if ref_wav:
                 _add_candidate(ref_wav, base_score=2_000_000)
         except Exception as e:
-            if debug_enabled():
-                log.debug(f"  MiMo clone 获取 GPT-SoVITS 参考失败 [debug]: {e}")
+            log.track(lambda: f"  MiMo clone 获取 GPT-SoVITS 参考失败 [debug]: {e}")
 
         # 再扫 GPT-Sovits 各情绪目录，避免只命中旧的 jp 样本
         try:

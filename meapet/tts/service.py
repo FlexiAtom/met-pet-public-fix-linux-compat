@@ -14,7 +14,7 @@ import uuid
 from typing import Optional
 
 from meapet.config.normalizers import normalize_gsv_ref_language
-from meapet.utils import audio_cache_key, legacy_audio_cache_name, debug_enabled
+from meapet.utils import audio_cache_key, legacy_audio_cache_name
 from meapet.log import get_color_logger
 
 log = get_color_logger("tts")
@@ -719,8 +719,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 检查文本是否包含任何可发音内容（字母、数字、汉字等）
         if not any(unicodedata.category(c).startswith(('L', 'N')) for c in clean):
             log.warning(f"TTS: 跳过无实际内容的文本 chars={len(clean)}")
-            if debug_enabled():
-                log.debug(f"TTS: 跳过文本 [debug]: {clean[:40]}")
+            log.track(lambda: f"TTS: 跳过文本 [debug]: {clean[:40]}")
             return None, ""
 
         target_language = self._normalize_voice_lang(
@@ -730,8 +729,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             f"TTS: chars={len(clean)} mood={mood} engine={self.engine} "
             f"lang={target_language}"
         )
-        if debug_enabled():
-            log.debug(f"TTS [debug]: {clean[:60]}")
+        log.track(lambda: f"TTS [debug]: {clean[:60]}")
 
         prepared = self._prepare_tts_text(clean, target_language)
         if prepared is None:
@@ -749,8 +747,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         if self._mimo_mode:
             lang_tag = synthesis_language
             log.info(f"MiMo 合成: lang={lang_tag} chars={len(tts_text)}")
-            if debug_enabled():
-                log.debug(f"MiMo 合成: {tts_text[:60]}")
+            log.track(lambda: f"MiMo 合成: {tts_text[:60]}")
             return self._speak_mimo(
                 tts_text,
                 output_wav,
@@ -775,8 +772,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             f"合成: lang={self._gsv_language_tag(text_lang)} "
             f"chars={len(tts_text)}"
         )
-        if debug_enabled():
-            log.debug(f"合成: {tts_text[:60]}")
+        log.track(lambda: f"合成: {tts_text[:60]}")
 
         if self._vits_mode:
             return self._speak_vits(tts_text, output_wav)
@@ -871,8 +867,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 continue
             # 先合成才能知道语言——暂用临时名，合成完再改名
             log.info(f"[prerender] chars={len(text)} mood={mood}")
-            if debug_enabled():
-                log.debug(f"[prerender] text [debug]: {text!r}")
+            log.track(lambda: f"[prerender] text [debug]: {text!r}")
             result = self.speak(text, mood)
             wav, tts_lang = result if result else (None, "")
             if wav and tts_lang:
@@ -882,8 +877,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 shutil.move(wav, cache_path)
                 results[text] = cache_path
                 log.info(f"[prerender] completed chars={len(text)} lang={tts_lang}")
-                if debug_enabled():
-                    log.debug(f"[prerender] output [debug]: {cache_path}")
+                log.track(lambda: f"[prerender] output [debug]: {cache_path}")
             else:
                 log.warning(f"[prerender] failed chars={len(text)}")
         return results

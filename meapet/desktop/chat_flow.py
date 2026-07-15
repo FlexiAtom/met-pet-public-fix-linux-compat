@@ -8,7 +8,7 @@ import uuid
 
 from PyQt5.QtCore import QTimer
 
-from meapet.utils import debug_enabled, log_error, redact_text
+from meapet.utils import log_error, redact_text
 from meapet.agent.base import (
     AgentTurnRequest,
     ToolStatus,
@@ -60,10 +60,8 @@ def _log_private_text(label: str, text: str, *, suffix: str = "") -> None:
     """默认仅记录文本长度；显式调试时才记录正文。"""
     value = str(text or "")
     tail = f" {suffix}" if suffix else ""
-    if debug_enabled():
-        log.debug(f"{label}: chars={len(value)}{tail}\n{value}")
-    else:
-        log.debug(f"{label}: chars={len(value)}{tail}")
+    log.track(lambda: f"{label}: chars={len(value)}{tail}\n{value}")
+    log.debug(f"{label}: chars={len(value)}{tail}")
 
 
 class PetChatFlowMixin:
@@ -1149,8 +1147,7 @@ class PetChatFlowMixin:
         wav_path = value.rsplit("|", 1)[0] if "|" in value else value
         if not wav_path or not os.path.exists(wav_path):
             log.warning(f"[audio] TTS 未生成有效文件，回退文字: chars={len(value)}")
-            if debug_enabled():
-                log.debug(f"[audio] 无效 TTS 返回: {raw!r}")
+            log.track(f"[audio] 无效 TTS 返回: {raw!r}")
             self._complete_pending_chat_reply()
             return
         self._complete_pending_chat_reply(wav_path)
@@ -1160,18 +1157,11 @@ class PetChatFlowMixin:
         if context is not None and not self._turn_context_is_current(context):
             return
         _log_private_text("[chat] 错误", err)
-        error_summary = (
-            redact_text(err)
-            if debug_enabled()
-            else f"error_chars={len(err or '')}"
-        )
-        log.error(f"[chat] 对话错误: {error_summary}")
+        err_len = len(err or "")
+        log.error(f"[chat] 对话错误: error_chars={err_len}")
+        log.track(lambda: f"[chat] 对话错误: error_chars={err_len} error_raw={redact_text(err)}")
         if hasattr(self, '_chat_timeout'):
             self._chat_timeout.stop()
-        log_error(
-            "pet_chat",
-            error_summary,
-        )
         timeline = getattr(self, "_conversation_timeline", None)
         key = (
             getattr(context, "conversation_key", None)

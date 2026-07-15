@@ -12,7 +12,6 @@ import io
 import traceback
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from meapet.utils import debug_enabled, redact_text
 from meapet.log import get_color_logger
 from meapet.watcher.capture import capture_screen_image
 
@@ -505,8 +504,7 @@ class ScreenWatcher(QThread):
         except Exception as exc:
             self.progress.emit(STAGE_ERROR)
             log.error(f"[run] exception: {type(exc).__name__}: {exc}")
-            if debug_enabled():
-                log.debug(f"[run] traceback:\n{traceback.format_exc()}")
+            log.track(lambda: f"[run] traceback:\n{traceback.format_exc()}")
             safe_message = getattr(exc, "safe_message", "") or str(exc)
             self.error.emit(safe_message)
 
