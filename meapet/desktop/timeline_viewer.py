@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -50,6 +51,11 @@ def render_turn_text(turn: TurnTranscript) -> str:
         lines.append("回复")
         for index, segment in enumerate(turn.segments, 1):
             lines.append(f"{index}. {segment.display_text}")
+            voice = str(getattr(segment, "voice_text", "") or "").strip()
+            voice_lang = str(getattr(segment, "voice_language", "") or "").strip()
+            if voice and voice != str(segment.display_text or "").strip():
+                lang = f" ({voice_lang})" if voice_lang else ""
+                lines.append(f"   语音{lang}: {voice}")
     if turn.system_entries:
         lines.extend(("", "状态"))
         for entry in turn.system_entries:
@@ -69,13 +75,23 @@ class TurnDetailDialog(QDialog):
         super().__init__(parent)
         ensure_application_fonts()
         self.turn = turn
+        self.setObjectName("TimelineDetailDialog")
         self.setWindowTitle("本轮完整回复")
         self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
-        self.setMinimumSize(520, 420)
-        self.resize(620, 520)
+        self.setMinimumSize(560, 460)
+        self.resize(660, 560)
         set_scaled_stylesheet(self, DIALOG_STYLE)
 
-        layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("TimelineCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
         title = QLabel("本轮完整回复")
         title.setObjectName("PageTitle")
         layout.addWidget(title)
@@ -85,9 +101,11 @@ class TurnDetailDialog(QDialog):
             f"{datetime.fromtimestamp(turn.created_at).strftime('%Y-%m-%d %H:%M:%S')}"
         )
         self.meta.setObjectName("HelperText")
+        self.meta.setWordWrap(True)
         layout.addWidget(self.meta)
 
         self.content = QPlainTextEdit()
+        self.content.setObjectName("TurnBody")
         self.content.setReadOnly(True)
         self.content.setPlainText(render_turn_text(turn))
         self.content.setAccessibleName("本轮完整回复正文")
@@ -96,16 +114,18 @@ class TurnDetailDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addStretch()
         copy_button = QPushButton("复制全部")
+        copy_button.setObjectName("PrimaryButton")
         copy_button.setAccessibleName("复制本轮完整回复")
-        copy_button.setMinimumSize(108, MIN_TARGET_SIZE)
+        copy_button.setMinimumSize(112, MIN_TARGET_SIZE)
         copy_button.clicked.connect(self._copy_all)
         buttons.addWidget(copy_button)
         close_button = QPushButton("关闭")
         close_button.setAccessibleName("关闭完整回复")
-        close_button.setMinimumSize(88, MIN_TARGET_SIZE)
+        close_button.setMinimumSize(96, MIN_TARGET_SIZE)
         close_button.clicked.connect(self.close)
         buttons.addWidget(close_button)
         layout.addLayout(buttons)
+        root.addWidget(card)
 
     def _copy_all(self) -> None:
         QApplication.clipboard().setText(self.content.toPlainText())
@@ -117,39 +137,98 @@ class TimelineDialog(QDialog):
         ensure_application_fonts()
         self.timeline = timeline
         self._detail = None
+        self.setObjectName("TimelineDialog")
         self.setWindowTitle("对话时间线")
         self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
-        self.setMinimumSize(560, 460)
-        self.resize(680, 600)
+        self.setMinimumSize(600, 500)
+        self.resize(720, 640)
         set_scaled_stylesheet(self, DIALOG_STYLE)
 
-        layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(12)
+
+        header = QFrame()
+        header.setObjectName("TimelineCard")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(18, 14, 18, 14)
+        header_layout.setSpacing(6)
         title = QLabel("最近对话时间线")
         title.setObjectName("PageTitle")
-        layout.addWidget(title)
-        hint = QLabel("不同后端与 Agent 会话彼此隔离；旧会话仅供只读查看。")
+        header_layout.addWidget(title)
+        hint = QLabel(
+            "不同后端与 Agent 会话彼此隔离；"
+            "使用卡片内按钮查看完整回复，旧会话仅供只读查看。"
+        )
         hint.setObjectName("HelperText")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        header_layout.addWidget(hint)
+        root.addWidget(header)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         body = QWidget()
+        body.setObjectName("TimelineBody")
         self.turn_layout = QVBoxLayout(body)
+        self.turn_layout.setContentsMargins(0, 0, 0, 0)
+        self.turn_layout.setSpacing(10)
         self.turn_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(body)
-        layout.addWidget(scroll, 1)
+        root.addWidget(scroll, 1)
 
+        footer = QHBoxLayout()
+        footer.addStretch()
         close_button = QPushButton("关闭")
         close_button.setAccessibleName("关闭对话时间线")
-        close_button.setMinimumSize(88, MIN_TARGET_SIZE)
+        close_button.setMinimumSize(96, MIN_TARGET_SIZE)
         close_button.clicked.connect(self.close)
+        footer.addWidget(close_button)
+        root.addLayout(footer)
+        self.refresh()
+
+    def _make_turn_card(self, turn: TurnTranscript) -> QFrame:
+        card = QFrame()
+        card.setObjectName("TurnCard")
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(6)
+
+        meta = QLabel(
+            f"{conversation_label(turn)} · "
+            f"{_SOURCE_NAMES.get(turn.source, turn.source)} · "
+            f"{datetime.fromtimestamp(turn.created_at).strftime('%H:%M:%S')}"
+        )
+        meta.setObjectName("TurnMeta")
+        meta.setWordWrap(True)
+        layout.addWidget(meta)
+
+        if turn.user_text:
+            user = QLabel(f"用户：{turn.user_text[:80]}")
+            user.setObjectName("TurnUser")
+            user.setWordWrap(True)
+            layout.addWidget(user)
+
+        preview = turn.display_text or turn.error_text or "状态更新"
+        body = QLabel(preview[:160] + ("…" if len(preview) > 160 else ""))
+        body.setObjectName("TurnPreview")
+        body.setWordWrap(True)
+        layout.addWidget(body)
+
         row = QHBoxLayout()
         row.addStretch()
-        row.addWidget(close_button)
+        open_btn = QPushButton("查看完整回复")
+        open_btn.setObjectName("GhostButton")
+        open_btn.setMinimumSize(128, MIN_TARGET_SIZE)
+        open_btn.setAccessibleName(f"查看本轮：{preview[:40]}")
+        open_btn.clicked.connect(
+            lambda _checked=False, current=turn: self.show_turn(current)
+        )
+        row.addWidget(open_btn)
         layout.addLayout(row)
-        self.refresh()
+        return card
 
     def refresh(self) -> None:
         while self.turn_layout.count():
@@ -164,20 +243,8 @@ class TimelineDialog(QDialog):
             self.turn_layout.addWidget(empty)
             return
         for turn in turns:
-            preview = turn.display_text or turn.error_text or "状态更新"
-            label = (
-                f"{conversation_label(turn)} · "
-                f"{_SOURCE_NAMES.get(turn.source, turn.source)} · "
-                f"{datetime.fromtimestamp(turn.created_at).strftime('%H:%M:%S')}\n"
-                f"{preview[:100]}"
-            )
-            button = QPushButton(label)
-            button.setMinimumHeight(64)
-            button.setAccessibleName(f"查看本轮：{preview[:40]}")
-            button.clicked.connect(
-                lambda _checked=False, current=turn: self.show_turn(current)
-            )
-            self.turn_layout.addWidget(button)
+            self.turn_layout.addWidget(self._make_turn_card(turn))
+        self.turn_layout.addStretch(1)
 
     def show_turn(self, turn: TurnTranscript) -> None:
         self._detail = TurnDetailDialog(turn, self)

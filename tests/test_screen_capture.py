@@ -18,6 +18,87 @@ class _Image:
 
 
 class TestScreenCapture(unittest.TestCase):
+    def test_drag_region_maps_back_to_negative_virtual_desktop_coordinates(self):
+        from PyQt5.QtCore import QRect
+
+        from meapet.desktop.capture_selection import region_from_local_rect
+
+        self.assertEqual(
+            region_from_local_rect(
+                QRect(20, 30, 640, 360),
+                QRect(-1920, -200, 3840, 1280),
+            ),
+            {"x": -1900, "y": -170, "width": 640, "height": 360},
+        )
+
+    def test_region_selector_accepts_a_mouse_drag_and_not_keyboard_default(self):
+        from PyQt5.QtCore import QPoint, QRect, Qt
+        from PyQt5.QtTest import QTest
+        from PyQt5.QtWidgets import QApplication, QDialog
+
+        from meapet.desktop.capture_selection import ScreenRegionSelector
+
+        app = QApplication.instance() or QApplication([])
+        selector = ScreenRegionSelector(
+            desktop_geometry=QRect(-100, -50, 400, 300),
+        )
+        selector.show()
+        app.processEvents()
+        QTest.mousePress(selector, Qt.LeftButton, pos=QPoint(10, 20))
+        QTest.mouseMove(selector, QPoint(110, 100))
+        QTest.mouseRelease(selector, Qt.LeftButton, pos=QPoint(110, 100))
+
+        self.assertEqual(selector.result(), QDialog.Accepted)
+        self.assertEqual(
+            selector.selected_region,
+            {"x": -90, "y": -30, "width": 101, "height": 81},
+        )
+        selector.close()
+
+    def test_visible_windows_are_listed_with_process_names_and_filtered(self):
+        from meapet.watcher.capture import list_capture_windows
+
+        titles = {
+            101: "main.py - Visual Studio Code",
+            102: "Hidden",
+            103: "Minimized",
+            104: "Zero area",
+        }
+
+        def enum_windows(callback, extra):
+            for hwnd in titles:
+                callback(hwnd, extra)
+
+        win32gui = SimpleNamespace(
+            EnumWindows=enum_windows,
+            IsWindowVisible=lambda hwnd: hwnd != 102,
+            GetWindowText=lambda hwnd: titles[hwnd],
+            IsIconic=lambda hwnd: hwnd == 103,
+            GetWindowRect=lambda hwnd: (
+                (0, 0, 0, 0) if hwnd == 104 else (10, 20, 810, 620)
+            ),
+        )
+        win32process = SimpleNamespace(
+            GetWindowThreadProcessId=lambda hwnd: (1, 1000 + hwnd),
+        )
+        with (
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch.dict(
+                sys.modules,
+                {"win32gui": win32gui, "win32process": win32process},
+            ),
+            mock.patch(
+                "meapet.watcher.capture._windows_process_name",
+                return_value="Code.exe",
+            ),
+        ):
+            windows = list_capture_windows()
+
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0].title, "main.py - Visual Studio Code")
+        self.assertEqual(windows[0].process_name, "Code.exe")
+        self.assertEqual(windows[0].process_id, 1101)
+
     def test_full_screen_and_region_use_explicit_imagegrab_bounds(self):
         from meapet.watcher.capture import capture_screen_image
 

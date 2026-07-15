@@ -21,6 +21,27 @@ from meapet.desktop.chat_input import ChatInputBox
 from meapet.desktop.status_panel import StatusPanel
 
 
+AUDIO_BUBBLE_TAIL_MS = 500
+
+
+def bubble_duration_for_audio(
+    audio_duration_ms: int,
+    minimum_duration_ms: int,
+) -> int:
+    """保证气泡至少比有效音频多保留半秒。"""
+    try:
+        audio_ms = max(0, int(audio_duration_ms))
+    except (TypeError, ValueError):
+        audio_ms = 0
+    try:
+        minimum_ms = max(0, int(minimum_duration_ms))
+    except (TypeError, ValueError):
+        minimum_ms = 0
+    if audio_ms <= 0:
+        return minimum_ms
+    return max(minimum_ms, audio_ms + AUDIO_BUBBLE_TAIL_MS)
+
+
 class PetAudioMixin:
     @staticmethod
     def _get_wav_duration_ms(wav_path: str) -> int:

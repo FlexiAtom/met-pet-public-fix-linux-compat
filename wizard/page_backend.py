@@ -19,13 +19,12 @@ from PyQt5.QtWidgets import (
 )
 
 from meapet.ui_theme import MIN_TARGET_SIZE
-from wizard.styles import STYLE_INPUT, STYLE_PAGE_CARD
+from wizard.styles import STYLE_INPUT, STYLE_PAGE_CARD, field_label
 from wizard.widgets import WheelSafeComboBox
 
 
 def _field(layout, label: str, widget, accessible_name: str) -> None:
-    caption = QLabel(label)
-    caption.setObjectName("FieldLabel")
+    caption = field_label(label)
     layout.addWidget(caption)
     widget.setAccessibleName(accessible_name)
     widget.setMinimumHeight(MIN_TARGET_SIZE)
@@ -66,7 +65,7 @@ class BackendPage(QFrame):
         layout.addLayout(mode_row)
 
         timeline_row = QHBoxLayout()
-        timeline_row.addWidget(QLabel("本地最近对话缓存轮数："))
+        timeline_row.addWidget(field_label("本地最近对话缓存轮数：", inline=True))
         self.timeline_turns = QSpinBox()
         self.timeline_turns.setRange(0, 100)
         self.timeline_turns.setValue(5)
@@ -115,13 +114,13 @@ class BackendPage(QFrame):
 
         session_row = QHBoxLayout()
         session_left = QVBoxLayout()
-        session_left.addWidget(QLabel("当前会话 ID（空值会自动生成）："))
+        session_left.addWidget(field_label("当前会话 ID（空值会自动生成）："))
         self.agent_session_id = QLineEdit()
         self.agent_session_id.setStyleSheet(STYLE_INPUT)
         self.agent_session_id.setAccessibleName("Agent 当前会话 ID")
         session_left.addWidget(self.agent_session_id)
         session_right = QVBoxLayout()
-        session_right.addWidget(QLabel("长期记忆作用域 Key（空值会自动生成）："))
+        session_right.addWidget(field_label("长期记忆作用域 Key（空值会自动生成）："))
         self.agent_session_key = QLineEdit()
         self.agent_session_key.setStyleSheet(STYLE_INPUT)
         self.agent_session_key.setEchoMode(QLineEdit.Password)
@@ -132,7 +131,7 @@ class BackendPage(QFrame):
         agent_layout.addLayout(session_row)
 
         history_row = QHBoxLayout()
-        history_row.addWidget(QLabel("发送最近对话轮数："))
+        history_row.addWidget(field_label("发送最近对话轮数：", inline=True))
         self.agent_history_turns = QSpinBox()
         self.agent_history_turns.setRange(0, 50)
         self.agent_history_turns.setValue(5)
@@ -191,13 +190,13 @@ class BackendPage(QFrame):
 
         address_row = QHBoxLayout()
         listen_col = QVBoxLayout()
-        listen_col.addWidget(QLabel("本机监听 IP："))
+        listen_col.addWidget(field_label("本机监听 IP："))
         self.control_listen_host = QLineEdit("127.0.0.1")
         self.control_listen_host.setStyleSheet(STYLE_INPUT)
         self.control_listen_host.setAccessibleName("Companion MCP 本机监听 IP")
         listen_col.addWidget(self.control_listen_host)
         allowed_col = QVBoxLayout()
-        allowed_col.addWidget(QLabel("唯一允许的 Agent IP："))
+        allowed_col.addWidget(field_label("唯一允许的 Agent IP："))
         self.control_allowed_ip = QLineEdit("127.0.0.1")
         self.control_allowed_ip.setStyleSheet(STYLE_INPUT)
         self.control_allowed_ip.setAccessibleName("Companion MCP 允许的 Agent IP")
@@ -207,7 +206,7 @@ class BackendPage(QFrame):
         control_layout.addLayout(address_row)
 
         port_row = QHBoxLayout()
-        port_row.addWidget(QLabel("监听端口："))
+        port_row.addWidget(field_label("监听端口：", inline=True))
         self.control_port = QSpinBox()
         self.control_port.setRange(1, 65535)
         self.control_port.setValue(8765)

@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (  # noqa: E402
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSlider,
@@ -112,6 +113,39 @@ class UiRefactorTests(unittest.TestCase):
             rgba("#FFFFFF", 256)
         with self.assertRaises(ValueError):
             contrast_ratio("invalid", "#000000")
+
+    def test_wizard_message_box_styles_only_the_text_label_and_localizes_buttons(
+        self,
+    ) -> None:
+        from wizard.styles import WIZARD_STYLESHEET, styled_message_box
+
+        captured = {}
+
+        def capture_box(box):
+            captured["box"] = box
+
+        with patch(
+            "wizard.styles.apply_wizard_dialog_style",
+            side_effect=capture_box,
+        ), patch.object(
+            QMessageBox,
+            "exec_",
+            return_value=QMessageBox.Cancel,
+        ):
+            result = styled_message_box(
+                None,
+                title="仍有必要配置未完成",
+                text="仍要保存吗？",
+                icon=QMessageBox.Warning,
+                buttons=QMessageBox.Save | QMessageBox.Cancel,
+                default_button=QMessageBox.Cancel,
+            )
+
+        box = captured["box"]
+        self.assertEqual(result, QMessageBox.Cancel)
+        self.assertEqual(box.button(QMessageBox.Save).text(), "保存")
+        self.assertEqual(box.button(QMessageBox.Cancel).text(), "取消")
+        self.assertIn("QMessageBox QLabel#qt_msgbox_label", WIZARD_STYLESHEET)
 
     def test_bundled_cute_display_font_loads_with_a_safe_body_font(self) -> None:
         from meapet.ui_theme import (
@@ -1216,12 +1250,25 @@ class UiRefactorTests(unittest.TestCase):
     def test_capture_consent_lets_user_override_scope_for_this_request_only(self) -> None:
         from meapet.desktop.dialogs import CaptureScopeConsentDialog
 
+        holder = {}
+
+        def select_region(_parent, _initial_region):
+            dialog = holder["dialog"]
+            self.assertTrue(dialog.countdown_paused)
+            before = dialog.remaining_seconds
+            dialog._tick()
+            self.assertEqual(dialog.remaining_seconds, before)
+            return {"x": -120, "y": 40, "width": 1280, "height": 720}
+
         dialog = self._track(
             CaptureScopeConsentDialog(
                 requested_scope="full_screen",
                 timeout_seconds=15,
+                region_selector=select_region,
+                window_provider=lambda: (),
             )
         )
+        holder["dialog"] = dialog
         self.assertEqual(dialog.scope_combo.currentData(), "full_screen")
         self.assertEqual(dialog.countdown_label.text(), "15 秒后自动取消。")
         dialog._tick()
@@ -1229,12 +1276,14 @@ class UiRefactorTests(unittest.TestCase):
         dialog.scope_combo.setCurrentIndex(
             dialog.scope_combo.findData("region")
         )
-        dialog.region_x.setValue(-120)
-        dialog.region_y.setValue(40)
-        dialog.region_width.setValue(1280)
-        dialog.region_height.setValue(720)
 
         dialog.show()
+        QApplication.processEvents()
+        remaining = dialog.remaining_seconds
+        dialog.select_region_button.click()
+        self.assertEqual(dialog.remaining_seconds, remaining)
+        self.assertFalse(dialog.countdown_paused)
+        self.assertIn("1280 × 720", dialog.region_summary.text())
         dialog._timer.stop()
         dialog.allow_button.click()
 
@@ -1245,6 +1294,141 @@ class UiRefactorTests(unittest.TestCase):
             {"x": -120, "y": 40, "width": 1280, "height": 720},
         )
         self.assertEqual(dialog.approval.application, "")
+
+    def test_capture_consent_lists_windows_and_pauses_during_refresh(self) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+        from meapet.watcher.capture import CaptureWindow
+
+        holder = {}
+
+        def windows():
+            dialog = holder["dialog"]
+            self.assertTrue(dialog.countdown_paused)
+            before = dialog.remaining_seconds
+            dialog._tick()
+            self.assertEqual(dialog.remaining_seconds, before)
+            return (
+                CaptureWindow(101, "main.py - Visual Studio Code", "Code.exe", 10),
+                CaptureWindow(202, "项目 - 记事本", "notepad.exe", 20),
+            )
+
+        dialog = self._track(
+            CaptureScopeConsentDialog(
+                timeout_seconds=5,
+                region_selector=lambda _parent, _initial: None,
+                window_provider=windows,
+            )
+        )
+        holder["dialog"] = dialog
+        dialog.show()
+        QApplication.processEvents()
+        remaining = dialog.remaining_seconds
+        index = dialog.scope_combo.findData("application")
+        dialog.scope_combo.setCurrentIndex(index)
+        dialog.scope_combo.activated.emit(index)
+
+        self.assertEqual(dialog.remaining_seconds, remaining)
+        self.assertFalse(dialog.countdown_paused)
+        self.assertEqual(dialog.application_combo.count(), 2)
+        self.assertIn("Code.exe", dialog.application_combo.itemText(0))
+        self.assertFalse(hasattr(dialog, "application_input"))
+        dialog.application_combo.setCurrentIndex(1)
+        dialog._timer.stop()
+        dialog.allow_button.click()
+
+        self.assertEqual(dialog.result(), QDialog.Accepted)
+        self.assertEqual(dialog.approval.scope, "application")
+        self.assertEqual(dialog.approval.application, "项目 - 记事本")
+
+    def test_capture_consent_pauses_while_scope_menu_is_open(self) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+
+        dialog = self._track(
+            CaptureScopeConsentDialog(
+                timeout_seconds=5,
+                region_selector=lambda _parent, _initial: None,
+                window_provider=lambda: (),
+            )
+        )
+        dialog.show()
+        QApplication.processEvents()
+        remaining = dialog.remaining_seconds
+
+        dialog.scope_combo.popup_opened.emit()
+        dialog._tick()
+        self.assertEqual(dialog.remaining_seconds, remaining)
+        self.assertTrue(dialog.countdown_paused)
+        self.assertIn("已暂停", dialog.countdown_label.text())
+
+        dialog.scope_combo.popup_closed.emit()
+        dialog._timer.stop()
+        dialog._tick()
+        self.assertEqual(dialog.remaining_seconds, remaining - 1)
+        self.assertFalse(dialog.countdown_paused)
+
+    def test_capture_consent_removes_timeout_after_manual_scope_change(self) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+        from meapet.watcher.capture import CaptureWindow
+
+        dialog = self._track(
+            CaptureScopeConsentDialog(
+                timeout_seconds=5,
+                region_selector=lambda _parent, _initial: None,
+                window_provider=lambda: (
+                    CaptureWindow(101, "项目 - 记事本", "notepad.exe", 20),
+                ),
+            )
+        )
+        dialog.show()
+        QApplication.processEvents()
+        remaining = dialog.remaining_seconds
+
+        index = dialog.scope_combo.findData("application")
+        dialog.scope_combo.setCurrentIndex(index)
+        dialog.scope_combo.activated.emit(index)
+        dialog.scope_combo.popup_closed.emit()
+        dialog._tick()
+
+        self.assertTrue(dialog.countdown_label.isHidden())
+        self.assertFalse(dialog._timer.isActive())
+        self.assertEqual(dialog.remaining_seconds, remaining)
+
+    def test_capture_consent_never_requests_geometry_below_its_minimum(self) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+
+        dialog = self._track(
+            CaptureScopeConsentDialog(
+                timeout_seconds=5,
+                region_selector=lambda _parent, _initial: None,
+                window_provider=lambda: (),
+            )
+        )
+        dialog.setMinimumHeight(dialog.height() + 19)
+
+        with patch.object(dialog, "resize") as resize:
+            dialog._resize_to_content()
+
+        requested_height = resize.call_args.args[1]
+        self.assertGreaterEqual(requested_height, dialog.minimumHeight())
+
+    def test_agent_requested_region_still_requires_a_local_mouse_drag(self) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+
+        dialog = self._track(
+            CaptureScopeConsentDialog(
+                requested_scope="region",
+                requested_region={"x": 10, "y": 20, "width": 800, "height": 600},
+                region_selector=lambda _parent, _initial: None,
+                window_provider=lambda: (),
+            )
+        )
+        self.assertIn("仍需由你重新拖拽确认", dialog.region_summary.text())
+
+        dialog.allow_button.click()
+
+        self.assertEqual(dialog.result(), QDialog.Rejected)
+        self.assertIsNone(dialog.approval)
+        self.assertIn("拖拽选择区域", dialog.validation_label.text())
 
     def test_cloud_capture_consent_includes_scope_and_uses_five_seconds(self) -> None:
         from meapet.desktop.dialogs import CloudCaptureScopeConsentDialog
@@ -1268,12 +1452,10 @@ class UiRefactorTests(unittest.TestCase):
             "QDialog#CaptureScopeConsentRoot",
             "QFrame#SectionCard",
             "QComboBox",
-            "QLineEdit",
-            "QSpinBox",
+            "QPushButton#SelectRegionButton",
+            "QPushButton#RefreshWindowsButton",
             "QLabel#ConsentValidation",
             "QComboBox::down-arrow",
-            "QSpinBox::up-arrow",
-            "QSpinBox::down-arrow",
         ):
             with self.subTest(selector=selector):
                 self.assertIn(selector, stylesheet)
@@ -1287,7 +1469,29 @@ class UiRefactorTests(unittest.TestCase):
         )
         QApplication.processEvents()
         self.assertFalse(dialog.region_frame.isHidden())
-        self.assertGreater(dialog.height(), compact_height)
+        self.assertGreater(
+            dialog.height(),
+            compact_height,
+            {
+                "dialog_size_hint": dialog.sizeHint().height(),
+                "outer_total_hint": dialog._outer_layout.totalSizeHint().height(),
+                "content_hint": dialog._content_layout.sizeHint().height(),
+                "region_hint": dialog.region_frame.sizeHint().height(),
+                "region_height": dialog.region_frame.height(),
+            },
+        )
+
+        dialog.scope_combo.setCurrentIndex(
+            dialog.scope_combo.findData("application")
+        )
+        QApplication.processEvents()
+        application_height = dialog.height()
+        self.assertFalse(dialog.application_frame.isHidden())
+        self.assertGreater(application_height, compact_height)
+        dialog.allow_button.click()
+        QApplication.processEvents()
+        self.assertFalse(dialog.validation_label.isHidden())
+        self.assertGreater(dialog.height(), application_height)
 
         dialog.scope_combo.setCurrentIndex(
             dialog.scope_combo.findData("full_screen")
@@ -1636,20 +1840,22 @@ class UiRefactorTests(unittest.TestCase):
                 "enabled": True,
                 "translate_to_jp": True,
                 "translate_target_language": "zh",
-                "translate_api_key": "translate-test-key",
+                "prefer_model_voice_translation": True,
             }
         )
 
         page = wizard.tts_page
         self.assertTrue(page.translation_enabled_cb.isChecked())
+        self.assertTrue(page.prefer_model_voice_cb.isChecked())
         self.assertEqual(page.translate_target_combo.currentData(), "zh")
         self.assertIn("输出语言不受支持", page.translation_enabled_cb.text())
-        self.assertNotIn("免费翻译失效", page.translate_key.placeholderText())
+        self.assertFalse(hasattr(page, "translate_key"))
 
         tts_config = wizard.collect_config()["tts"]
         self.assertTrue(tts_config["translate_to_jp"])
+        self.assertTrue(tts_config["prefer_model_voice_translation"])
         self.assertEqual(tts_config["translate_target_language"], "zh")
-        self.assertEqual(tts_config["translate_api_key"], "translate-test-key")
+        self.assertNotIn("translate_api_key", tts_config)
 
     def test_tray_menu_offers_standby_recovery(self) -> None:
         from meapet.desktop.window_chrome import PetWindowChromeMixin

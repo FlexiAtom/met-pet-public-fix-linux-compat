@@ -36,6 +36,7 @@ from wizard.styles import (
     WIZARD_STYLESHEET,
     prepare_accessible_page,
     set_status,
+    styled_message_box,
 )
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
@@ -374,6 +375,9 @@ class SetupWizard(QWidget):
     def _mark_dirty(self, *_args) -> None:
         if not self._suppress_dirty:
             self._dirty = True
+            if hasattr(self, "save_btn") and self.save_btn is not None:
+                self.save_btn.setText("保存配置 *")
+                self.save_btn.setToolTip("有未保存更改，点击写入本机配置")
 
     def _connect_dirty_tracking(self) -> None:
         """统一跟踪表单控件，避免新增字段时忘记接入关闭确认。"""
@@ -398,12 +402,13 @@ class SetupWizard(QWidget):
             and self.isVisible()
             and not self._closing_after_save
         ):
-            reply = QMessageBox.question(
+            reply = styled_message_box(
                 self,
-                "放弃未保存的更改？",
-                "当前配置尚未保存。关闭后这些更改会丢失。",
-                QMessageBox.Discard | QMessageBox.Cancel,
-                QMessageBox.Cancel,
+                title="放弃未保存的更改？",
+                text="当前配置尚未保存。关闭后这些更改会丢失。",
+                icon=QMessageBox.Warning,
+                buttons=QMessageBox.Discard | QMessageBox.Cancel,
+                default_button=QMessageBox.Cancel,
             )
             if reply != QMessageBox.Discard:
                 event.ignore()
@@ -839,6 +844,9 @@ class SetupWizard(QWidget):
             self._sync_llm_key_panel()
             self._refresh_required_tabs()
             self._dirty = False
+            if hasattr(self, "save_btn") and self.save_btn is not None:
+                self.save_btn.setText("保存配置")
+                self.save_btn.setToolTip("保存当前所有标签页中的配置")
             self._suppress_dirty = False
 
     def apply_conversation_config(self, config: dict) -> None:
@@ -974,7 +982,10 @@ class SetupWizard(QWidget):
                 self.tts_page.translation_enabled_cb.isChecked()
             ),
             "translate_target_language": translation_target,
-            "translate_api_key": self.tts_page.translate_key.text().strip(),
+            "prefer_model_voice_translation": bool(
+                hasattr(self.tts_page, "prefer_model_voice_cb")
+                and self.tts_page.prefer_model_voice_cb.isChecked()
+            ),
             "python_exe": gsv_python,
             "vits_python": self.tts_page.vits_python_input.text().strip(),
             "api_key": tts_key,
@@ -1079,14 +1090,17 @@ class SetupWizard(QWidget):
             ]
             if missing:
                 missing_text = "\n• ".join(missing)
-                reply = QMessageBox.question(
+                reply = styled_message_box(
                     self,
-                    "仍有必要配置未完成",
-                    "以下配置尚未就绪：\n"
-                    f"• {missing_text}\n\n"
-                    "仍要保存吗？运行时可能无法使用对应功能。",
-                    QMessageBox.Save | QMessageBox.Cancel,
-                    QMessageBox.Cancel,
+                    title="仍有必要配置未完成",
+                    text=(
+                        "以下配置尚未就绪：\n"
+                        f"• {missing_text}\n\n"
+                        "仍要保存吗？运行时可能无法使用对应功能。"
+                    ),
+                    icon=QMessageBox.Warning,
+                    buttons=QMessageBox.Save | QMessageBox.Cancel,
+                    default_button=QMessageBox.Cancel,
                 )
                 if reply != QMessageBox.Save:
                     return
@@ -1110,21 +1124,33 @@ class SetupWizard(QWidget):
                 launch_hint = "启动：QT_QPA_PLATFORM=xcb python pet.py 🐱"
             else:
                 launch_hint = "启动：python pet.py 🐱"
-            QMessageBox.information(
-                self, "✅ 完成",
-                "配置已保存！\n\n"
-                f"{launch_hint}\n"
-                f"当前平台：{PLATFORM['display']}\n\n"
-                "从桌宠菜单打开时：对话、语音、识图和减少动画会立即重新初始化，"
-                "无需重启；若新后端启动失败，桌宠会直接报错。\n"
-                "字体缩放需要重启桌宠后完整生效；独立打开配置页时，"
-                "其它改动会在下次启动时生效。"
+            styled_message_box(
+                self,
+                title="✅ 完成",
+                text=(
+                    "配置已保存！\n\n"
+                    f"{launch_hint}\n"
+                    f"当前平台：{PLATFORM['display']}\n\n"
+                    "从桌宠菜单打开时：对话、语音、识图和减少动画会立即重新初始化，"
+                    "无需重启；若新后端启动失败，桌宠会直接报错。\n"
+                    "字体缩放需要重启桌宠后完整生效；独立打开配置页时，"
+                    "其它改动会在下次启动时生效。"
+                ),
+                icon=QMessageBox.Information,
             )
             self._dirty = False
+            if hasattr(self, "save_btn") and self.save_btn is not None:
+                self.save_btn.setText("保存配置")
+                self.save_btn.setToolTip("保存当前所有标签页中的配置")
             self._closing_after_save = True
             self.close()
         except Exception as e:
-            QMessageBox.critical(self, "❌ 保存失败", str(e))
+            styled_message_box(
+                self,
+                title="❌ 保存失败",
+                text=str(e),
+                icon=QMessageBox.Critical,
+            )
 
 
 # ═══════════════════════════════════════

@@ -375,7 +375,7 @@ class TestWizardConversationConfig(unittest.TestCase):
             ),
             unittest.mock.patch("wizard.app.os.path.isfile", return_value=False),
             unittest.mock.patch("meapet.config.store.save_config"),
-            unittest.mock.patch("wizard.app.QMessageBox.information"),
+            unittest.mock.patch("wizard.app.styled_message_box"),
         ):
             self.wizard._save()
 
@@ -391,11 +391,10 @@ class TestWizardConversationConfig(unittest.TestCase):
         with (
             unittest.mock.patch("wizard.app.os.path.isfile", return_value=False),
             unittest.mock.patch(
-                "wizard.app.QMessageBox.question",
+                "wizard.app.styled_message_box",
                 return_value=QMessageBox.Cancel,
             ) as question,
             unittest.mock.patch("meapet.config.store.save_config") as save,
-            unittest.mock.patch("wizard.app.QMessageBox.information"),
         ):
             self.wizard._save()
 
@@ -431,7 +430,7 @@ class TestWizardConversationConfig(unittest.TestCase):
 
             with (
                 unittest.mock.patch("meapet.config.store.save_config") as save,
-                unittest.mock.patch("wizard.app.QMessageBox.information"),
+                unittest.mock.patch("wizard.app.styled_message_box"),
             ):
                 wizard._save()
 
@@ -482,7 +481,7 @@ class TestWizardConversationConfig(unittest.TestCase):
                     return_value={index: [] for index in range(4)},
                 ),
                 unittest.mock.patch("meapet.config.store.save_config") as save,
-                unittest.mock.patch("wizard.app.QMessageBox.information"),
+                unittest.mock.patch("wizard.app.styled_message_box"),
             ):
                 wizard._save()
 
@@ -506,7 +505,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         )
 
         with unittest.mock.patch(
-            "wizard.app.QMessageBox.question",
+            "wizard.app.styled_message_box",
             return_value=QMessageBox.Cancel,
         ) as question:
             self.wizard.closeEvent(event)

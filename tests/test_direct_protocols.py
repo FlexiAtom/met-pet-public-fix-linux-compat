@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import httpx
@@ -492,19 +493,25 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
         )
         for status, category, retryable in cases:
             with self.subTest(status=status):
+                calls = {"count": 0}
+
                 def handler(_request: httpx.Request, code=status) -> httpx.Response:
+                    calls["count"] += 1
                     return httpx.Response(code, text="private upstream body secret")
 
-                with self.assertRaises(DirectProtocolError) as raised:
-                    await self._collect(
-                        "openai_chat",
-                        handler,
-                        base_url="https://models.example.test/v1",
-                    )
+                with mock.patch("meapet.direct.client.asyncio.sleep", new=mock.AsyncMock()):
+                    with self.assertRaises(DirectProtocolError) as raised:
+                        await self._collect(
+                            "openai_chat",
+                            handler,
+                            base_url="https://models.example.test/v1",
+                        )
                 self.assertEqual(raised.exception.category, category)
                 self.assertEqual(raised.exception.retryable, retryable)
                 self.assertNotIn("private upstream body", repr(raised.exception))
                 self.assertNotIn("secret", repr(raised.exception))
+                # 可重试错误会在首事件前连试 3 次；不可重试只打一次。
+                self.assertEqual(calls["count"], 3 if retryable else 1)
 
         def stream_error(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -522,6 +529,107 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(raised.exception.category, "backend")
         self.assertNotIn("private model details", repr(raised.exception))
+
+
+    async def test_retryable_network_error_is_retried_before_success(self):
+        from meapet.direct.types import StreamDone, TextDelta
+
+        attempts = {"count": 0}
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise httpx.ConnectError("temporary network blip")
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=_sse(
+                    {"choices": [{"delta": {"content": "重试后成功"}}]},
+                    "[DONE]",
+                ),
+            )
+
+        with mock.patch("meapet.direct.client.asyncio.sleep", new=mock.AsyncMock()) as sleep:
+            events = await self._collect(
+                "openai_chat",
+                handler,
+                base_url="https://models.example.test/v1",
+            )
+        self.assertEqual(attempts["count"], 3)
+        self.assertEqual(sleep.await_count, 2)
+        self.assertEqual(
+            [call.args[0] for call in sleep.await_args_list],
+            [0.4, 0.8],
+        )
+        self.assertEqual(
+            "".join(event.delta for event in events if isinstance(event, TextDelta)),
+            "重试后成功",
+        )
+        self.assertIsInstance(events[-1], StreamDone)
+
+    async def test_retry_stops_after_first_event_reaches_the_caller(self):
+        from meapet.direct.client import (
+            DirectProtocolClient,
+            DirectProtocolConfig,
+            DirectProtocolError,
+        )
+        from meapet.direct.types import CanonicalChatRequest, TextDelta
+
+        client = DirectProtocolClient(
+            DirectProtocolConfig(
+                protocol="openai_chat",
+                base_url="https://models.example.test/v1",
+            )
+        )
+        request = CanonicalChatRequest(
+            model="model-test",
+            messages=({"role": "user", "content": "hello"},),
+        )
+        attempts = {"count": 0}
+
+        async def partial_stream(_request, *, attempt=1):
+            attempts["count"] += 1
+            yield TextDelta("已经显示")
+            raise DirectProtocolError(
+                "connection",
+                "无法连接模型接口，请检查地址和网络。",
+                True,
+            )
+
+        client._stream_once = partial_stream
+        emitted = []
+        with mock.patch(
+            "meapet.direct.client.asyncio.sleep",
+            new=mock.AsyncMock(),
+        ) as sleep:
+            with self.assertRaises(DirectProtocolError):
+                async for event in client.stream(request):
+                    emitted.append(event)
+
+        self.assertEqual(attempts["count"], 1)
+        self.assertEqual([event.delta for event in emitted], ["已经显示"])
+        sleep.assert_not_awaited()
+
+    async def test_non_retryable_auth_error_is_not_retried(self):
+        from meapet.direct.client import DirectProtocolError
+
+        attempts = {"count": 0}
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            attempts["count"] += 1
+            return httpx.Response(401, text="nope")
+
+        with mock.patch("meapet.direct.client.asyncio.sleep", new=mock.AsyncMock()) as sleep:
+            with self.assertRaises(DirectProtocolError) as raised:
+                await self._collect(
+                    "openai_chat",
+                    handler,
+                    base_url="https://models.example.test/v1",
+                )
+        self.assertEqual(raised.exception.category, "authentication")
+        self.assertFalse(raised.exception.retryable)
+        self.assertEqual(attempts["count"], 1)
+        sleep.assert_not_awaited()
 
     async def test_malformed_stream_is_protocol_error_not_partial_success(self):
         from meapet.direct.client import DirectProtocolError

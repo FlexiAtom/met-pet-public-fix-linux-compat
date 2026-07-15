@@ -30,6 +30,7 @@ from meapet.agent.presentation import (
     UpdateBubble,
 )
 from meapet.chat.engine import SYSTEM_PROMPT
+from meapet.config.normalizers import canonical_tts_language
 from meapet.conversation.capabilities import build_agent_frontend_context
 from meapet.conversation.output_protocol import (
     SegmentCompleted,
@@ -44,6 +45,7 @@ from meapet.conversation.types import (
     normalize_voice_language,
 )
 from meapet.desktop import status_language
+from meapet.desktop.audio import bubble_duration_for_audio
 from meapet.desktop.workers import AgentChatWorker, ChatWorker, TTSWorker
 from meapet.desktop.chat_input import ChatInputBox, set_awaiting_reply_state
 from meapet.log import get_color_logger
@@ -309,7 +311,43 @@ class PetChatFlowMixin:
             current_mood=current_mood,
             busy=bool(getattr(self, "_awaiting_reply", False)),
         )
-        return build_agent_frontend_context(capabilities, state)
+        context = build_agent_frontend_context(capabilities, state)
+        # 只读扩展：提示词据此决定是否要求模型输出目标语 voice_text。
+        caps = context.setdefault("frontend_capabilities", {})
+        prefer = bool(
+            getattr(tts, "prefer_model_voice_translation", False)
+            if tts is not None
+            else configured_tts.get("prefer_model_voice_translation", True)
+        )
+        translation_available = False
+        if tts is not None:
+            available = getattr(tts, "_translation_available", None)
+            if callable(available):
+                try:
+                    translation_available = bool(available())
+                except Exception as exc:
+                    log.warning(
+                        "[agent] 读取机器翻译能力失败: "
+                        f"{type(exc).__name__}"
+                    )
+            else:
+                service = getattr(tts, "translation_service", None)
+                translation_available = bool(
+                    service is not None and getattr(service, "available", False)
+                )
+        target = canonical_tts_language(
+            getattr(tts, "translate_target_language", "")
+            or getattr(tts, "voice_lang", "")
+            or configured_tts.get("translate_target_language")
+            or configured_tts.get("voice_lang")
+            or "jp"
+        )
+        if isinstance(caps, dict):
+            caps["prefer_model_voice_translation"] = prefer
+            # 字段名为既有 Agent 协议的一部分；含义已改为非 LLM 机器翻译组件可用。
+            caps["translation_api_available"] = translation_available
+            caps["voice_target_language"] = target
+        return context
 
     def _make_chat_worker(self, message: str):
         """按显式模式选择直连模型或 Agent worker。"""
@@ -389,6 +427,11 @@ class PetChatFlowMixin:
         self._safe_set_mood("talking")
         self._last_user_msg = message
         _log_private_text("[chat] 发送给 LLM", message)
+        mode = "agent" if self._is_agent_mode() else "direct"
+        log.info(
+            f"[chat] 请求发起 mode={mode} chars={len(message or '')} "
+            f"text={message}"
+        )
 
         # 显示思考中提示
         self._show_bubble(
@@ -430,7 +473,10 @@ class PetChatFlowMixin:
         self._chat_poll.timeout.connect(self._poll_chat)
         self._chat_poll.start(100)
         worker_name = type(self._chat_worker).__name__
-        log.info(f"[chat] {worker_name} 已启动")
+        log.info(
+            f"[chat] {worker_name} 已启动 mode="
+            f"{'agent' if self._is_agent_mode() else 'direct'}"
+        )
 
     def _poll_chat(self):
         """主线程轮询直连结果，或增量消费 Agent 事件。"""
@@ -487,6 +533,21 @@ class PetChatFlowMixin:
             self._record_agent_timeline_event(event, context)
             if isinstance(event, TurnCompleted):
                 self._agent_turn_result = event.result
+                try:
+                    segments = getattr(event.result, "segments", ()) or ()
+                    reply_text = "\n".join(
+                        str(getattr(seg, "display_text", "") or "")
+                        for seg in segments
+                        if str(getattr(seg, "display_text", "") or "").strip()
+                    )
+                    if reply_text:
+                        log.info(
+                            f"[reply] 模型返回文本 chars={len(reply_text)}\n{reply_text}"
+                        )
+                except Exception as exc:
+                    log.debug(
+                        f"[reply] 记录模型返回文本失败: {type(exc).__name__}"
+                    )
             if presentation is None:
                 continue
             for action in presentation.consume(event):
@@ -520,19 +581,6 @@ class PetChatFlowMixin:
             and getattr(self, "_agent_turn_result", None) is None
             and not (getattr(self, "_agent_tts_workers", {}) or {})
         ):
-            # --- Ollama 后端：跳过异常检测，视为正常完成 ---
-            llm_cfg = (getattr(self, "config", {}) or {}).get("llm") or {}
-            backend = str(llm_cfg.get("backend") or "").strip().lower()
-            if backend == "ollama":
-                log.info("[agent] Ollama 后端：事件流未产生 TurnCompleted，视为正常完成")
-                # 构造一个空的 ParseResult 以避免 _finish_agent_turn 出错
-                from meapet.conversation.output_protocol import ParseResult
-                self._agent_turn_result = ParseResult((), (), True, "ollama")
-                self._finish_agent_turn(
-                    str(getattr(self, "_active_agent_turn_id", "") or ""),
-                    context=context,
-                )
-                return
             backend_name = "Agent" if self._is_agent_mode() else "模型服务"
             self._fail_agent_turn(
                 f"{backend_name}未返回可用回复。",
@@ -679,23 +727,6 @@ class PetChatFlowMixin:
                     ),
                     context=context,
                 )
-    def _cleanup_after_turn(self, turn_id: str, context=None) -> None:
-        """清理本轮对话状态，不执行记忆操作。"""
-        timeline = getattr(self, "_conversation_timeline", None)
-        key = (
-            getattr(context, "conversation_key", None)
-            or getattr(self, "_conversation_key", None)
-        )
-        if timeline is not None and key is not None:
-            timeline.finish_turn(key, turn_id)
-        self._active_agent_turn_id = ""
-        self._agent_format_repair_pending = False
-        if hasattr(self, '_chat_timeout') and self._chat_timeout:
-            self._chat_timeout.stop()
-        set_awaiting_reply_state(self, False)
-        self._complete_turn_context(context)
-        log.info(f"[chat] 本轮呈现完成 (Ollama 空回复): turn={turn_id[:24]}")
-
 
     def _finish_agent_turn(self, turn_id: str, *, context=None) -> None:
         if context is not None and not self._turn_context_is_current(context):
@@ -707,13 +738,6 @@ class PetChatFlowMixin:
             for segment in sorted(segments, key=lambda item: item.index)
             if segment.display_text
         ).strip()
-        # --- Ollama 后端：如果 result 为空或 segments 为空，跳过记忆操作 ---
-        llm_cfg = (getattr(self, "config", {}) or {}).get("llm") or {}
-        backend = str(llm_cfg.get("backend") or "").strip().lower()
-        if backend == "ollama" and not reply:
-            # 直接清理状态，不执行记忆操作
-            self._cleanup_after_turn(turn_id, context)
-            return
         user_text = str(getattr(self, "_last_user_msg", "") or "").strip()
         if self._is_agent_mode() and user_text and reply:
             history = list(getattr(self, "_agent_history", ()) or ())
@@ -817,12 +841,7 @@ class PetChatFlowMixin:
                 engine = self.chat_engine
                 if not engine or not engine.memory:
                     return
-                # 非 Ollama 后端才重置 system prompt
-                llm_cfg = (getattr(self, "config", {}) or {}).get("llm") or {}
-                backend = str(llm_cfg.get("backend") or "").strip().lower()
-                if backend != "ollama":
-                    engine.history[0] = {"role": "system", "content": SYSTEM_PROMPT}
-
+                engine.history[0] = {"role": "system", "content": SYSTEM_PROMPT}
                 engine.memory.add_chat("user", user_msg)
                 engine.memory.add_chat("mea", reply, mood)
                 n = len(user_msg or "")
@@ -850,7 +869,8 @@ class PetChatFlowMixin:
         if context is not None and not self._turn_context_is_current(context):
             return
         _log_private_text("[reply] LLM 回复", reply, suffix=f"mood={mood}")
-        log.info(f"[reply] 收到回复，mood={mood}")
+        # 控制台默认打印模型返回的可展示文本。
+        log.info(f"[reply] 收到回复 mood={mood} chars={len(reply or '')}\n{reply or ''}")
         if hasattr(self, '_chat_timeout'):
             self._chat_timeout.stop()
         eng = getattr(self, "chat_engine", None)
@@ -966,10 +986,15 @@ class PetChatFlowMixin:
                 # 空结果同样必须进入完成处理，以显示等待中的文字回复。
                 self._on_tts_audio(result)
         if hasattr(self, '_speak_worker') and self._speak_worker and self._speak_worker.done:
-            result = self._speak_worker.get_result()
+            try:
+                result = self._speak_worker.get_result()
+            except Exception as exc:
+                log.error(
+                    f"[speak] 读取互动语音结果失败: {type(exc).__name__}"
+                )
+                result = None
             self._speak_worker = None
-            if result:
-                self._on_speak_audio_ready(result)
+            self._on_speak_audio_ready(result)
         if hasattr(self, '_watch_tts_worker') and self._watch_tts_worker and self._watch_tts_worker.done:
             result = self._watch_tts_worker.get_result()
             self._watch_tts_worker = None
@@ -1082,15 +1107,13 @@ class PetChatFlowMixin:
         reply, mood = pending
         duration_ms = None
         config = getattr(self, "config", {}) or {}
-        tts_config = config.get("tts") or {}
         bubble_config = config.get("bubble_duration_ms") or {}
-        if wav_path and tts_config.get("sync_with_audio"):
+        if wav_path:
             audio_ms = self._get_wav_duration_ms(wav_path)
-            if audio_ms > 0:
-                duration_ms = max(
-                    audio_ms + 500,
-                    int(bubble_config.get("reply", 3000)),
-                )
+            duration_ms = bubble_duration_for_audio(
+                audio_ms,
+                bubble_config.get("reply", 3000),
+            )
 
         try:
             if duration_ms is None:
@@ -1205,43 +1228,63 @@ class PetChatFlowMixin:
         self._complete_turn_context(context)
 
     def _speak_and_show(self, text: str, duration_ms: int, mood: str = "neutral"):
-        """显示文字 + 后台合成语音播放（异常不抛出）"""
-        try:
-            self.show_reply(text, mood)
-        except Exception as e:
-            log.error(f"[speak] 显示文字失败: {type(e).__name__}: {e}")
+        """互动语音准备好后再同时显示气泡和播放；失败则回退文字。"""
         try:
             tts = getattr(self, "tts", None)
-            if tts and getattr(tts, "enabled", False) and len((text or "").strip()) >= 2:
-                self._current_speaking_text = text
-                cached = None
-                try:
-                    cached = tts.get_cached(text)
-                except Exception as e:
-                    log.error(f"[speak] 缓存查询失败: {type(e).__name__}: {e}")
-                if cached:
-                    self._play_audio(cached)
-                    return
-                self._speak_worker = TTSWorker(tts, text, mood=mood)
-                self._speak_worker.start()
-                self._ensure_tts_poll()
+            if (
+                tts is None
+                or not getattr(tts, "enabled", False)
+                or len((text or "").strip()) < 2
+            ):
+                self.show_reply(text, mood, duration_ms=duration_ms)
+                return
+            self._current_speaking_text = text
+            cached = None
+            try:
+                cached = tts.get_cached(text)
+            except Exception as e:
+                log.error(f"[speak] 缓存查询失败: {type(e).__name__}: {e}")
+            if cached and os.path.exists(cached):
+                bubble_ms = bubble_duration_for_audio(
+                    self._get_wav_duration_ms(cached),
+                    duration_ms,
+                )
+                self.show_reply(text, mood, duration_ms=bubble_ms)
+                self._play_audio(cached)
+                return
+            self._pending_speak_reply = (text, duration_ms, mood)
+            self._speak_worker = TTSWorker(tts, text, mood=mood)
+            self._speak_worker.start()
+            self._ensure_tts_poll()
         except Exception as e:
             log.error(f"[speak] 语音合成启动失败: {type(e).__name__}: {e}")
+            self._pending_speak_reply = None
+            try:
+                self.show_reply(text, mood, duration_ms=duration_ms)
+            except Exception as display_exc:
+                log.error(
+                    "[speak] 文字兜底显示失败: "
+                    f"{type(display_exc).__name__}: {display_exc}"
+                )
 
-    def _on_speak_audio_ready(self, raw: str):
-        """后台语音合成完成，播放并缓存"""
-        wav_path = raw
+    def _on_speak_audio_ready(self, raw: str | None):
+        """后台互动语音完成：气泡与音频同时开始，气泡最后结束。"""
+        pending = getattr(self, "_pending_speak_reply", None)
+        self._pending_speak_reply = None
+        wav_path = str(raw or "")
         tts_lang = ""
-        if "|" in raw:
-            parts = raw.rsplit("|", 1)
+        if "|" in wav_path:
+            parts = wav_path.rsplit("|", 1)
             wav_path = parts[0]
             tts_lang = parts[1]
-        if wav_path and os.path.exists(wav_path):
+        valid_audio = bool(wav_path and os.path.exists(wav_path))
+        if valid_audio:
             # 缓存：用语言前缀统一命名
             if tts_lang:
                 safe = self._safe_name(
-                    self._current_speaking_text
-                    if hasattr(self, "_current_speaking_text") else ""
+                    pending[0]
+                    if pending is not None
+                    else getattr(self, "_current_speaking_text", "")
                 )
                 if safe:
                     from meapet.paths import project_path
@@ -1252,6 +1295,12 @@ class PetChatFlowMixin:
                         shutil.copy2(wav_path, cache_path)
                     except Exception:
                         pass
+        if pending is not None:
+            text, minimum_ms, mood = pending
+            audio_ms = self._get_wav_duration_ms(wav_path) if valid_audio else 0
+            bubble_ms = bubble_duration_for_audio(audio_ms, minimum_ms)
+            self.show_reply(text, mood, duration_ms=bubble_ms)
+        if valid_audio:
             self._play_audio(wav_path)
 
     def show_reply(self, text: str, mood: str = "neutral", duration_ms: int = None):

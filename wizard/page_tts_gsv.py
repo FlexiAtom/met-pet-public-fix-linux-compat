@@ -16,18 +16,16 @@ from PyQt5.QtGui import *
 from wizard.styles import (
     STYLE_INPUT, STYLE_BTN_PRIMARY, STYLE_BTN_SECONDARY,
     COLOR_BG, COLOR_CARD, COLOR_ACCENT, COLOR_TEXT, COLOR_OK, COLOR_WARN, COLOR_ERR,
-    MIN_TARGET_SIZE, WIZARD_STYLESHEET, set_status,
+    MIN_TARGET_SIZE, apply_wizard_dialog_style, set_status,
+    styled_open_directory, styled_open_file,
 )
 from wizard.platform_info import PLATFORM, CONFIG_PATH
 from wizard.env_utils import pip_install, check_installed
-from meapet.ui_theme import set_scaled_stylesheet
 
 class TtsPageGsvMixin:
     def _browse_gsv_dir(self):
         """浏览选择整合包解压后的文件夹"""
-        folder = QFileDialog.getExistingDirectory(
-            self, "选整合包解压后的文件夹"
-        )
+        folder = styled_open_directory(self, "选整合包解压后的文件夹")
         if folder:
             self.gsv_dir_input.setText(folder)
             self._check_gsv()
@@ -49,7 +47,7 @@ class TtsPageGsvMixin:
                 "GPT-Sovits",
                 "normal",
             )
-        path, _ = QFileDialog.getOpenFileName(
+        path = styled_open_file(
             self,
             "选择 GPT-SoVITS 参考音频",
             start_dir,
@@ -143,7 +141,7 @@ class TtsPageGsvMixin:
         dialog = QDialog(self)
         dialog.setWindowTitle("语音功能怎么装")
         dialog.setMinimumSize(520, 520)
-        set_scaled_stylesheet(dialog, WIZARD_STYLESHEET)
+        apply_wizard_dialog_style(dialog)
         dialog.setAccessibleName("GPT-SoVITS 安装说明")
         dl = QVBoxLayout(dialog)
         text = QTextBrowser()

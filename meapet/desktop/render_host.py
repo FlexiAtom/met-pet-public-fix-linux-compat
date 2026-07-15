@@ -282,6 +282,8 @@ class PetRenderHostMixin:
         self._l2d_model = None
         self._l2d_pending = False
         self._live2d_startup_widget = None
+        self._cancel_live2d_startup_timeout()
+        self._ensure_live2d_startup_timer()
         self._renderer_ready = False
         self._renderer_ready_callbacks: list[Callable[[], None]] = []
         self.renderer = None
@@ -364,12 +366,23 @@ class PetRenderHostMixin:
         if widget is None:
             raise RuntimeError("Live2D widget not created")
         self._live2d_startup_widget = widget
-        QTimer.singleShot(
-            LIVE2D_STARTUP_TIMEOUT_MS,
-            lambda expected_widget=widget: self._on_live2d_startup_timeout(
-                expected_widget
-            ),
+        self._ensure_live2d_startup_timer().start(
+            LIVE2D_STARTUP_TIMEOUT_MS
         )
+
+    def _ensure_live2d_startup_timer(self) -> QTimer:
+        timer = getattr(self, "_live2d_startup_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._on_live2d_startup_timeout)
+            self._live2d_startup_timer = timer
+        return timer
+
+    def _cancel_live2d_startup_timeout(self) -> None:
+        timer = getattr(self, "_live2d_startup_timer", None)
+        if timer is not None:
+            timer.stop()
 
     def _deferred_init_live2d(self):
         """兼容旧调用点；新启动流程不再用 800ms 的 PNG 中间态。"""
@@ -400,6 +413,7 @@ class PetRenderHostMixin:
         """首帧已经绘制并提交后，仅做一次显现，不再改变尺寸或位置。"""
         if not self._l2d_pending or not self._use_live2d:
             return
+        self._cancel_live2d_startup_timeout()
         self._l2d_pending = False
         self._live2d_startup_widget = None
         try:
@@ -427,16 +441,16 @@ class PetRenderHostMixin:
             return
         self._fallback_to_png(reason or "unknown OpenGL error")
 
-    def _on_live2d_startup_timeout(self, expected_widget):
+    def _on_live2d_startup_timeout(self):
         if (
             self._l2d_pending
-            and self._live2d_startup_widget is expected_widget
-            and self.sprite_label is expected_widget
+            and self._live2d_startup_widget is self.sprite_label
         ):
             self._fallback_to_png("等待 Live2D 首帧超时")
 
     def _fallback_to_png(self, reason: str):
         """清理未就绪的 OpenGL 控件，并在同一最终位置显现 PNG。"""
+        self._cancel_live2d_startup_timeout()
         safe_print(f"[pet] Live2D 不可用，回退 PNG: {reason}")
         old_widget = self.sprite_label
         if old_widget is not None and not isinstance(old_widget, SpriteCanvas):
@@ -578,9 +592,6 @@ class PetRenderHostMixin:
             self._update_sprite()
             self._apply_hit_region()
             QApplication.processEvents()
-        
-        if hasattr(self.sprite_label, '_tight_bounds_emitted'):
-            self.sprite_label._tight_bounds_emitted = False        #don't change
         self._position_bubble()
 
     def _open_size_dialog(self):
@@ -705,6 +716,7 @@ class PetRenderHostMixin:
     def _toggle_render_mode(self):
         self._clear_window_region()
         if self._use_live2d:
+            self._cancel_live2d_startup_timeout()
             if self.sprite_label:
                 self.sprite_label.shutdown()
                 self.sprite_label.hide()
@@ -747,3 +759,8 @@ class PetRenderHostMixin:
                     self._show_bubble("Live2D 加载失败，已切回 PNG 喵", 3000)
 
             self.when_renderer_ready(announce_mode_change)
+
+    def closeEvent(self, event):
+        """取消未完成的启动回调，避免关闭后被超时回退重新显示。"""
+        self._cancel_live2d_startup_timeout()
+        super().closeEvent(event)

@@ -14,6 +14,8 @@ from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject
 from PyQt5.QtGui import *
 
 from wizard.styles import (
+    styled_message_box,
+    styled_open_file,
     STYLE_INPUT, STYLE_BTN_PRIMARY, STYLE_BTN_SECONDARY,
     COLOR_BG, COLOR_CARD, COLOR_ACCENT, COLOR_TEXT, COLOR_OK, COLOR_WARN, COLOR_ERR,
     set_status,
@@ -23,9 +25,9 @@ from wizard.env_utils import pip_install, check_installed
 
 class TtsPageVitsMixin:
     def _browse_python(self, input_field):
-        dir_path = QFileDialog.getOpenFileName(
+        dir_path = styled_open_file(
             self, "选择 python.exe", "", "python.exe (python.exe)"
-        )[0]
+        )
         if dir_path:
             input_field.setText(dir_path)
 
@@ -47,11 +49,16 @@ class TtsPageVitsMixin:
     def _setup_vits_env(self):
         """用户显式点击后，按需检测/创建 VITS Python 环境（可能下载依赖）"""
         from PyQt5.QtWidgets import QMessageBox
-        ret = QMessageBox.question(
-            self, "按需安装确认",
-            "将检测/创建 VITS 环境，可能通过 pip 下载 PyTorch 等大包。\n"
-            "默认不会自动下载，仅在你确认后进行。\n继续？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ret = styled_message_box(
+            self,
+            title="按需安装确认",
+            text=(
+                "将检测/创建 VITS 环境，可能通过 pip 下载 PyTorch 等大包。\n"
+                "默认不会自动下载，仅在你确认后进行。\n继续？"
+            ),
+            icon=QMessageBox.Question,
+            buttons=QMessageBox.Yes | QMessageBox.No,
+            default_button=QMessageBox.No,
         )
         if ret != QMessageBox.Yes:
             self.log("已取消 VITS 环境安装")

@@ -540,7 +540,10 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
 
         host = Host()
         with (
-            mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Yes),
+            mock.patch(
+                "wizard.page_tts_vits.styled_message_box",
+                return_value=QMessageBox.Yes,
+            ),
             mock.patch.object(QTimer, "singleShot", side_effect=lambda _ms, cb: callbacks.append(cb)),
             mock.patch("subprocess.run", side_effect=fake_run),
             mock.patch("threading.Thread", ImmediateThread),
@@ -931,16 +934,19 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
         self.assertEqual(lang, "日文")
 
     def test_wizard_clone_picker_starts_in_project_cache(self):
-        from wizard.page_tts_mimo import QFileDialog, TtsPageMimoMixin
+        from wizard.page_tts_mimo import TtsPageMimoMixin
 
         seen = {}
 
         def fake_picker(*args):
             seen["directory"] = args[2]
             seen["filter"] = args[3]
-            return "", ""
+            return ""
 
-        with mock.patch.object(QFileDialog, "getOpenFileName", side_effect=fake_picker):
+        with mock.patch(
+            "wizard.page_tts_mimo.styled_open_file",
+            side_effect=fake_picker,
+        ):
             TtsPageMimoMixin._browse_clone_ref(object())
 
         self.assertEqual(

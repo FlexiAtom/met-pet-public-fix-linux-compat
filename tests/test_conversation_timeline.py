@@ -286,6 +286,20 @@ class TestTimelineViewer(unittest.TestCase):
         timeline.start_turn(key, "turn", source="agent_proactive")
         for index in range(4):
             timeline.complete_segment(key, "turn", _segment(index, f"完整段落 {index}"))
+        from meapet.conversation.types import ReplySegment
+
+        timeline.complete_segment(
+            key,
+            "turn",
+            ReplySegment(
+                index=4,
+                display_text="屏幕显示文本",
+                voice_text="音声として読むテキスト",
+                voice_language="jp",
+                mood="neutral",
+                tts_style="",
+            ),
+        )
         timeline.finish_turn(key, "turn")
         dialog = TurnDetailDialog(timeline.get(key, "turn"))
         self.addCleanup(dialog.deleteLater)
@@ -293,6 +307,8 @@ class TestTimelineViewer(unittest.TestCase):
         rendered = dialog.content.toPlainText()
         for index in range(4):
             self.assertIn(f"完整段落 {index}", rendered)
+        self.assertIn("5. 屏幕显示文本", rendered)
+        self.assertIn("语音 (ja): 音声として読むテキスト", rendered)
         dialog._copy_all()
         self.assertEqual(QApplication.clipboard().text(), rendered)
         self.assertIn("Agent", dialog.meta.text())

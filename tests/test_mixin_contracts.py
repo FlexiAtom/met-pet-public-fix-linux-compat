@@ -106,6 +106,9 @@ class _Composite:
     def _position_bubble(self):
         pass
 
+    def _bind_bubble_to_timeline(self, *_args, **_kwargs):
+        pass
+
     def _ensure_tts_poll(self):
         pass
 
@@ -181,6 +184,46 @@ class TestCrossMixinCallChain(unittest.TestCase):
         c.tts = None
         c._speak_and_show("你好喵", 1000, "happy")
         self.assertTrue(c.bubble.texts)
+
+    def test_cached_interaction_bubble_outlives_its_audio(self):
+        c = _Composite()
+        with tempfile.TemporaryDirectory() as td:
+            wav_path = Path(td) / "interaction.wav"
+            wav_path.write_bytes(b"RIFF" + b"\x00" * 40)
+            c._get_cached_interaction = lambda _text, _lang: str(wav_path)
+            c._get_wav_duration_ms = lambda _path: 12_000
+
+            c._interaction_speak("别摸了……", 1000, "annoyed")
+
+        self.assertEqual(c.bubble.texts[-1][1], 12_500)
+        self.assertEqual(c._played, [str(wav_path)])
+
+    def test_generated_interaction_waits_for_audio_and_outlives_it(self):
+        import meapet.desktop.chat_flow as chat_flow
+
+        class FakeWorker:
+            done = False
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        c = _Composite()
+        with mock.patch.object(chat_flow, "TTSWorker", FakeWorker):
+            c._speak_and_show("稍等一下喵", 1000, "neutral")
+
+        self.assertEqual(c.bubble.texts, [])
+
+        with tempfile.TemporaryDirectory() as td:
+            wav_path = Path(td) / "generated.wav"
+            wav_path.write_bytes(b"RIFF" + b"\x00" * 40)
+            c._get_wav_duration_ms = lambda _path: 8_000
+            chat_flow.PetChatFlowMixin._on_speak_audio_ready(c, str(wav_path))
+
+        self.assertEqual(c.bubble.texts[-1][1], 8_500)
+        self.assertEqual(c._played, [str(wav_path)])
 
     def test_speak_and_show_rejects_string_self_pattern(self):
         """文档化错误形态：若误标 staticmethod，self 会变成 str。"""
@@ -297,6 +340,91 @@ class TestFormattedChatToTtsFlow(unittest.TestCase):
         self.assertEqual(captured["display_duration_ms"], 1700)
         self.assertEqual(captured["events"], ["bubble", "audio"])
         self.assertFalse(host._awaiting_reply)
+
+    def test_chat_bubble_outlives_audio_even_when_legacy_sync_flag_is_false(self):
+        import meapet.desktop.chat_flow as chat_flow
+
+        captured = {"events": []}
+
+        class Host(chat_flow.PetChatFlowMixin):
+            _awaiting_reply = True
+            _pending_chat_reply = ("这是一段很长的语音喵", "neutral")
+            _pending_chat_context = None
+            config = {
+                "bubble_duration_ms": {"reply": 3000},
+                "tts": {"sync_with_audio": False},
+            }
+
+            @staticmethod
+            def _get_wav_duration_ms(_path):
+                return 12_000
+
+            @staticmethod
+            def show_reply(text, mood, duration_ms=None):
+                captured["bubble"] = (text, mood, duration_ms)
+                captured["events"].append("bubble")
+
+            @staticmethod
+            def _play_audio(path):
+                captured["audio"] = path
+                captured["events"].append("audio")
+
+        host = Host()
+        with tempfile.TemporaryDirectory() as td:
+            wav_path = Path(td) / "reply.wav"
+            wav_path.write_bytes(b"RIFF" + b"\x00" * 40)
+            host._complete_pending_chat_reply(str(wav_path))
+
+        self.assertEqual(captured["bubble"][2], 12_500)
+        self.assertEqual(captured["events"], ["bubble", "audio"])
+
+    def test_watcher_bubble_outlives_audio_even_when_legacy_flag_is_false(self):
+        from meapet.desktop.watch_ctrl import PetWatcherMixin
+
+        captured = {}
+
+        class Host(PetWatcherMixin):
+            _awaiting_reply = True
+            config = {
+                "bubble_duration_ms": {"watch": 3000},
+                "tts": {"sync_with_audio": False},
+            }
+
+            @staticmethod
+            def _get_wav_duration_ms(_path):
+                return 12_000
+
+            @staticmethod
+            def show_reply(text, mood, duration_ms=None):
+                captured["bubble"] = (text, mood, duration_ms)
+
+            @staticmethod
+            def _play_audio(path):
+                captured["audio"] = path
+
+            @staticmethod
+            def _start_watcher_timer():
+                pass
+
+        host = Host()
+        with tempfile.TemporaryDirectory() as td:
+            wav_path = Path(td) / "watch.wav"
+            wav_path.write_bytes(b"RIFF" + b"\x00" * 40)
+            host._on_watch_tts_and_show(
+                f"{wav_path}|jp",
+                "屏幕回复喵",
+                "neutral",
+            )
+
+        self.assertEqual(captured["bubble"][2], 12_500)
+        self.assertEqual(captured["audio"], str(wav_path))
+
+    def test_audio_synchronization_is_mandatory_in_normalized_config(self):
+        from meapet.config.store import normalize_config
+
+        config = normalize_config({"tts": {"sync_with_audio": False}})
+
+        self.assertTrue(config["tts"]["sync_with_audio"])
 
     def test_chat_reply_falls_back_to_text_when_tts_returns_no_audio(self):
         import meapet.desktop.chat_flow as chat_flow

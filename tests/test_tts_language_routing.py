@@ -119,7 +119,7 @@ class TestTtsLanguagePolicy(unittest.TestCase):
             "zh-CN",
             supported_languages=("ja", "zh"),
             translation_enabled=True,
-            translation_api_configured=True,
+            translation_available=True,
             preferred_translation_language="ja",
         )
 
@@ -135,7 +135,7 @@ class TestTtsLanguagePolicy(unittest.TestCase):
             "fr-FR",
             supported_languages=("zh-CN", "jp"),
             translation_enabled=True,
-            translation_api_configured=True,
+            translation_available=True,
             preferred_translation_language="ja-JP",
         )
 
@@ -144,20 +144,20 @@ class TestTtsLanguagePolicy(unittest.TestCase):
         self.assertEqual(plan.synthesis_language, "jp")
         self.assertTrue(plan.requires_translation)
 
-    def test_skips_voice_when_translation_api_is_not_configured(self):
+    def test_skips_voice_when_translation_component_is_unavailable(self):
         from meapet.tts.language_policy import plan_tts_language
 
         plan = plan_tts_language(
             "fr",
             supported_languages=("jp",),
             translation_enabled=True,
-            translation_api_configured=False,
+            translation_available=False,
             preferred_translation_language="jp",
         )
 
         self.assertEqual(plan.action, "skip")
         self.assertEqual(plan.synthesis_language, "")
-        self.assertIn("translation_api_unavailable", plan.reason)
+        self.assertIn("translation_unavailable", plan.reason)
 
     def test_uses_first_available_language_if_preference_is_unavailable(self):
         from meapet.tts.language_policy import plan_tts_language
@@ -166,7 +166,7 @@ class TestTtsLanguagePolicy(unittest.TestCase):
             "fr",
             supported_languages=("zh-CN", "en-US"),
             translation_enabled=True,
-            translation_api_configured=True,
+            translation_available=True,
             preferred_translation_language="jp",
         )
 
@@ -214,27 +214,6 @@ class TestTtsWorkerLanguage(unittest.TestCase):
 
 
 class TestMeaTtsLanguageOverride(unittest.TestCase):
-    def test_translation_endpoint_rejects_unsafe_base_urls(self):
-        from meapet.tts.service import MeaTTS
-
-        tts = MeaTTS.__new__(MeaTTS)
-        for base_url in (
-            "file:///tmp/private.txt",
-            "https://user:password@example.test/v1",
-            "https://example.test/v1?token=secret",
-            "https://example.test/v1#fragment",
-        ):
-            with self.subTest(base_url=base_url):
-                tts.translate_api_base = base_url
-                with self.assertRaisesRegex(ValueError, "translation API"):
-                    tts._translation_endpoint()
-
-        tts.translate_api_base = "https://example.test/v1"
-        self.assertEqual(
-            tts._translation_endpoint(),
-            "https://example.test/v1/chat/completions",
-        )
-
     def test_mimo_async_uses_per_call_language_instead_of_configured_default(self):
         from meapet.tts.service import MeaTTS
 
@@ -288,11 +267,11 @@ class TestMeaTtsLanguageOverride(unittest.TestCase):
                         "voice_lang": "jp",
                         "supported_languages": ["jp"],
                         "translate_to_jp": True,
-                        "translate_api_key": "translate-key-not-real",
                         "output_dir": td,
                     }
                 }
             )
+            tts.translation_service = mock.Mock(available=True)
 
             with (
                 mock.patch.object(
@@ -330,11 +309,11 @@ class TestMeaTtsLanguageOverride(unittest.TestCase):
                         "voice_lang": "jp",
                         "supported_languages": ["jp"],
                         "translate_to_jp": True,
-                        "translate_api_key": "translate-key-not-real",
                         "output_dir": td,
                     }
                 }
             )
+            tts.translation_service = mock.Mock(available=True)
 
             with (
                 mock.patch.object(
@@ -356,35 +335,30 @@ class TestMeaTtsLanguageOverride(unittest.TestCase):
         self.assertIsNone(result)
         speak.assert_not_awaited()
 
-    def test_missing_translation_api_skips_unsupported_language(self):
+    def test_unavailable_translation_component_skips_unsupported_language(self):
         from meapet.tts.service import MeaTTS
 
         with tempfile.TemporaryDirectory() as td:
-            with mock.patch.dict(
-                os.environ,
+            tts = MeaTTS(
                 {
-                    "TRANSLATE_API_KEY": "",
-                    "DEEPSEEK_API_KEY": "",
-                    "MEAPET_API_KEY": "",
-                },
-                clear=False,
-            ):
-                tts = MeaTTS(
-                    {
-                        "tts": {
-                            "enabled": True,
-                            "engine": "mimo",
-                            "api_key": "test-key-not-real",
-                            "voice_lang": "jp",
-                            "supported_languages": ["jp"],
-                            "translate_to_jp": True,
-                            "translate_api_key": "",
-                            "output_dir": td,
-                        }
+                    "tts": {
+                        "enabled": True,
+                        "engine": "mimo",
+                        "api_key": "test-key-not-real",
+                        "voice_lang": "jp",
+                        "supported_languages": ["jp"],
+                        "translate_to_jp": True,
+                        "output_dir": td,
                     }
-                )
+                }
+            )
+            tts.translation_service = mock.Mock(available=False)
 
             with mock.patch.object(
+                tts,
+                "_translate_text_async",
+                new=mock.AsyncMock(return_value="不应调用"),
+            ) as translate, mock.patch.object(
                 tts,
                 "_speak_mimo_async",
                 new_callable=mock.AsyncMock,
@@ -394,8 +368,299 @@ class TestMeaTtsLanguageOverride(unittest.TestCase):
                 )
 
         self.assertIsNone(result)
+        translate.assert_not_awaited()
         speak.assert_not_awaited()
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVoiceTextLanguageMatch(unittest.TestCase):
+    def test_detects_script_languages(self):
+        from meapet.tts.language_policy import detect_script_language
+
+        self.assertEqual(detect_script_language("ご主人さま"), "jp")
+        self.assertEqual(detect_script_language("主人今天很闲喵？"), "zh")
+        self.assertEqual(detect_script_language("Hello there"), "en")
+        self.assertEqual(detect_script_language("東京"), "unknown")
+        self.assertEqual(detect_script_language("2026"), "unknown")
+        self.assertEqual(detect_script_language("OpenAI"), "unknown")
+        self.assertEqual(detect_script_language("..."), "unknown")
+
+    def test_voice_text_must_match_claimed_language(self):
+        from meapet.tts.language_policy import voice_text_matches_language
+
+        self.assertFalse(
+            voice_text_matches_language(
+                "主人今天很闲喵？需要我讲解量子力学打发时间吗？",
+                "ja-JP",
+            )
+        )
+        self.assertTrue(
+            voice_text_matches_language(
+                "ご主人、今日は暇なのかにゃ？",
+                "ja-JP",
+            )
+        )
+        self.assertTrue(voice_text_matches_language("你好呀", "zh-CN"))
+        self.assertFalse(voice_text_matches_language("你好呀", "en"))
+
+    def test_ambiguous_text_is_not_treated_as_a_language_mismatch(self):
+        from meapet.tts.language_policy import voice_text_language_relation
+
+        for text in ("東京", "最高！", "2026", "OpenAI"):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    voice_text_language_relation(text, "ja-JP"),
+                    "ambiguous",
+                )
+
+
+class TestPreferModelVoiceTranslation(unittest.IsolatedAsyncioTestCase):
+    async def test_matched_model_japanese_skips_translation_api(self):
+        from meapet.tts.service import MeaTTS
+
+        with tempfile.TemporaryDirectory() as td:
+            tts = MeaTTS(
+                {
+                    "tts": {
+                        "enabled": True,
+                        "engine": "mimo",
+                        "api_key": "x",
+                        "voice_lang": "jp",
+                        "translate_to_jp": True,
+                        "prefer_model_voice_translation": True,
+                        "gpt_weights_dir": td,
+                        "sovits_weights_dir": td,
+                        "ref_dir": td,
+                    }
+                }
+            )
+            tts._mimo_mode = True
+            tts.translation_service = mock.Mock(available=True)
+            with mock.patch.object(tts, "supported_languages", return_value=("jp",)):
+                with mock.patch.object(
+                    tts,
+                    "_translate_text_async",
+                    new=mock.AsyncMock(return_value="不该调用"),
+                ) as tr:
+                    prepared = await tts._prepare_tts_text_async(
+                        "ご主人、今日は暇なのかにゃ？",
+                        "ja-JP",
+                    )
+            self.assertEqual(
+                prepared,
+                ("ご主人、今日は暇なのかにゃ？", "jp"),
+            )
+            tr.assert_not_awaited()
+
+    async def test_chinese_marked_as_japanese_falls_back_to_api(self):
+        from meapet.tts.service import MeaTTS
+
+        with tempfile.TemporaryDirectory() as td:
+            tts = MeaTTS(
+                {
+                    "tts": {
+                        "enabled": True,
+                        "engine": "mimo",
+                        "api_key": "x",
+                        "voice_lang": "jp",
+                        "translate_to_jp": True,
+                        "prefer_model_voice_translation": True,
+                        "gpt_weights_dir": td,
+                        "sovits_weights_dir": td,
+                        "ref_dir": td,
+                    }
+                }
+            )
+            tts._mimo_mode = True
+            tts.translation_service = mock.Mock(available=True)
+            with mock.patch.object(tts, "supported_languages", return_value=("jp",)):
+                with mock.patch.object(
+                    tts,
+                    "_translate_text_async",
+                    new=mock.AsyncMock(return_value="こんにちは"),
+                ) as tr:
+                    prepared = await tts._prepare_tts_text_async(
+                        "主人今天很闲喵？",
+                        "ja-JP",
+                    )
+            self.assertEqual(prepared, ("こんにちは", "jp"))
+            tr.assert_awaited()
+            args = tr.await_args.args
+            self.assertEqual(args[0], "主人今天很闲喵？")
+            self.assertEqual(args[1], "zh")
+            self.assertEqual(args[2], "jp")
+
+    async def test_honest_chinese_fallback_is_translated_to_configured_target(self):
+        """目标语言是日语时，zh-CN 即使可直接合成也不能绕过目标语言。"""
+        from meapet.tts.service import MeaTTS
+
+        with tempfile.TemporaryDirectory() as td:
+            tts = MeaTTS(
+                {
+                    "tts": {
+                        "enabled": True,
+                        "engine": "mimo",
+                        "api_key": "x",
+                        "voice_lang": "jp",
+                        "translate_target_language": "jp",
+                        "translate_to_jp": False,
+                        "prefer_model_voice_translation": True,
+                        "gpt_weights_dir": td,
+                        "sovits_weights_dir": td,
+                        "ref_dir": td,
+                    }
+                }
+            )
+            tts.translation_service = mock.Mock(available=True)
+            with mock.patch.object(
+                tts,
+                "supported_languages",
+                return_value=("zh", "en", "jp"),
+            ), mock.patch.object(
+                tts,
+                "_translate_text_async",
+                new=mock.AsyncMock(return_value="こんにちは"),
+            ) as translate:
+                prepared = await tts._prepare_tts_text_async("你好呀", "zh-CN")
+
+        self.assertEqual(prepared, ("こんにちは", "jp"))
+        translate.assert_awaited_once_with("你好呀", "zh", "jp")
+
+    async def test_ambiguous_japanese_text_uses_target_without_translation(self):
+        from meapet.tts.service import MeaTTS
+
+        with tempfile.TemporaryDirectory() as td:
+            tts = MeaTTS(
+                {
+                    "tts": {
+                        "enabled": True,
+                        "engine": "mimo",
+                        "api_key": "x",
+                        "voice_lang": "jp",
+                        "translate_target_language": "jp",
+                        "prefer_model_voice_translation": True,
+                        "gpt_weights_dir": td,
+                        "sovits_weights_dir": td,
+                        "ref_dir": td,
+                    }
+                }
+            )
+            tts.translation_service = mock.Mock(available=True)
+            with mock.patch.object(
+                tts,
+                "_translate_text_async",
+                new=mock.AsyncMock(return_value="不应调用"),
+            ) as translate:
+                prepared = await tts._prepare_tts_text_async("東京", "ja-JP")
+
+        self.assertEqual(prepared, ("東京", "jp"))
+        translate.assert_not_awaited()
+
+    async def test_target_text_with_wrong_metadata_is_normalized_without_translation(self):
+        from meapet.tts.service import MeaTTS
+
+        with tempfile.TemporaryDirectory() as td:
+            tts = MeaTTS(
+                {
+                    "tts": {
+                        "enabled": True,
+                        "engine": "mimo",
+                        "api_key": "x",
+                        "voice_lang": "jp",
+                        "translate_target_language": "jp",
+                        "prefer_model_voice_translation": True,
+                        "gpt_weights_dir": td,
+                        "sovits_weights_dir": td,
+                        "ref_dir": td,
+                    }
+                }
+            )
+            tts.translation_service = mock.Mock(available=True)
+            with mock.patch.object(
+                tts,
+                "_translate_text_async",
+                new=mock.AsyncMock(return_value="不应调用"),
+            ) as translate:
+                prepared = await tts._prepare_tts_text_async(
+                    "ご主人、おかえりなさい。",
+                    "zh-CN",
+                )
+
+        self.assertEqual(prepared, ("ご主人、おかえりなさい。", "jp"))
+        translate.assert_not_awaited()
+
+    def test_normalize_preserves_preference_without_legacy_translate_key(self):
+        from meapet.config.store import normalize_config
+
+        cfg = normalize_config(
+            {"tts": {"prefer_model_voice_translation": True, "translate_api_key": ""}}
+        )
+        self.assertTrue(cfg["tts"]["prefer_model_voice_translation"])
+
+
+class TestVoiceTranslationPrompt(unittest.TestCase):
+    @staticmethod
+    def _request(*, tts_enabled=True, prefer=True, available=True):
+        from meapet.agent.base import AgentTurnRequest
+
+        return AgentTurnRequest(
+            turn_id="voice-translation-prompt",
+            user_text="你好",
+            tts_enabled=tts_enabled,
+            frontend_context={
+                "frontend_capabilities": {
+                    "prefer_model_voice_translation": prefer,
+                    # 既有协议字段；当前含义是非 LLM 机器翻译组件可用。
+                    "translation_api_available": available,
+                    "voice_target_language": "ja-JP",
+                }
+            },
+        )
+
+    def test_output_and_repair_prompts_request_configured_target_language(self):
+        from meapet.agent.prompts import (
+            build_output_instruction,
+            build_repair_instruction,
+        )
+
+        request = self._request()
+        for instruction in (
+            build_output_instruction(request),
+            build_repair_instruction(request),
+        ):
+            with self.subTest(instruction=instruction[:24]):
+                self.assertIn("优先模型输出目标语朗读", instruction)
+                self.assertIn("voice_target_language", instruction)
+                self.assertIn("非 LLM 机器翻译", instruction)
+
+    def test_dynamic_voice_instruction_requires_tts_preference_and_fallback(self):
+        from meapet.agent.prompts import build_output_instruction
+
+        for request in (
+            self._request(tts_enabled=False),
+            self._request(prefer=False),
+            self._request(available=False),
+        ):
+            with self.subTest(request=request):
+                self.assertNotIn(
+                    "优先模型输出目标语朗读",
+                    build_output_instruction(request),
+                )
+
+    def test_base_and_repair_prompts_always_require_voice_language_to_match_text(self):
+        from meapet.agent.prompts import (
+            build_output_instruction,
+            build_repair_instruction,
+        )
+
+        request = self._request(prefer=False, available=False)
+        for instruction in (
+            build_output_instruction(request),
+            build_repair_instruction(request),
+        ):
+            with self.subTest(instruction=instruction[:24]):
+                self.assertIn("voice_text 实际使用的语言", instruction)
+                self.assertIn("voice_text 与 voice_language 必须一致", instruction)

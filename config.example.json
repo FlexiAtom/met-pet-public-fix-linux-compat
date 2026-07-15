@@ -51,9 +51,9 @@
   "vision": {
     "enabled": false,
     "mode": "disabled",
-    "main_model_supports_images": true,
+    "main_model_supports_images": false,
     "backend": "",
-    "model": "minicpm-v",
+    "model": "qwen3.5:4b",
     "host": "",
     "api_key": "",
     "api_base": ""
@@ -78,10 +78,9 @@
     "temperature": 0.6,
     "speed": 1.0,
     "translate_to_jp": false,
+    "prefer_model_voice_translation": true,
     "translate_target_language": "jp",
     "voice_lang": "jp",
-    "translate_api_key": "",
-    "translate_model": "deepseek-v4-flash",
     "auto_install_deps": false,
     "api_key": "",
     "api_base": "https://api.xiaomimimo.com/v1",
@@ -91,7 +90,7 @@
     "voice_clone": false,
     "clone_ref": "",
     "clone_dir": "./voice_cache",
-    "sync_with_audio": false
+    "sync_with_audio": true
   },
   "display": {
     "scale": 0.5,
@@ -127,10 +126,10 @@
     }
   },
   "bubble_duration_ms": {
-    "default": 100000,
-    "reply": 100000,
-    "watch": 100000,
-    "interaction": 100000,
+    "default": 5000,
+    "reply": 8000,
+    "watch": 7000,
+    "interaction": 3000,
     "thinking": 0
   }
 }

@@ -4,10 +4,8 @@ from __future__ import annotations
 import json
 import os
 
-from PyQt5.QtWidgets import QFileDialog
-
 from wizard.platform_info import CONFIG_PATH
-from wizard.styles import set_status
+from wizard.styles import set_status, styled_open_file
 
 class TtsPageMimoMixin:
     @staticmethod
@@ -207,7 +205,7 @@ class TtsPageMimoMixin:
         self._detect_and_fill_mimo_key(force=not silent)
 
     def _browse_clone_ref(self):
-        path, _ = QFileDialog.getOpenFileName(
+        path = styled_open_file(
             self,
             "选择 voice-clone 参考音频",
             os.path.join(os.path.dirname(CONFIG_PATH), "voice_cache"),

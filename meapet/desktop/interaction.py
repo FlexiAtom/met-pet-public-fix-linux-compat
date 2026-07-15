@@ -23,6 +23,7 @@ from meapet.utils import (
     cloud_vision_allowed,
 )
 from meapet.desktop.workers import ChatWorker, TTSWorker
+from meapet.desktop.audio import bubble_duration_for_audio
 from meapet.desktop.chat_input import ChatInputBox
 from meapet.desktop.status_panel import StatusPanel
 
@@ -79,7 +80,11 @@ class PetInteractionMixin:
         try:
             cache_file = self._get_cached_interaction(text, "jp")
             if cache_file:
-                self.show_reply(text, mood)
+                bubble_ms = bubble_duration_for_audio(
+                    self._get_wav_duration_ms(cache_file),
+                    duration_ms,
+                )
+                self.show_reply(text, mood, duration_ms=bubble_ms)
                 self._play_audio(cache_file)
             else:
                 self._speak_and_show(text, duration_ms, mood)

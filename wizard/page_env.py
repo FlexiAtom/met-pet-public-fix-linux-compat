@@ -21,6 +21,7 @@ from wizard.styles import (
     MIN_TARGET_SIZE,
     STYLE_PAGE_CARD,
     set_status,
+    styled_message_box,
 )
 from wizard.platform_info import (
     PLATFORM,
@@ -418,10 +419,16 @@ class EnvCheckPage(QFrame):
     def install_package(self, name: str):
         """用户显式点击后才 pip 安装（后台线程，默认不自动装）"""
         from PyQt5.QtWidgets import QMessageBox
-        ret = QMessageBox.question(
-            self, "按需安装确认",
-            f"将通过 pip 安装 {name}。\n默认不自动下载组件，仅在你确认后安装。\n继续？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ret = styled_message_box(
+            self,
+            title="按需安装确认",
+            text=(
+                f"将通过 pip 安装 {name}。\n"
+                "默认不自动下载组件，仅在你确认后安装。\n继续？"
+            ),
+            icon=QMessageBox.Question,
+            buttons=QMessageBox.Yes | QMessageBox.No,
+            default_button=QMessageBox.No,
         )
         if ret != QMessageBox.Yes:
             self.log(f"已取消安装 {name}")
@@ -433,12 +440,16 @@ class EnvCheckPage(QFrame):
             return
         if name == PYTHON_CHECK_NAME:
             self.log("请从 https://www.python.org/downloads/ 手动安装 Python 3.10+")
-            QMessageBox.information(
-                self, "手动安装 Python",
-                f"当前平台：{PLATFORM['display']}\n\n"
-                "请手动安装 Python 3.10+ 并加入 PATH。\n"
-                "如需本地 VITS，推荐使用 Python 3.10~3.12。\n"
-                "本向导默认不自动下载 Python。"
+            styled_message_box(
+                self,
+                title="手动安装 Python",
+                text=(
+                    f"当前平台：{PLATFORM['display']}\n\n"
+                    "请手动安装 Python 3.10+ 并加入 PATH。\n"
+                    "如需本地 VITS，推荐使用 Python 3.10~3.12。\n"
+                    "本向导默认不自动下载 Python。"
+                ),
+                icon=QMessageBox.Information,
             )
             self._set_installing(False)
             return
@@ -468,18 +479,28 @@ class EnvCheckPage(QFrame):
         from PyQt5.QtWidgets import QMessageBox
 
         if not PLATFORM["is_windows"]:
-            QMessageBox.information(
-                self, f"在 {PLATFORM['os_label']} 上安装 Ollama",
-                ollama_install_hint() + "\n\n本向导不会在非 Windows 平台自动下载安装包。"
+            styled_message_box(
+                self,
+                title=f"在 {PLATFORM['os_label']} 上安装 Ollama",
+                text=(
+                    ollama_install_hint()
+                    + "\n\n本向导不会在非 Windows 平台自动下载安装包。"
+                ),
+                icon=QMessageBox.Information,
             )
             self.log(ollama_install_hint().replace("\n", " | "))
             return
 
-        ret = QMessageBox.question(
-            self, "按需下载确认",
-            "检测到 Windows。将下载 OllamaSetup.exe（约 300MB）并静默安装。\n"
-            "默认不会自动下载，仅在你确认后进行。\n继续？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ret = styled_message_box(
+            self,
+            title="按需下载确认",
+            text=(
+                "检测到 Windows。将下载 OllamaSetup.exe（约 300MB）并静默安装。\n"
+                "默认不会自动下载，仅在你确认后进行。\n继续？"
+            ),
+            icon=QMessageBox.Question,
+            buttons=QMessageBox.Yes | QMessageBox.No,
+            default_button=QMessageBox.No,
         )
         if ret != QMessageBox.Yes:
             self.log("已取消 Ollama 下载")
@@ -554,11 +575,16 @@ class EnvCheckPage(QFrame):
     def _pull_model(self, model: str, status_label):
         """用户显式点击后才拉取 Ollama 模型（后台线程，带进度）"""
         from PyQt5.QtWidgets import QMessageBox
-        ret = QMessageBox.question(
-            self, "按需下载确认",
-            f"将通过 ollama pull 下载模型 {model}（可能数 GB）。\n"
-            "默认不会自动拉取，仅在你确认后进行。\n继续？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ret = styled_message_box(
+            self,
+            title="按需下载确认",
+            text=(
+                f"将通过 ollama pull 下载模型 {model}（可能数 GB）。\n"
+                "默认不会自动拉取，仅在你确认后进行。\n继续？"
+            ),
+            icon=QMessageBox.Question,
+            buttons=QMessageBox.Yes | QMessageBox.No,
+            default_button=QMessageBox.No,
         )
         if ret != QMessageBox.Yes:
             self.log(f"已取消拉取 {model}")

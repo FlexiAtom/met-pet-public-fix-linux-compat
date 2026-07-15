@@ -73,7 +73,7 @@ python -m compileall -q meapet wizard
 ## Config & secrets
 
 - **Env var > config.json** (`store.py:resolve_secret`); supports `"$ENV_VAR"` / `${ENV_VAR}` placeholders
-- Key env vars: `DEEPSEEK_API_KEY`, `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY`, `MEAPET_API_KEY` (fallback), `TRANSLATE_API_KEY` (falls to `DEEPSEEK_API_KEY`), `HERMES_API_SERVER_KEY` / `MEAPET_AGENT_TOKEN`, `MEAPET_CONTROL_TOKEN`, `GSV_PYTHON`, `MEAPET_FORCE_PNG`, `MEAPET_DEBUG`, `MEAPET_ALLOW_DOWNLOAD`, `MEAPET_REDUCED_MOTION`
+- Key env vars: `DEEPSEEK_API_KEY`, `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY`, `MEAPET_API_KEY` (fallback), `HERMES_API_SERVER_KEY` / `MEAPET_AGENT_TOKEN`, `MEAPET_CONTROL_TOKEN`, `GSV_PYTHON`, `MEAPET_FORCE_PNG`, `MEAPET_DEBUG`, `MEAPET_ALLOW_DOWNLOAD`, `MEAPET_REDUCED_MOTION`
 
 ## Key behaviors
 
@@ -81,7 +81,7 @@ python -m compileall -q meapet wizard
 - **Memory extraction**: immediate on keywords "记住 / 记下 / 别忘了 / 提醒我"; else every 3 turns
 - **Affection**: 0–100, start=5. Per turn +1/2/3 by length, daily cap=15. Tiers in `AFFECTION_TIERS` (`memory/db.py`)
 - **Screen watcher**: random interval `min_ms`/`max_ms` in config. Off by default. Cloud vision requires `allow_cloud=true` + per-run confirmation (timeout→cancel)
-- **Bubble duration**: `bubble_duration_ms` keys `default/reply/watch/interaction/thinking`; sync_with_audio waits for TTS before showing
+- **Bubble duration**: `bubble_duration_ms` keys `default/reply/watch/interaction/thinking`; 有效音频就绪后才同步显示/播放，气泡始终至少比音频多保留 500ms；`tts.sync_with_audio` 是兼容旧配置且规范化为 `true`
 
 ## UI conventions
 

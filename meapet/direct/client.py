@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from meapet.direct.types import (
     TextDelta,
     UsageEvent,
 )
+from meapet.log import get_color_logger
 
 
 _PROTOCOLS = {
@@ -27,6 +29,38 @@ _PROTOCOLS = {
     "anthropic_messages",
 }
 
+# 连接/超时/限流/5xx 在尚未吐出任何事件前自动重试。
+_NETWORK_RETRY_ATTEMPTS = 3
+_NETWORK_RETRY_BASE_DELAY_SECONDS = 0.4
+log = get_color_logger("direct_client")
+
+
+def _summarize_messages(messages) -> str:
+    """请求消息摘要：角色 + 长度，避免把密钥/超长上下文刷爆控制台。"""
+    parts: list[str] = []
+    for item in messages or ():
+        if not isinstance(item, Mapping):
+            continue
+        role = str(item.get("role") or "?")
+        content = item.get("content")
+        if isinstance(content, str):
+            size = len(content)
+        elif isinstance(content, list):
+            size = 0
+            for part in content:
+                if isinstance(part, Mapping):
+                    if isinstance(part.get("text"), str):
+                        size += len(part["text"])
+                    elif part.get("type") == "image" or "image" in str(
+                        part.get("type") or ""
+                    ):
+                        size += 8  # 图片占位
+                else:
+                    size += len(str(part))
+        else:
+            size = len(str(content or ""))
+        parts.append(f"{role}:{size}")
+    return ",".join(parts) if parts else "-"
 
 @dataclass(frozen=True)
 class DirectProtocolConfig:
@@ -432,8 +466,73 @@ class DirectProtocolClient:
         self,
         request: CanonicalChatRequest,
     ) -> AsyncIterator[object]:
+        """流式请求模型；网络类失败在首个事件前自动重试。"""
+        started = time.perf_counter()
+        log.info(
+            "[direct] 开始请求 "
+            f"protocol={self.config.protocol} model={request.model} "
+            f"messages={len(request.messages)} "
+            f"msg_sizes={_summarize_messages(request.messages)} "
+            f"temperature={request.temperature} max_tokens={request.max_tokens} "
+            f"timeout={self.config.timeout_seconds:.0f}s "
+            f"base={self.config.base_url}"
+        )
+        last_error: DirectProtocolError | None = None
+        for attempt in range(1, _NETWORK_RETRY_ATTEMPTS + 1):
+            emitted_any = False
+            try:
+                async for event in self._stream_once(request, attempt=attempt):
+                    emitted_any = True
+                    yield event
+                elapsed = time.perf_counter() - started
+                log.info(
+                    f"[direct] 请求完成 attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS} "
+                    f"elapsed={elapsed:.2f}s"
+                )
+                return
+            except DirectProtocolError as exc:
+                last_error = exc
+                elapsed = time.perf_counter() - started
+                can_retry = (
+                    exc.retryable
+                    and not emitted_any
+                    and attempt < _NETWORK_RETRY_ATTEMPTS
+                )
+                if not can_retry:
+                    log.error(
+                        f"[direct] 请求失败 category={exc.category} "
+                        f"retryable={exc.retryable} attempt={attempt} "
+                        f"elapsed={elapsed:.2f}s msg={exc.safe_message}"
+                    )
+                    raise
+                delay = _NETWORK_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+                log.warning(
+                    f"[direct] 模型请求网络失败，将重试 "
+                    f"attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS} "
+                    f"category={exc.category} delay={delay:.1f}s "
+                    f"elapsed={elapsed:.2f}s"
+                )
+                await asyncio.sleep(delay)
+        if last_error is not None:
+            raise last_error
+        raise DirectProtocolError(
+            "connection",
+            "无法连接模型接口，请检查地址和网络。",
+            True,
+        )
+
+    async def _stream_once(
+        self,
+        request: CanonicalChatRequest,
+        *,
+        attempt: int = 1,
+    ) -> AsyncIterator[object]:
         spec = _SPEC_BUILDERS[self.config.protocol](self.config, request)
         client = await self._get_client()
+        log.info(
+            f"[direct] HTTP 发起 attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS} "
+            f"method=POST url={spec.url} stream_kind={spec.stream_kind}"
+        )
         try:
             async with client.stream(
                 "POST",
@@ -442,19 +541,30 @@ class DirectProtocolClient:
                 json=spec.body,
                 timeout=self.config.timeout_seconds,
             ) as response:
+                content_type = response.headers.get("Content-Type", "")
+                log.info(
+                    f"[direct] HTTP 响应 status={response.status_code} "
+                    f"content_type={content_type or '-'} "
+                    f"attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS}"
+                )
                 if response.status_code >= 400:
                     raise _http_error(response.status_code)
-                content_type = response.headers.get("Content-Type", "").lower()
+                content_type_l = content_type.lower()
+                event_count = 0
+                text_chars = 0
                 if spec.stream_kind == "ollama_chat":
-                    if "ndjson" not in content_type and "jsonl" not in content_type:
+                    if "ndjson" not in content_type_l and "jsonl" not in content_type_l:
                         raise DirectProtocolError(
                             "protocol",
                             "Ollama 未返回预期的 NDJSON 流。",
                         )
                     async for event in self._stream_ollama(response):
+                        event_count += 1
+                        if isinstance(event, TextDelta):
+                            text_chars += len(event.delta or "")
                         yield event
                 else:
-                    if "text/event-stream" not in content_type:
+                    if "text/event-stream" not in content_type_l:
                         raise DirectProtocolError(
                             "protocol",
                             "模型接口未返回预期的 SSE 流。",
@@ -465,16 +575,31 @@ class DirectProtocolClient:
                         "anthropic_messages": self._stream_anthropic,
                     }[spec.stream_kind]
                     async for event in parser(response):
+                        event_count += 1
+                        if isinstance(event, TextDelta):
+                            text_chars += len(event.delta or "")
                         yield event
+                log.info(
+                    f"[direct] 流结束 events={event_count} text_chars={text_chars} "
+                    f"attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS}"
+                )
         except DirectProtocolError:
             raise
         except (httpx.TimeoutException, asyncio.TimeoutError) as exc:
+            log.warning(
+                f"[direct] 超时 attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS} "
+                f"type={type(exc).__name__}"
+            )
             raise DirectProtocolError(
                 "timeout",
                 "模型响应超时，请稍后再试。",
                 True,
             ) from exc
         except httpx.RequestError as exc:
+            log.warning(
+                f"[direct] 连接失败 attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS} "
+                f"type={type(exc).__name__}"
+            )
             raise DirectProtocolError(
                 "connection",
                 "无法连接模型接口，请检查地址和网络。",

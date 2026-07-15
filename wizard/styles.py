@@ -227,6 +227,18 @@ WIZARD_STYLESHEET = f"""
         color: {COLOR_MUTED};
         font-size: 12px;
     }}
+    QLabel#SectionTitle {{
+        color: {COLOR_TEXT};
+        font-family: {DISPLAY_FONT_FAMILY};
+        font-size: 15px;
+        font-weight: 700;
+        padding-top: 4px;
+    }}
+    QLabel#InlineFieldLabel {{
+        color: {COLOR_TEXT_SECONDARY};
+        font-size: 13px;
+        font-weight: 600;
+    }}
     QLabel#FontScaleValue {{
         color: {COLOR_ACCENT};
         background: {COLOR_ELEVATED};
@@ -247,6 +259,16 @@ WIZARD_STYLESHEET = f"""
     }}
     QLabel[status="muted"] {{
         color: {COLOR_MUTED};
+    }}
+    QTextBrowser,
+    QTextBrowser#SummaryOutput {{
+        background: {COLOR_INPUT};
+        color: {COLOR_TEXT_SECONDARY};
+        border: 1px solid {COLOR_BORDER};
+        border-radius: {RADIUS_MEDIUM}px;
+        padding: 12px 14px;
+        font-size: 13px;
+        selection-background-color: {rgba(COLOR_ACCENT, 105)};
     }}
     QLineEdit,
     QTextEdit,
@@ -545,6 +567,97 @@ WIZARD_STYLESHEET = f"""
         border: 1px solid {COLOR_BORDER_STRONG};
         padding: 6px 8px;
     }}
+    QSizeGrip {{
+        background: transparent;
+        width: 18px;
+        height: 18px;
+        image: none;
+    }}
+    QMessageBox {{
+        background: {COLOR_BG};
+        color: {COLOR_TEXT};
+        font-family: {FONT_FAMILY};
+        font-size: 14px;
+    }}
+    QMessageBox QLabel {{
+        background: transparent;
+        color: {COLOR_TEXT};
+    }}
+    QMessageBox QLabel#qt_msgbox_label {{
+        min-width: 280px;
+    }}
+    QMessageBox QPushButton {{
+        background: {COLOR_ELEVATED};
+        color: {COLOR_TEXT};
+        border: 1px solid {COLOR_BORDER_STRONG};
+        border-radius: {RADIUS_SMALL}px;
+        padding: 8px 18px;
+        min-width: 88px;
+        min-height: 36px;
+        font-weight: 600;
+    }}
+    QMessageBox QPushButton:hover {{
+        background: {rgba(COLOR_FOCUS, 28)};
+        border-color: {COLOR_MUTED};
+    }}
+    QMessageBox QPushButton:focus {{
+        border: 2px solid {COLOR_FOCUS};
+    }}
+    QMessageBox QPushButton:default,
+    QMessageBox QPushButton[default="true"] {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
+        color: {PALETTE['on_primary']};
+        border-color: {COLOR_ACCENT};
+        font-weight: 700;
+    }}
+    QFileDialog {{
+        background: {COLOR_BG};
+        color: {COLOR_TEXT};
+        font-family: {FONT_FAMILY};
+    }}
+    QFileDialog QWidget {{
+        background: {COLOR_BG};
+        color: {COLOR_TEXT};
+    }}
+    QFileDialog QLineEdit,
+    QFileDialog QComboBox {{
+        background: {COLOR_INPUT};
+        color: {COLOR_TEXT};
+        border: 1px solid {COLOR_BORDER_STRONG};
+        border-radius: {RADIUS_SMALL}px;
+        padding: 8px 10px;
+    }}
+    QFileDialog QPushButton {{
+        background: {COLOR_ELEVATED};
+        color: {COLOR_TEXT};
+        border: 1px solid {COLOR_BORDER_STRONG};
+        border-radius: {RADIUS_SMALL}px;
+        padding: 8px 14px;
+        min-height: 36px;
+        font-weight: 600;
+    }}
+    QFileDialog QPushButton:hover {{
+        background: {rgba(COLOR_FOCUS, 28)};
+        border-color: {COLOR_MUTED};
+    }}
+    QFileDialog QTreeView,
+    QFileDialog QListView {{
+        background: {COLOR_CARD};
+        color: {COLOR_TEXT};
+        border: 1px solid {COLOR_BORDER};
+        border-radius: {RADIUS_SMALL}px;
+        selection-background-color: {rgba(COLOR_ACCENT, 80)};
+        selection-color: {COLOR_TEXT};
+    }}
+    QFileDialog QHeaderView::section {{
+        background: {COLOR_ELEVATED};
+        color: {COLOR_TEXT_SECONDARY};
+        border: none;
+        border-right: 1px solid {COLOR_BORDER};
+        border-bottom: 1px solid {COLOR_BORDER};
+        padding: 6px 8px;
+    }}
 """
 
 
@@ -570,6 +683,108 @@ def set_status(widget, status: str, text: str | None = None) -> None:
         style.polish(widget)
     if hasattr(widget, "update"):
         widget.update()
+
+
+def apply_wizard_dialog_style(dialog) -> None:
+    """给 QMessageBox / QFileDialog / 临时说明窗统一套配置中心主题。"""
+    from meapet.ui_theme import set_scaled_stylesheet
+
+    if dialog is None:
+        return
+    set_scaled_stylesheet(dialog, WIZARD_STYLESHEET)
+    if (
+        hasattr(dialog, "setObjectName")
+        and hasattr(dialog, "objectName")
+        and not dialog.objectName()
+    ):
+        dialog.setObjectName("WizardDialog")
+
+
+def field_label(text: str, *, inline: bool = False):
+    """创建带语义样式的字段标签，避免行内 QLabel 落到系统默认外观。"""
+    from PyQt5.QtWidgets import QLabel
+
+    label = QLabel(text)
+    label.setObjectName("InlineFieldLabel" if inline else "FieldLabel")
+    return label
+
+
+def styled_message_box(
+    parent,
+    *,
+    title: str,
+    text: str,
+    icon=None,
+    buttons=None,
+    default_button=None,
+) -> int:
+    """创建并执行带配置中心主题的 QMessageBox，返回标准按钮结果。"""
+    from PyQt5.QtWidgets import QMessageBox
+
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    if icon is not None:
+        box.setIcon(icon)
+    if buttons is not None:
+        box.setStandardButtons(buttons)
+    if default_button is not None:
+        box.setDefaultButton(default_button)
+    localized_buttons = (
+        (QMessageBox.Ok, "确定"),
+        (QMessageBox.Save, "保存"),
+        (QMessageBox.Cancel, "取消"),
+        (QMessageBox.Discard, "放弃更改"),
+        (QMessageBox.Yes, "继续"),
+        (QMessageBox.No, "取消"),
+        (QMessageBox.Retry, "重试"),
+        (QMessageBox.Close, "关闭"),
+    )
+    for standard_button, localized_text in localized_buttons:
+        button = box.button(standard_button)
+        if button is not None:
+            button.setText(localized_text)
+            button.setAccessibleName(localized_text)
+    apply_wizard_dialog_style(box)
+    return box.exec_()
+
+
+def styled_open_file(
+    parent,
+    title: str,
+    directory: str = "",
+    file_filter: str = "All (*.*)",
+) -> str:
+    """打开带配置中心主题的文件选择对话框，返回所选路径或空串。"""
+    from PyQt5.QtWidgets import QFileDialog
+
+    dialog = QFileDialog(parent, title, directory, file_filter)
+    dialog.setFileMode(QFileDialog.ExistingFile)
+    dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+    apply_wizard_dialog_style(dialog)
+    if dialog.exec_():
+        selected = dialog.selectedFiles()
+        return selected[0] if selected else ""
+    return ""
+
+
+def styled_open_directory(
+    parent,
+    title: str,
+    directory: str = "",
+) -> str:
+    """打开带配置中心主题的目录选择对话框，返回所选路径或空串。"""
+    from PyQt5.QtWidgets import QFileDialog
+
+    dialog = QFileDialog(parent, title, directory)
+    dialog.setFileMode(QFileDialog.Directory)
+    dialog.setOption(QFileDialog.ShowDirsOnly, True)
+    dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+    apply_wizard_dialog_style(dialog)
+    if dialog.exec_():
+        selected = dialog.selectedFiles()
+        return selected[0] if selected else ""
+    return ""
 
 
 def prepare_accessible_page(root) -> None:

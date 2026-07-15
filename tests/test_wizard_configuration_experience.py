@@ -148,7 +148,10 @@ class WizardConfigurationExperienceTests(unittest.TestCase):
                 wizard,
                 "_configuration_issues",
                 return_value={index: [] for index in range(4)},
-            ), patch.object(QMessageBox, "information"):
+            ), patch(
+                "wizard.app.styled_message_box",
+                return_value=QMessageBox.Ok,
+            ):
                 wizard._save()
 
             reopened = self._track(SetupWizard(config_path=path))
