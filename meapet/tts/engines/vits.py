@@ -7,7 +7,6 @@ import time
 from typing import Optional
 from meapet.paths import project_path, project_root
 from meapet.log import get_color_logger
-from meapet.utils import debug_enabled
 
 log = get_color_logger("tts")
 
@@ -33,8 +32,7 @@ class TtsVitsMixin:
 
             if proc.returncode != 0:
                 log.warning(f"VITS failed: rc={proc.returncode} stderr_chars={len(proc.stderr or '')}")
-                if debug_enabled():
-                    log.debug(f"VITS stderr [debug]: {(proc.stderr or '')[-200:]}")
+                log.track(lambda: f"VITS stderr [debug]: {(proc.stderr or '')[-200:]}")
                 return None, ""
 
             if not os.path.exists(output_wav):
@@ -45,6 +43,5 @@ class TtsVitsMixin:
             return output_wav, "jp"
         except Exception as e:
             log.error(f"VITS exception: {type(e).__name__}")
-            if debug_enabled():
-                log.debug(f"VITS exception [debug]: {e!r}")
+            log.track(lambda: f"VITS exception [debug]: {e!r}")
             return None, ""

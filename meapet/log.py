@@ -1,18 +1,46 @@
+"""日志模块，提供彩色控制台+按天滚动文件日志"""
+import ctypes
 import logging
 import logging.handlers
 import os
 import re
-import datetime
-import traceback
 import sys
 from pathlib import Path
 
 # ====================== 全局配置项 ======================
-LOG_LEVEL = "INFO"           # 默认含可见对话/TTS 文本；协议级调试仅在 MEAPET_DEBUG=1 时输出
+LOG_LEVEL = "TRACK"           # 默认含可见对话/TTS 文本；协议级调试仅在 LOG_LEVEL = "TRACK" 时输出
 # 日志路径固定到项目根目录，不受从快捷方式或其它目录启动的 cwd 影响。
 LOG_DIR = str(Path(__file__).resolve().parent.parent / "logs")
 LOG_KEEP_DAYS = 7            # 保留最近几天的日志文件
 # ====================================================
+
+# ====================== 工具函数 ======================
+def enable_vt():
+    """开启 stdout 和 stderr 的 VT 转译支持 自动判断平台"""
+    if sys.platform != 'win32':
+        return True
+
+    kernel32 = ctypes.windll.kernel32
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+
+    # logging 默认输出到 stderr(-12)，但也可能配置为 stdout(-11)
+    # 必须同时开启两个流的 VT 支持
+    handles = [-11, -12]
+    success_count = 0
+
+    for handle_id in handles:
+        try:
+            handle = kernel32.GetStdHandle(handle_id)
+            mode = ctypes.c_ulong()
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                if kernel32.SetConsoleMode(handle, new_mode):
+                    success_count += 1
+        except Exception:
+            pass
+
+    return success_count > 0
+
 
 # ---------- 自定义 namer：把后缀式日期改为插入式 ----------
 def _daily_namer(default_name):
@@ -20,18 +48,14 @@ def _daily_namer(default_name):
     date_part = ext.lstrip('.')                   # 2026-07-13
     # 再拆一次，把 .log 分离出来
     root, real_ext = os.path.splitext(base)       # root=logs/app  real_ext=.log
-    return f"{root}_{date_part}{real_ext}"
-
-
-def _daily_rotator(source, dest):
-    """滚动时重命名文件"""
-    os.rename(source, dest)
+    return f"{root}.{date_part}{real_ext}"
 
 
 class ColorFormatter(logging.Formatter):
     """控制台彩色格式化器"""
 
     LEVEL_COLORS = {
+        'TRACK':    '\033[37m',   # 灰色
         'DEBUG':    '\033[36m',   # 青色
         'INFO':     '\033[32m',   # 绿色
         'WARNING':  '\033[33m',   # 黄色
@@ -76,16 +100,42 @@ class ColorFormatter(logging.Formatter):
             return f"{self.formatTime(record, self.datefmt)} [{record.levelname}] {record.getMessage()}"
 
 
+# ====================== 自定义 Logger 类 ======================
+# 数值 5 < DEBUG(10)，确保只有显式设置为 TRACK 时才会输出
+TRACK = 5
+logging.addLevelName(TRACK, "TRACK")
+
+class ColorLogger(logging.Logger):
+    """支持 TRACK 级别的自定义 Logger"""
+
+    def track(self, message, *args, **kwargs):
+        """
+        载荷级调试追踪。仅在 logger 级别 <= TRACK 时输出。
+        支持 %s 惰性格式化；若需 f-string 惰性求值，请传入 lambda。
+        """
+        if self.isEnabledFor(TRACK):
+            if callable(message):
+                try:
+                    message = message()
+                except Exception as e:
+                    message = f"[LOG ERROR] TRACK BUILD ERROR: {e}"
+            self._log(TRACK, message, args, **kwargs)
+
+# 注册自定义 Logger 类，须在 getLogger 之前调用
+logging.setLoggerClass(ColorLogger)
+
+
 def get_color_logger(name="app", log_dir=LOG_DIR, keep_days=LOG_KEEP_DAYS,
                      console_level=None, file_level=None, enable_file=True):
     """
     获取带彩色控制台输出和文件写入的日志记录器
+    首次配置后，同名 Logger 会复用 Handler，同名 Logger 初始化后复用时不支持重新配置
 
     :param name:          logger 名称
     :param log_dir:       日志文件目录
     :param keep_days:     保留天数
-    :param console_level: 控制台输出级别（字符串），None 则使用全局级别
-    :param file_level:    文件输出级别（字符串），None 则使用全局级别
+    :param console_level: 控制台输出级别（字符串），None 则使用全局 LOG_LEVEL
+    :param file_level:    文件输出级别（字符串），None 则使用全局 LOG_LEVEL
     :param enable_file:   是否启用文件输出
     :return:              logging.Logger 实例
     """
@@ -96,6 +146,7 @@ def get_color_logger(name="app", log_dir=LOG_DIR, keep_days=LOG_KEEP_DAYS,
         file_level = LOG_LEVEL
 
     level_map = {
+        "TRACK": TRACK,
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
         "WARN": logging.WARNING,
@@ -106,42 +157,43 @@ def get_color_logger(name="app", log_dir=LOG_DIR, keep_days=LOG_KEEP_DAYS,
     file_level_num = level_map.get(file_level.upper(), logging.INFO)
 
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-    logger.handlers.clear()
+    logger.setLevel(TRACK)
 
-    # ---------- 控制台 Handler（彩色） ----------
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(console_level_num)
-    console_formatter = ColorFormatter(
-        "%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
-
-    # ---------- 文件 Handler（用标准库 TimedRotatingFileHandler 替换自定义实现） ----------
-    if enable_file:
-        os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, f"{name}.log")
-
-        file_handler = logging.handlers.TimedRotatingFileHandler(
-            filename=log_path,
-            when='midnight',          # 每天午夜滚动
-            interval=1,
-            backupCount=keep_days,    # 保留最近 N 天的备份
-            encoding='utf-8',
-            utc=False,
-        )
-        file_handler.setLevel(file_level_num)
-        file_handler.namer = _daily_namer       # 自定义文件命名
-        file_handler.rotator = _daily_rotator   # 自定义滚动行为
-
-        file_formatter = logging.Formatter(
+    # 仅在没有 Handler 时才进行配置
+    if not logger.handlers:
+        # 控制台彩色 Handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(console_level_num)
+        console_formatter = ColorFormatter(
             "%(asctime)s [%(levelname)s] %(message)s",
-            # or "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
         )
-        file_handler.setFormatter(file_formatter)
-        logger.addHandler(file_handler)
+        console_handler.setFormatter(console_formatter)
+        logger.addHandler(console_handler)
+
+        # 文件 Handler
+        if enable_file:
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(log_dir, f"{name}.log")
+
+            file_handler = logging.handlers.TimedRotatingFileHandler(
+                filename=log_path,
+                when='midnight',
+                interval=1,
+                backupCount=keep_days,
+                encoding='utf-8',
+                utc=False,
+            )
+            file_handler.setLevel(file_level_num)
+            file_handler.namer = _daily_namer
+
+            file_formatter = logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s",
+                # 若需输出 logger 名称，请替换
+                # "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
+            file_handler.setFormatter(file_formatter)
+            logger.addHandler(file_handler)
 
     return logger
