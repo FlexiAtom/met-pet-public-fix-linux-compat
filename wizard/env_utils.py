@@ -10,15 +10,20 @@ import urllib.request
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
-class WorkerSignals(QObject):
-    log = pyqtSignal(str)
-    progress = pyqtSignal(int)
-    status = pyqtSignal(str)
-    finished = pyqtSignal(bool, str)
+
+def _is_frozen() -> bool:
+    """Check if running in a PyInstaller-frozen environment."""
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 
 
 def pip_install(packages: list) -> bool:
-    """安装 Python 包，返回是否成功"""
+    """Install Python packages. Returns True on success.
+
+    In frozen mode (PyInstaller) ``sys.executable`` is the pet exe, not a
+    real Python interpreter — pip invocations always fail.
+    """
+    if _is_frozen():
+        return False
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install"] + packages,
@@ -30,7 +35,11 @@ def pip_install(packages: list) -> bool:
 
 
 def check_installed(package: str) -> bool:
-    """检查 Python 包是否已安装（兼容包名与 import 名差异）"""
+    """Check if a Python package is installed (handles name-vs-import differences).
+
+    In frozen mode the subprocess-based fallback is skipped to avoid
+    spawning a duplicate MeaPet instance.
+    """
     import_aliases = {
         "pywin32": ("win32api", "win32gui", "pythoncom"),
         "live2d-py": ("live2d",),
@@ -49,6 +58,8 @@ def check_installed(package: str) -> bool:
             return True
         except ImportError:
             continue
+    if _is_frozen():
+        return False  # skip subprocess fallback in frozen mode
     try:
         subprocess.run(
             [sys.executable, "-m", "pip", "show", package],

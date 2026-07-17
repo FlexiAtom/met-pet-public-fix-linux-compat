@@ -1,9 +1,15 @@
-"""TTS 共享工具与常量（供 tts.py 与引擎 mixin 使用）"""
+"""TTS shared utilities and constants (used by tts.py and engine mixins)."""
 import os
 import subprocess
+import sys
 from meapet.log import get_color_logger
 
 log = get_color_logger("tts")
+
+
+def _is_frozen() -> bool:
+    """Check if running in a PyInstaller-frozen environment."""
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 
 
 _LFS_POINTER_HEADER = b"version https://git-lfs.github.com/spec/v1"
@@ -77,11 +83,23 @@ TORCH_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 
 
 def _has_module(py_exe: str, module_name: str) -> bool:
-    """检查指定 Python 能否 import 某模块"""
+    """Check whether a given Python can import *module_name*.
+
+    In frozen mode (PyInstaller), ``sys.executable`` is the pet exe, not a
+    real Python interpreter — running it as a subprocess would spawn a new
+    MeaPet instance.  Return False immediately in that case.
+    """
+    if _is_frozen():
+        log.warning(
+            "[frozen] Skipping module check for %r — "
+            "sys.executable is the pet exe, not a Python interpreter.",
+            module_name,
+        )
+        return False
     try:
         r = subprocess.run(
             [py_exe, "-c", f"import {module_name}; print('ok')"],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15,
         )
         return r.returncode == 0 and 'ok' in r.stdout
     except Exception:
@@ -90,7 +108,18 @@ def _has_module(py_exe: str, module_name: str) -> bool:
 
 def _install_modules(py_exe: str, packages: list[str],
                      extra_index: str = None) -> bool:
-    """pip install 包列表到指定 Python，返回是否全部成功"""
+    """``pip install`` *packages* into *py_exe*.
+
+    Returns True only when every package installed successfully.
+    In frozen mode this always returns False — ``sys.executable`` is the
+    pet exe and cannot run pip.
+    """
+    if _is_frozen():
+        log.warning(
+            "[frozen] Cannot pip install — sys.executable is the pet exe. "
+            "Install dependencies manually, or use MiMo cloud TTS."
+        )
+        return False
     cmd = [py_exe, "-m", "pip", "install", "--timeout", "120"]
     if extra_index:
         # 有专用 index（如 PyTorch）时用它做主源，清华做备用
@@ -113,10 +142,20 @@ def _install_modules(py_exe: str, packages: list[str],
 
 
 def auto_install_gsv_deps(py_exe: str, allow_download: bool = False) -> bool:
-    """检查 GSV 依赖；仅当 allow_download=True 时才 pip 安装（默认不自动下载）"""
-    log.info(f"检查 GSV 依赖 (Python: {py_exe})")
+    """Check GSV dependencies; pip-installs only when *allow_download* is True.
 
-    # 快速检查缺了哪些
+    In frozen mode all subprocess operations are skipped — ``sys.executable``
+    is the pet exe, not a Python interpreter.  Returns False immediately.
+    """
+    if _is_frozen():
+        log.warning(
+            "[frozen] GSV deps cannot be auto-installed. "
+            "Use MiMo cloud TTS or install a real Python runtime separately."
+        )
+        return False
+    log.info(f"Checking GSV deps (Python: {py_exe})")
+
+    # Quickly scan which packages are missing.
     missing = []
     for pkg in GSV_REQUIRED_PACKAGES:
         mod = _get_import_name(pkg)

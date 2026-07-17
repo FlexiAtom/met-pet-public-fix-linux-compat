@@ -122,9 +122,18 @@ class SetupWizard(QWidget):
         self.setObjectName("WizardRoot")
         self.setMinimumSize(760, 620)
         self.resize(880, 780)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        # Use a solid dark fill instead of WA_TranslucentBackground so the
+        # wizard never shows the desktop (or the pet behind it) through any
+        # transparent region — avoids a confusing "second pet" appearance.
+        self.setAutoFillBackground(True)
+        palette = self.palette()
+        palette.setColor(self.backgroundRole(), QColor("#0E1020"))
+        self.setPalette(palette)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # Start invisible to avoid showing a blank frame before the
+        # dark-themed UI is fully painted.  Fade in once the event loop runs.
+        self.setWindowOpacity(0.0)
         self.setStyleSheet(WIZARD_STYLESHEET)
         self.setAccessibleName("MeaPet 配置")
         self.setAccessibleDescription("使用标签页配置环境、对话、语音和屏幕识图功能")
@@ -286,6 +295,13 @@ class SetupWizard(QWidget):
             self.font_scale_slider.value() / 100.0,
         )
 
+        # Use an owned QTimer to defer the fade-in until after the event
+        # loop has painted the dark-themed UI once.
+        self._fade_timer = QTimer(self)
+        self._fade_timer.setSingleShot(True)
+        self._fade_timer.timeout.connect(lambda: self._fade_in() if self.isVisible() else None)
+        self._fade_timer.start(0)
+
     def _build_display_settings(self, initial_scale: float) -> QFrame:
         """创建独立的界面字号设置卡，并提供即时预览。"""
         card = QFrame()
@@ -366,6 +382,19 @@ class SetupWizard(QWidget):
         value = int(value)
         self.font_scale_value.setText(f"{value}%")
         apply_ui_font_scale(self, value / 100.0)
+
+    def _fade_in(self) -> None:
+        """Gradually restore opacity so the window doesn't flash from transparent."""
+        try:
+            from PyQt5.QtCore import QPropertyAnimation
+            anim = QPropertyAnimation(self, b"windowOpacity")
+            anim.setDuration(180)
+            anim.setStartValue(self.windowOpacity())
+            anim.setEndValue(1.0)
+            anim.start()
+            self._fade_anim = anim  # keep a reference to prevent GC
+        except Exception:
+            self.setWindowOpacity(1.0)
 
     @property
     def is_dirty(self) -> bool:

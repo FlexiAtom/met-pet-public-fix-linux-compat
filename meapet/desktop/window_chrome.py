@@ -188,7 +188,7 @@ class PetWindowChromeMixin:
 
     def _toggle_auto_start(self):
         if sys.platform != "win32":
-            self._show_bubble("开机自启目前仅支持 Windows 喵", 2500)
+            self._show_bubble("Autostart currently only supports Windows", 2500)
             return
         import winreg
         key = winreg.OpenKey(
@@ -201,14 +201,19 @@ class PetWindowChromeMixin:
             winreg.QueryValueEx(key, "MeaPet")
             winreg.DeleteValue(key, "MeaPet")
             winreg.CloseKey(key)
-            self._show_bubble("已关闭开机自启喵", 2000)
+            self._show_bubble("Autostart disabled", 2000)
         except FileNotFoundError:
             winreg.CloseKey(key)
-            py = sys.executable.replace("python.exe", "pythonw.exe")
-            if not os.path.exists(py):
-                py = sys.executable
-            pet_path = str(PROJECT_ROOT / "pet.py")
-            cmd = f'"{py}" "{pet_path}"'
+            # Build the command to register.
+            if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                # PyInstaller build: exe path is already the launcher.
+                cmd = f'"{sys.executable}"'
+            else:
+                py = sys.executable.replace("python.exe", "pythonw.exe")
+                if not os.path.exists(py):
+                    py = sys.executable
+                pet_path = str(PROJECT_ROOT / "pet.py")
+                cmd = f'"{py}" "{pet_path}"'
             key = winreg.OpenKey(
                 winreg.HKEY_CURRENT_USER,
                 r"Software\Microsoft\Windows\CurrentVersion\Run",
@@ -217,7 +222,7 @@ class PetWindowChromeMixin:
             )
             winreg.SetValueEx(key, "MeaPet", 0, winreg.REG_SZ, cmd)
             winreg.CloseKey(key)
-            self._show_bubble("已开启开机自启喵 🖥️", 2000)
+            self._show_bubble("Autostart enabled", 2000)
 
 
     def _build_tray_menu(self) -> QMenu:

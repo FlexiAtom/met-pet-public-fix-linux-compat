@@ -81,11 +81,18 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 if _rp and _rp not in _seen:
                     _seen.add(_rp)
                     self.python_exe = _p
-                    log.info(f"检测到 GPT-SoVITS: {_p}")
+                    log.info(f"Detected GPT-SoVITS: {_p}")
                     break
             if not self.python_exe:
-                self.python_exe = sys.executable
-                log.warning(f"未找到 GPT-SoVITS，降级至当前解释器: {self.python_exe}")
+                if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                    self.python_exe = ""
+                    log.warning(
+                        "[frozen] No real Python found for GSV inference. "
+                        "Local TTS subprocess calls will be skipped."
+                    )
+                else:
+                    self.python_exe = sys.executable
+                    log.warning(f"No GPT-SoVITS found, falling back to: {self.python_exe}")
 
         # 验证 python_exe 是否存在
         if not os.path.isfile(self.python_exe):

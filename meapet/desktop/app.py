@@ -545,17 +545,19 @@ def main():
     from datetime import datetime
     from pathlib import Path as _Path
 
-    # 原生崩溃落盘（OpenGL / Live2D C++）
+    # Native crash log (OpenGL / Live2D C++ faults).
     try:
         import faulthandler
-        _fault_fp = open(_Path(PROJECT_ROOT) / "meapet_fault.log", "a", encoding="utf-8")
+        from meapet.paths import get_data_dir
+        _fault_fp = open(_Path(get_data_dir()) / "meapet_fault.log", "a", encoding="utf-8")
         faulthandler.enable(file=_fault_fp, all_threads=True)
     except Exception:
         pass
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-    boot_log = _Path(PROJECT_ROOT) / "meapet_boot.log"
+    from meapet.paths import get_data_dir
+    boot_log = _Path(get_data_dir()) / "meapet_boot.log"
 
     try:
         boot_log.write_text(

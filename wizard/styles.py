@@ -133,7 +133,7 @@ WIZARD_STYLESHEET = f"""
         font-family: {FONT_FAMILY};
     }}
     QWidget#WizardRoot {{
-        background: transparent;
+        background: {COLOR_BG};
         color: {COLOR_TEXT};
         font-family: {FONT_FAMILY};
         font-size: 14px;

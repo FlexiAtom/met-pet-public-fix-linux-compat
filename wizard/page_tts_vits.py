@@ -47,7 +47,25 @@ class TtsPageVitsMixin:
             )
 
     def _setup_vits_env(self):
-        """用户显式点击后，按需检测/创建 VITS Python 环境（可能下载依赖）"""
+        """On explicit user click, detect / create the VITS Python environment.
+
+        In frozen mode this is skipped because ``sys.executable`` is the
+        pet exe, not a real Python interpreter — spawning subprocesses
+        would start a duplicate MeaPet instance.
+        """
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            styled_message_box(
+                self,
+                title="Not available in packaged build",
+                text=(
+                    "VITS environment setup requires a real Python interpreter.\n\n"
+                    "This feature is not available in the packaged version. "
+                    "Please use MiMo cloud TTS instead, or run the source "
+                    "version with Python directly."
+                ),
+                icon=QMessageBox.Information,
+            )
+            return
         from PyQt5.QtWidgets import QMessageBox
         ret = styled_message_box(
             self,

@@ -1,9 +1,10 @@
-"""TTS 引擎 mixin（从 tts.py 拆出）"""
+"""TTS engine mixin (extracted from tts.py)."""
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+import sys
 import time
 from typing import Optional
 
@@ -36,7 +37,18 @@ class TtsGsvMixin:
     def _speak_gsv(self, tts_text: str, output_wav: str, mood: str,
                     ref_wav: str, ref_text: str, ref_lang: str,
                     text_lang: str | None = None) -> Optional[tuple[str, str]]:
-        """GPT-SoVITS 后端推理（原逻辑）"""
+        """GPT-SoVITS backend inference.
+
+        In frozen mode (PyInstaller), ``self.python_exe`` may be empty or
+        point to the pet exe — skip subprocess calls to avoid spawning a
+        duplicate MeaPet instance.
+        """
+        if not self.python_exe:
+            log.warning(
+                "[frozen] No real Python interpreter for GSV inference. "
+                "Skipping local TTS; use MiMo cloud TTS instead."
+            )
+            return None, ""
         reference_language = _gsv_language_label(ref_lang)
         synthesis_language = _gsv_language_label(text_lang or ref_lang)
         # 获取参考音频
