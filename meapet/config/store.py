@@ -16,6 +16,7 @@ import copy
 import json
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
@@ -77,13 +78,38 @@ def project_root() -> str:
 
 
 def config_path(name: str = "config.json") -> str:
+    """返回配置文件路径。
+
+    在 PyInstaller 打包模式下使用 ``sys._MEIPASS``
+    （即 ``dist/MeaPet/_internal/``），配置与运行库在一起，
+    整个 dist/ 文件夹可以整体分发便携版。
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return str(Path(sys._MEIPASS) / name)
     return os.path.join(project_root(), name)
 
 
 def resolve_startup_config_path(
     root: Optional[Union[str, os.PathLike[str]]] = None,
 ) -> str:
-    """返回与当前工作目录无关的启动配置路径。"""
+    """返回与当前工作目录无关的启动配置路径。
+
+    搜索顺序（仅打包模式）：
+    1. ``_MEIPASS / config.json``（用户保存的配置）
+    2. ``_MEIPASS / config.example.json``（内置默认配置）
+
+    开发模式下：
+    1. ``root / config.json``
+    2. ``root / config.example.json``
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass = Path(sys._MEIPASS)
+        user_cfg = meipass / "config.json"
+        if user_cfg.is_file():
+            return str(user_cfg)
+        return str(meipass / "config.example.json")
+
+    # 开发模式
     base = Path(root) if root is not None else Path(project_root())
     primary = base / "config.json"
     if primary.is_file():
@@ -97,9 +123,13 @@ def resolve_writable_config_path(
 ) -> str:
     """把启动/读取路径映射为可写的 config.json。
 
-    从 config.example.json 启动时，首次保存必须落到同目录 config.json，
-    避免改写仓库模板。
+    从 config.example.json 启动时，首次保存必须落到 ``_MEIPASS``
+    （即 ``dist/MeaPet/_internal/config.json``），
+    与内置运行库在一起，整体便携分发。
     """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return str(Path(sys._MEIPASS) / "config.json")
+
     base = Path(root) if root is not None else Path(project_root())
     if path is None or str(path).strip() == "":
         return str(base / "config.json")
@@ -368,10 +398,17 @@ def _normalize_llm_contract(value: object) -> dict:
     direct.setdefault("protocol", "ollama_chat" if provider == "ollama" else "openai_chat")
     direct.setdefault("api_base", str(llm.get("api_base") or "").strip())
     direct.setdefault("host", str(llm.get("host") or "").strip())
-    direct.setdefault("model", str(llm.get("model") or "").strip())
     direct.setdefault("api_key", str(llm.get("api_key") or "").strip())
     direct.setdefault("temperature", llm.get("temperature", 0.7))
     direct.setdefault("max_tokens", llm.get("max_tokens", 4096))
+    # model: 顶层 llm.model 有值时优先覆盖 direct.model，
+    # 因为 config.example.json 中 direct.model 固化着旧默认值 qwen3.5:4b，
+    # 而 setdefault 在 key 已存在时不会更新。
+    llm_model = str(llm.get("model") or "").strip()
+    if llm_model:
+        direct["model"] = llm_model
+    else:
+        direct.setdefault("model", "")
     # 512 是旧模板的默认值，容易截断正常回复；成对出现时视为旧默认迁移。
     try:
         direct_tokens = int(direct.get("max_tokens"))

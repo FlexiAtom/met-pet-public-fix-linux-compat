@@ -1095,6 +1095,8 @@ def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatE
     host = direct.get("host") or llm_cfg.get("host") or "http://127.0.0.1:11434"
     if backend == "deepseek" and not api_base:
         api_base = "https://api.deepseek.com/v1"
+    elif backend == "deepseek" and api_base.startswith("http://"):
+        api_base = "https://" + api_base[len("http://"):]
     if (backend or "").lower() == "mimo":
         try:
             from meapet.config.store import normalize_mimo_model_id
@@ -1105,6 +1107,8 @@ def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatE
                 model = "mimo-v2.5"
         if not api_base:
             api_base = "https://api.xiaomimimo.com/v1"
+        elif api_base.startswith("http://"):
+            api_base = "https://" + api_base[len("http://"):]
     return ChatEngine(
         backend=backend,
         host=host,

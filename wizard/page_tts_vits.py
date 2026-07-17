@@ -66,7 +66,6 @@ class TtsPageVitsMixin:
                 icon=QMessageBox.Information,
             )
             return
-        from PyQt5.QtWidgets import QMessageBox
         ret = styled_message_box(
             self,
             title="按需安装确认",
