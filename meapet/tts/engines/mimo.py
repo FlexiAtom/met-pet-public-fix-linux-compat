@@ -294,7 +294,7 @@ class TtsMimoMixin:
             if ref_wav:
                 _add_candidate(ref_wav, base_score=2_000_000)
         except Exception as e:
-            log.track(lambda: f"  MiMo clone 获取 GPT-SoVITS 参考失败 [debug]: {e}")
+            log.track(lambda _e=e: f"  MiMo clone 获取 GPT-SoVITS 参考失败 [debug]: {_e}")
 
         # 再扫 GPT-Sovits 各情绪目录，避免只命中旧的 jp 样本
         try:

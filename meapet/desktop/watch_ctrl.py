@@ -217,7 +217,7 @@ class PetWatcherMixin:
             self._ensure_tts_poll()
         except Exception as e:
             log.error(f"[watch] _on_watch_result 异常: {type(e).__name__}")
-            log.track(lambda: f"[watch] _on_watch_result 异常: {type(e).__name__}: {e}")
+            log.track(lambda _e=e: f"[watch] _on_watch_result 异常: {type(_e).__name__}: {_e}")
             self.show_reply(text, mood, duration_ms=self.config["bubble_duration_ms"]["watch"])
             set_awaiting_reply_state(self, False)
             self._start_watcher_timer()

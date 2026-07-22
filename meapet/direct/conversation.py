@@ -131,8 +131,8 @@ class DirectConversationAdapter:
             yield TurnCancelled(request.turn_id)
             return
         if not self.engine.available:
-            _safe_print(f"[DEBUG] 后端未就绪 turn={turn} backend={self.engine.backend} host={self.engine.host}", flush=True)
             log.error(f"[direct] 后端未就绪 turn={turn}")
+            log.debug(f"[DEBUG] 后端未就绪 turn={turn} backend={self.engine.backend} host={self.engine.host}", flush=True)
             yield TurnFailed(
                 request.turn_id,
                 "backend_unavailable",
