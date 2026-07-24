@@ -85,4 +85,5 @@ jobs:
 
     - name: Test with pytest (headless)
       run: |
+        export QT_QPA_PLATFORM=offscreen
         xvfb-run python -m pytest -q
