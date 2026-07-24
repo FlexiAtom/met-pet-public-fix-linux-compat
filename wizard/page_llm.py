@@ -458,10 +458,14 @@ class LLMPage(QFrame):
 
     def collect_direct_profile(self, api_key: str = "") -> dict:
         """Collect the current form values into a config profile dict."""
-        protocol = "openai_chat"
+        from meapet.config.store import infer_direct_protocol
+
+        provider = self.get_backend()
+        # 按当前 provider 推断协议；Ollama/Anthropic 不得被写死成 openai_chat
+        protocol = infer_direct_protocol(provider)
         endpoint = self.endpoint_input.text().strip()
         return {
-            "provider": self.get_backend(),
+            "provider": provider,
             "protocol": protocol,
             "api_base": endpoint,
             "host": "",

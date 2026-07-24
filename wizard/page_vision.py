@@ -394,6 +394,9 @@ class VisionPage(QFrame):
         elif backend == "ollama":
             if vision["model"] in ("mimo", ""):
                 vision["model"] = "qwen3.5:4b"
+            # 切到本地 ollama 时清空云端 api_base，防止残留默认 MiMo 地址
+            # 让 ScreenWatcher 误 POST 截图到云端
+            vision["api_base"] = ""
 
         watcher = {
             "enabled": bool(

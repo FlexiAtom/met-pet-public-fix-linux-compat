@@ -288,14 +288,19 @@ class MeaPetOutputStreamParser:
         self._last_close_count = 0  # count of </MEAPET_SEGMENT seen (avoid re-scan)
         self._overflowed = False
 
+    @property
+    def overflowed(self) -> bool:
+        """累计输入是否已触达上限（调用方应中止流并报协议错误）。"""
+        return self._overflowed
+
     def feed(self, chunk: object) -> Tuple[object, ...]:
         if self._closed:
             raise RuntimeError("output parser is already closed")
         value = str(chunk or "")
         if not value:
             return ()
-        # 达到上限后丢弃后续输入：close() 会按已有内容正常收尾，
-        # 不向调用方抛错（适配器只处理协议错误，不处理解析器异常）。
+        # 达到上限后丢弃后续输入并置 overflowed；调用方应检查该标志并
+        # 主动中止网络流，避免 raw_chunks 继续无界累积。
         if self._overflowed:
             return ()
         remaining = self._MAX_RAW_CHARS - len(self._raw)

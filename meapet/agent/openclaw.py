@@ -601,6 +601,8 @@ class OpenClawAdapter:
                 else:
                     raw_output += delta
                 parser.feed(delta)
+                if parser.overflowed:
+                    return None
                 continue
             if state in {"aborted", "error"}:
                 return None
@@ -609,6 +611,8 @@ class OpenClawAdapter:
                     final_text = _message_text(payload.get("message"))
                     if final_text:
                         parser.feed(final_text)
+                        if parser.overflowed:
+                            return None
                 result = parser.close(tts_enabled=request.tts_enabled)
                 if result.requires_repair(tts_enabled=request.tts_enabled):
                     return None
@@ -741,6 +745,13 @@ class OpenClawAdapter:
                                 protocol_completed_emitted = True
                             if not suppress_stream:
                                 yield event
+                        if parser.overflowed:
+                            yield TurnFailed(
+                                request.turn_id,
+                                "protocol",
+                                "模型输出超过长度上限，已中止本回合。",
+                            )
+                            return
                         continue
                     if state == "final":
                         if not raw_output:
@@ -748,6 +759,13 @@ class OpenClawAdapter:
                             if final_text:
                                 raw_output = final_text
                                 parser.feed(final_text)
+                                if parser.overflowed:
+                                    yield TurnFailed(
+                                        request.turn_id,
+                                        "protocol",
+                                        "模型输出超过长度上限，已中止本回合。",
+                                    )
+                                    return
                         break
                     if state == "aborted":
                         yield TurnCancelled(request.turn_id)

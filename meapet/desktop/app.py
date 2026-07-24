@@ -370,8 +370,9 @@ class MeaPet(
         vision_mode = str(vision_cfg.get("mode") or "disabled").strip().lower()
 
         api_key = resolve_vision_api_key(vision_cfg, llm_cfg)
-        api_base = resolve_vision_api_base(vision_cfg, llm_cfg)
         backend = resolve_vision_backend(vision_cfg, llm_cfg)
+        # 上传目标与云端确认共用同一解析：ollama 只走 host，mimo 走 api_base
+        api_base = resolve_vision_api_base(vision_cfg, llm_cfg)
         vision_model = vision_cfg.get("model") or "qwen3.5:4b"
 
         log.info(

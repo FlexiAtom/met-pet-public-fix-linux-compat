@@ -230,14 +230,25 @@ def resolve_llm_api_key(llm_cfg: dict) -> str:
 
 
 def resolve_direct_api_key(llm_cfg: dict) -> str:
-    """解析显式 direct profile；环境变量仍优先于文件值。"""
+    """解析显式 direct profile；环境变量仍优先于文件值。
+
+    禁止跨厂商回退：direct.provider 与顶层 backend 不一致时，
+    不得把其它后端的环境变量密钥发给当前端点。
+    """
     direct = llm_cfg.get("direct") if isinstance(llm_cfg.get("direct"), dict) else {}
-    provider = direct.get("provider") or llm_cfg.get("backend")
+    explicit_provider = str(direct.get("provider") or "").strip().lower()
+    top_backend = str(llm_cfg.get("backend") or "").strip().lower()
+    provider = explicit_provider or top_backend
     value = resolve_secret(
         str(direct.get("api_key") or ""),
         _llm_env_names(provider),
     )
-    return value or resolve_llm_api_key(llm_cfg)
+    if value:
+        return value
+    # 仅当没有显式 provider，或显式 provider 与顶层 backend 相同，才回退顶层密钥
+    if not explicit_provider or explicit_provider == top_backend:
+        return resolve_llm_api_key(llm_cfg)
+    return ""
 
 
 def resolve_tts_api_key(tts_cfg: dict, llm_cfg: Optional[dict] = None) -> str:
@@ -293,11 +304,17 @@ def resolve_vision_api_base(
     llm_cfg: Optional[dict] = None,
 ) -> str:
     """解析视觉 API 地址：显式配置优先；仅同后端才继承 llm 地址，
-    否则回退该后端自己的默认地址（禁止把截图发往其它厂商的端点）。"""
+    否则回退该后端自己的默认地址（禁止把截图发往其它厂商的端点）。
+
+    ollama 只认 host：残留的云端 api_base 一律忽略，避免确认走本地、
+    实际上传到 MiMo 默认地址的错位。
+    """
+    backend = resolve_vision_backend(vision_cfg, llm_cfg)
+    if backend == "ollama":
+        return resolve_vision_host(vision_cfg, llm_cfg)
     explicit = (vision_cfg.get("api_base") or "").strip()
     if explicit:
         return explicit
-    backend = resolve_vision_backend(vision_cfg, llm_cfg)
     llm = llm_cfg or {}
     if str(llm.get("backend") or "").strip().lower() == backend:
         inherited = (llm.get("api_base") or "").strip()

@@ -398,6 +398,8 @@ class HermesAdapter:
                     content = delta.get("content")
                     if isinstance(content, str) and content:
                         parser.feed(content)
+                        if parser.overflowed:
+                            return None
             result = parser.close(tts_enabled=request.tts_enabled)
         except (httpx.HTTPError, ValueError):
             return None
@@ -527,10 +529,21 @@ class HermesAdapter:
                             protocol_completed_emitted = True
                         yield event
 
+                    if parser.overflowed:
+                        yield TurnFailed(
+                            request.turn_id,
+                            "protocol",
+                            "模型输出超过长度上限，已中止本回合。",
+                        )
+                        return
             raw_text = "".join(raw_chunks)
+            # 默认日志只记长度；正文不落盘
             if raw_text.strip():
                 log.info(
-                    f"[agent] 模型返回文本 turn={turn} chars={len(raw_text)}\n{raw_text}"
+                    f"[agent] 模型返回文本 turn={turn} chars={len(raw_text)}"
+                )
+                log.track(
+                    lambda t=raw_text: "[agent] reply-text:" + chr(10) + t
                 )
             else:
                 log.info(f"[agent] 模型返回文本为空 turn={turn}")

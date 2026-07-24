@@ -872,8 +872,8 @@ class PetChatFlowMixin:
         if context is not None and not self._turn_context_is_current(context):
             return
         _log_private_text("[reply] LLM 回复", reply, suffix=f"mood={mood}")
-        # 控制台默认打印模型返回的可展示文本。
-        log.info(f"[reply] 收到回复 mood={mood} chars={len(reply or '')}\n{reply or ''}")
+        # 默认日志只记长度；正文走 _log_private_text 的 TRACK 通道
+        log.info(f"[reply] 收到回复 mood={mood} chars={len(reply or '')}")
         if hasattr(self, '_chat_timeout'):
             self._chat_timeout.stop()
         eng = getattr(self, "chat_engine", None)
