@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from meapet.agent.base import AgentTurnRequest, ImageAttachment
-from meapet.agent.openai_adapter import OpenAIAdapter, OpenAIConfig
+from meapet.agent.openai_adapter import OpenAIAdapter, OpenAIConfig, OpenAICapabilities
 
 
 class AsyncContextManager:
