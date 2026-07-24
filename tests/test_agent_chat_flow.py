@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -68,7 +68,6 @@ class _Stack:
 
 def _segment(index=0, text="你好，主人"):
     from meapet.conversation.types import ReplySegment
-
     return ReplySegment(
         index=index,
         display_text=text,
@@ -82,7 +81,6 @@ def _segment(index=0, text="你好，主人"):
 def _completed(segment):
     from meapet.agent.base import TurnCompleted
     from meapet.conversation.output_protocol import ParseResult
-
     return TurnCompleted(
         "turn-flow",
         ParseResult((segment,), (), True, "meapet"),
@@ -90,6 +88,7 @@ def _completed(segment):
 
 
 class TestAgentImageAttachment(unittest.TestCase):
+
     def test_request_accepts_only_bounded_base64_images(self):
         from meapet.agent.base import AgentTurnRequest, ImageAttachment
 
@@ -103,7 +102,6 @@ class TestAgentImageAttachment(unittest.TestCase):
             user_text="请看截图",
             attachments=(attachment,),
         )
-
         self.assertEqual(request.attachments, (attachment,))
         self.assertEqual(attachment.decoded_size, 3)
 
@@ -115,14 +113,14 @@ class TestAgentImageAttachment(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 ImageAttachment(**values)
 
-    def test_hermes_sends_images_as_openai_content_parts(self):
+    def test_openai_sends_images_as_content_parts(self):
         from meapet.agent.base import AgentTurnRequest, ImageAttachment
-        
+        from meapet.agent.openai_adapter import OpenAIAdapter, OpenAIConfig
 
-        adapter = HermesAdapter(
-            HermesConfig(base_url="http://127.0.0.1:8642")
+        adapter = OpenAIAdapter(
+            OpenAIConfig(base_url="http://127.0.0.1:8642")
         )
-        messages = adapter._messages(
+        messages = adapter._build_messages(
             AgentTurnRequest(
                 turn_id="vision-turn",
                 user_text="请看截图",
@@ -135,7 +133,6 @@ class TestAgentImageAttachment(unittest.TestCase):
                 ),
             )
         )
-
         self.assertEqual(
             messages[-1],
             {
@@ -154,9 +151,10 @@ class TestAgentImageAttachment(unittest.TestCase):
 
 
 class TestAgentFactory(unittest.TestCase):
-    def test_hermes_factory_resolves_env_and_persists_session_scope(self):
+
+    def test_openai_factory_resolves_env_and_config(self):
         from meapet.agent.factory import create_agent_adapter_from_config
-        from meapet.agent.hermes import HermesAdapter
+        from meapet.agent.openai_adapter import OpenAIAdapter
         from meapet.config.store import normalize_config
 
         config = normalize_config(
@@ -164,36 +162,29 @@ class TestAgentFactory(unittest.TestCase):
                 "llm": {
                     "mode": "agent",
                     "agent": {
-                        "kind": "hermes",
                         "base_url": "http://192.168.1.8:8642/v1",
-                        "auth_token": "$HERMES_API_SERVER_KEY",
+                        "api_key": "$OPENAI_API_KEY",
+                        "model": "gpt-4o-mini",
                         "history_turns": 5,
-                        "tls": {"verify": True, "ca_file": ""},
+                        "timeout_seconds": 60.0,
                     },
                 }
             }
         )
-
         with mock.patch.dict(
             os.environ,
-            {"HERMES_API_SERVER_KEY": "env-secret"},
+            {"OPENAI_API_KEY": "env-secret"},
             clear=False,
         ):
             adapter = create_agent_adapter_from_config(config)
-
-        self.assertIsInstance(adapter, HermesAdapter)
-        self.assertEqual(adapter.config.auth_token, "env-secret")
+        self.assertIsInstance(adapter, OpenAIAdapter)
+        self.assertEqual(adapter.config.api_key, "env-secret")
         self.assertEqual(adapter.config.base_url, "http://192.168.1.8:8642/v1")
-        self.assertTrue(config["llm"]["agent"]["session_id"])
-        self.assertTrue(config["llm"]["agent"]["session_key"])
-        self.assertEqual(
-            adapter.config.session_id,
-            config["llm"]["agent"]["session_id"],
-        )
+        self.assertEqual(adapter.config.model, "gpt-4o-mini")
 
-    def test_factory_builds_official_openclaw_gateway_adapter(self):
+    def test_factory_builds_openai_adapter(self):
         from meapet.agent.factory import create_agent_adapter_from_config
-        
+        from meapet.agent.openai_adapter import OpenAIAdapter
         from meapet.config.store import normalize_config
 
         config = normalize_config(
@@ -201,23 +192,22 @@ class TestAgentFactory(unittest.TestCase):
                 "llm": {
                     "mode": "agent",
                     "agent": {
-                        "kind": "openclaw",
-                        "base_url": "ws://127.0.0.1:18789",
-                        "auth_token": "token",
-                        "session_key": "agent:main:meapet:test",
+                        "base_url": "http://127.0.0.1:11434/v1",
+                        "api_key": "test-key",
+                        "model": "qwen2.5:7b",
+                        "timeout_seconds": 90.0,
                     },
                 }
             }
         )
-
         adapter = create_agent_adapter_from_config(config)
-
-        self.assertIsInstance(adapter, OpenClawAdapter)
-        self.assertEqual(adapter.config.auth_token, "token")
-        self.assertEqual(adapter.config.session_key, "agent:main:meapet:test")
+        self.assertIsInstance(adapter, OpenAIAdapter)
+        self.assertEqual(adapter.config.api_key, "test-key")
+        self.assertEqual(adapter.config.model, "qwen2.5:7b")
 
 
 class TestAgentChatWorkerSelection(unittest.TestCase):
+
     def test_agent_mode_builds_agent_worker_with_frontend_context_and_history(self):
         from meapet.desktop.chat_flow import PetChatFlowMixin
         from meapet.desktop.workers import AgentChatWorker
@@ -230,7 +220,6 @@ class TestAgentChatWorkerSelection(unittest.TestCase):
         class TTS:
             enabled = False
             voice_lang = "zh"
-
             @staticmethod
             def supported_languages():
                 return ("zh", "jp", "en")
@@ -253,7 +242,6 @@ class TestAgentChatWorkerSelection(unittest.TestCase):
 
         host = Host()
         worker = host._make_chat_worker("这次的问题")
-
         self.assertIsInstance(worker, AgentChatWorker)
         request = worker.request
         self.assertEqual(request.user_text, "这次的问题")
@@ -310,15 +298,14 @@ class TestAgentChatWorkerSelection(unittest.TestCase):
         host._chat_worker = worker
         host._conversation_key = new_key
         host._conversation_orchestrator.activate(new_key)
-
         host._poll_chat()
-
         self.assertEqual(host._bubble_stack.begun, [])
         self.assertEqual(host._agent_history, [])
         self.assertTrue(worker.deleted)
 
 
 class TestAgentChatPolling(unittest.TestCase):
+
     def _host(self, *, tts_enabled=False):
         from meapet.agent.presentation import AgentTurnPresentation
         from meapet.desktop.chat_flow import PetChatFlowMixin
@@ -385,9 +372,7 @@ class TestAgentChatPolling(unittest.TestCase):
                 _completed(segment),
             )
         )
-
         host._poll_chat()
-
         stack = host._bubble_stack
         self.assertEqual(len(stack.begun), 1)
         bubble = stack.begun[0][0]
@@ -443,7 +428,6 @@ class TestAgentChatPolling(unittest.TestCase):
 
         with mock.patch.object(chat_flow, "TTSWorker", VoiceWorker):
             host._poll_chat()
-
         self.assertEqual(host._bubble_stack.begun, [])
         self.assertEqual(host._bubble_stack.finalized, [])
         self.assertTrue(host._awaiting_reply)
@@ -466,7 +450,6 @@ class TestAgentChatPolling(unittest.TestCase):
                 side_effect=lambda delay, callback: scheduled.append((delay, callback)),
             ):
                 host._poll_tts()
-
             self.assertEqual(len(host._bubble_stack.begun), 1)
             bubble = host._bubble_stack.begun[0][0]
             self.assertEqual(
@@ -476,9 +459,7 @@ class TestAgentChatPolling(unittest.TestCase):
             self.assertEqual(host.played, [str(wav)])
             self.assertTrue(host._awaiting_reply)
             self.assertEqual(scheduled[0][0], 1200)
-
             scheduled[0][1]()
-
         self.assertFalse(host._awaiting_reply)
         self.assertEqual(host._agent_history[-1]["content"], "你好，主人")
 
@@ -495,9 +476,7 @@ class TestAgentChatPolling(unittest.TestCase):
                 ),
             )
         )
-
         host._poll_chat()
-
         self.assertEqual(
             host.system_messages,
             [("Agent 认证失败，请检查访问令牌。", 10000, None)],
@@ -528,7 +507,6 @@ class TestAgentChatPolling(unittest.TestCase):
         host = Host()
         with mock.patch("meapet.desktop.chat_flow.log_error"):
             host._on_chat_error("Authorization: Bearer secret-backend-detail")
-
         self.assertFalse(host._awaiting_reply)
         self.assertEqual(len(host.system_messages), 1)
         text, duration, mood = host.system_messages[0]
@@ -561,9 +539,7 @@ class TestAgentChatPolling(unittest.TestCase):
                 _completed(segment),
             )
         )
-
         host._poll_chat()
-
         turn = host._conversation_timeline.get(
             host._conversation_key,
             "turn-flow",
@@ -578,3 +554,4 @@ class TestAgentChatPolling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
