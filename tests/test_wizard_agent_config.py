@@ -53,7 +53,7 @@ class TestWizardConversationConfig(unittest.TestCase):
     def test_direct_mode_saves_actual_protocol_endpoint_model_and_limits(self):
         page = self.wizard.llm_page
         self.wizard.backend_page.direct_radio.setChecked(True)
-        page.set_backend("deepseek")
+        # 不再调用 set_backend；直接填写 endpoint
         page.endpoint_input.setText("https://models.example.test/v1")
         page.model_combo.setEditText("custom-reply-model")
         page.temperature_input.setValue(0.35)
@@ -66,7 +66,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         self.assertEqual(
             config["llm"]["direct"],
             {
-                "provider": "deepseek",
+                "provider": "custom",
                 "protocol": "openai_chat",
                 "api_base": "https://models.example.test/v1",
                 "host": "",
@@ -181,7 +181,6 @@ class TestWizardConversationConfig(unittest.TestCase):
     def test_direct_api_key_has_one_editable_source(self):
         page = self.wizard.llm_page
         self.wizard.backend_page.direct_radio.setChecked(True)
-        page.set_backend("deepseek")
         page.direct_api_key_input.setText("single-source-key")
 
         config = self.wizard.collect_config()
@@ -193,30 +192,30 @@ class TestWizardConversationConfig(unittest.TestCase):
         self.assertEqual(config["llm"]["api_key"], "single-source-key")
 
     # ------------------------------------------------------------------
-    # set_backend 不应自动填充表单字段
+    # get_backend 始终返回 custom，不修改 UI 字段
     # ------------------------------------------------------------------
-    def test_set_backend_does_not_autopopulate_form_fields(self):
-        """Unified form: set_backend only affects get_backend(), not UI fields."""
+    def test_get_backend_always_returns_custom(self):
+        """Unified form: get_backend() always returns 'custom'."""
         page = self.wizard.llm_page
         page.endpoint_input.setText("https://custom.endpoint/v1")
         page.model_combo.setEditText("custom-model")
         page.direct_api_key_input.setText("custom-key")
 
-        page.set_backend("deepseek")
-        self.assertEqual(page.get_backend(), "deepseek")
+        self.assertEqual(page.get_backend(), "custom")
+        # UI 字段不应被修改
         self.assertEqual(page.endpoint_input.text(), "https://custom.endpoint/v1")
         self.assertEqual(page.model_combo.currentText(), "custom-model")
         self.assertEqual(page.direct_api_key_input.text(), "custom-key")
 
     # ------------------------------------------------------------------
-    # 恢复 provider 不应覆盖已编辑的 endpoint
+    # 恢复 profile 不应覆盖已编辑的 endpoint
     # ------------------------------------------------------------------
-    def test_restored_provider_does_not_override_an_edited_endpoint(self):
+    def test_restored_profile_does_not_override_an_edited_endpoint(self):
         page = self.wizard.llm_page
         self.wizard.backend_page.direct_radio.setChecked(True)
         page.apply_direct_profile(
             {
-                "provider": "ollama",
+                "provider": "custom",
                 "api_base": "http://127.0.0.1:11434/v1",
                 "model": "qwen",
             }
@@ -225,19 +224,20 @@ class TestWizardConversationConfig(unittest.TestCase):
         page.endpoint_input.setText("https://api.deepseek.com/v1")
 
         config = self.wizard.collect_config()
-        self.assertEqual(config["llm"]["direct"]["provider"], "deepseek")
-        self.assertEqual(config["llm"]["backend"], "deepseek")
+        self.assertEqual(config["llm"]["direct"]["provider"], "custom")
+        self.assertEqual(
+            config["llm"]["direct"]["api_base"],
+            "https://api.deepseek.com/v1",
+        )
 
     # ------------------------------------------------------------------
-    # 编辑 endpoint 应清除显式 provider 覆盖
+    # 编辑 endpoint 后 provider 仍为 custom
     # ------------------------------------------------------------------
-    def test_editing_endpoint_clears_an_explicit_provider_override(self):
+    def test_editing_endpoint_keeps_custom_provider(self):
         page = self.wizard.llm_page
-        page.set_backend("ollama")
         page.endpoint_input.setText("https://api.deepseek.com/v1")
-        page.endpoint_input.textEdited.emit(page.endpoint_input.text())
 
-        self.assertEqual(page.get_backend(), "deepseek")
+        self.assertEqual(page.get_backend(), "custom")
 
     # ------------------------------------------------------------------
     # Agent 模式：保存 OpenAI 兼容配置 + 控制监听
@@ -247,7 +247,7 @@ class TestWizardConversationConfig(unittest.TestCase):
             "llm": {
                 "mode": "direct",
                 "direct": {
-                    "provider": "mimo",
+                    "provider": "custom",
                     "protocol": "openai_chat",
                     "api_base": "https://saved.example/v1",
                     "host": "",
@@ -260,7 +260,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         }
         page = self.wizard.backend_page
         page.agent_radio.setChecked(True)
-        # 不再有 set_agent_kind —— agent 段统一为 OpenAI 兼容
+        # agent 段统一为 OpenAI 兼容
         page.agent_base_url.setText("https://agent.example.test/v1")
         page.agent_api_key.setText("$OPENAI_API_KEY")
         page.agent_model.setText("gpt-4o-mini")
@@ -276,7 +276,6 @@ class TestWizardConversationConfig(unittest.TestCase):
         config = self.wizard.collect_config()
 
         self.assertEqual(config["llm"]["mode"], "agent")
-        # agent 段现在只有 OpenAI 兼容字段，无 kind / auth_token / session_*
         agent = config["llm"]["agent"]
         self.assertEqual(agent["base_url"], "https://agent.example.test/v1")
         self.assertEqual(agent["api_key"], "$OPENAI_API_KEY")
@@ -310,10 +309,9 @@ class TestWizardConversationConfig(unittest.TestCase):
         config = {
             "llm": {
                 "mode": "agent",
-                "backend": "openai_compatible",
                 "direct": {
-                    "provider": "ollama",
-                    "protocol": "ollama_chat",
+                    "provider": "custom",
+                    "protocol": "openai_chat",
                     "api_base": "",
                     "host": "http://10.0.0.2:11434",
                     "model": "local-model",
@@ -415,7 +413,6 @@ class TestWizardConversationConfig(unittest.TestCase):
         emitted = spy[0][0]
         self.assertEqual(emitted["llm"]["mode"], "agent")
         self.assertIn("direct", emitted["llm"])
-        # agent 段应含 OpenAI 标准字段
         agent = emitted["llm"]["agent"]
         self.assertEqual(agent["base_url"], "https://api.openai.com/v1")
         self.assertEqual(agent["model"], "gpt-4o-mini")
@@ -487,9 +484,8 @@ class TestWizardConversationConfig(unittest.TestCase):
             path = Path(td) / "profile.json"
             path.write_text(
                 '{"plugin_config":{"revision":1},'
-                '"llm":{"mode":"direct","backend":"ollama",'
-                '"direct":{"provider":"ollama",'
-                '"protocol":"ollama_chat",'
+                '"llm":{"mode":"direct","backend":"custom",'
+                '"direct":{"provider":"custom","protocol":"openai_chat",'
                 '"host":"http://127.0.0.1:11434",'
                 '"api_base":"","model":"qwen3.5:4b",'
                 '"api_key":"","temperature":0.7,"max_tokens":512}},'
@@ -507,9 +503,8 @@ class TestWizardConversationConfig(unittest.TestCase):
             path.write_text(
                 '{"plugin_config":{"revision":2,"external":true},'
                 '"live2d":{"enabled":false,"scale":0.41},'
-                '"llm":{"mode":"direct","backend":"ollama",'
-                '"direct":{"provider":"ollama",'
-                '"protocol":"ollama_chat",'
+                '"llm":{"mode":"direct","backend":"custom",'
+                '"direct":{"provider":"custom","protocol":"openai_chat",'
                 '"host":"http://127.0.0.1:11434",'
                 '"api_base":"","model":"qwen3.5:4b",'
                 '"api_key":"","temperature":0.7,"max_tokens":512}},'
@@ -633,7 +628,7 @@ class TestWizardCaptureScope(unittest.TestCase):
 
         page = VisionPage()
         self.addCleanup(page.deleteLater)
-        watcher = page.collect("ollama", {})["watcher"]
+        watcher = page.collect("custom", {})["watcher"]
         self.assertNotIn("capture", watcher)
         self.assertFalse(hasattr(page, "capture_scope_combo"))
 
@@ -691,3 +686,4 @@ class TestWizardCaptureScope(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

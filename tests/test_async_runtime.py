@@ -31,7 +31,7 @@ class TestChatAsyncPath(unittest.TestCase):
     def test_quick_chat_uses_async_runtime(self):
         from meapet.chat.engine import ChatEngine
 
-        eng = ChatEngine(backend="deepseek", api_key="k", model="m")
+        eng = ChatEngine(api_key="k", model="m")
         eng.available = True
 
         async def _fake_dispatch(messages):
@@ -48,7 +48,7 @@ class TestChatAsyncPath(unittest.TestCase):
         from meapet.chat.engine import ChatEngine
         from meapet.async_runtime import run
 
-        eng = ChatEngine(backend="deepseek", api_key="k", model="m")
+        eng = ChatEngine(api_key="k", model="m")
         eng.available = True
 
         async def _fake_dispatch(messages):

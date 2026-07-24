@@ -177,19 +177,19 @@ class TestAffectionBounds(unittest.TestCase):
 class TestChatBackendInit(unittest.TestCase):
     def test_mimo_available_with_key(self):
         from meapet.chat.engine import ChatEngine
-        eng = ChatEngine(backend="mimo", api_key="test-key", api_base="https://example.com", model="m")
+        eng = ChatEngine(api_key="test-key", model="m")
         self.assertTrue(eng.available)
         self.assertTrue(eng._backend_ready)
 
     def test_mimo_unavailable_without_key(self):
         from meapet.chat.engine import ChatEngine
-        eng = ChatEngine(backend="mimo", api_key="", api_base="https://example.com")
+        eng = ChatEngine(api_key="")
         self.assertFalse(eng.available)
         self.assertTrue(eng._backend_ready)
 
     def test_deepseek_available_with_key(self):
         from meapet.chat.engine import ChatEngine
-        eng = ChatEngine(backend="deepseek", api_key="sk-test", model="deepseek-v4-flash")
+        eng = ChatEngine(api_key="sk-test", model="m")
         self.assertTrue(eng.available)
 
 

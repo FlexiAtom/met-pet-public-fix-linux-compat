@@ -1,4 +1,4 @@
-"""项目审查问题的回归测试。"""
+"""项目审查问题的回归测试（OpenAI 兼容版）。"""
 
 from __future__ import annotations
 
@@ -26,14 +26,20 @@ _SECRET_ENV_KEYS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Provider / Key isolation — 统一环境变量
+# ---------------------------------------------------------------------------
+
 class TestProviderKeyIsolation(unittest.TestCase):
+    """OpenAI 兼容后：所有密钥解析走统一环境变量，不再按 backend 分支。"""
+
     def test_mimo_tts_does_not_reuse_deepseek_llm_key(self):
         from meapet.config.store import resolve_tts_api_key
 
         with mock.patch.dict(os.environ, _SECRET_ENV_KEYS, clear=False):
             key = resolve_tts_api_key(
                 {"api_key": ""},
-                {"backend": "deepseek", "api_key": "deepseek-test-key"},
+                {"api_key": "deepseek-test-key"},
             )
         self.assertEqual(key, "")
 
@@ -46,15 +52,22 @@ class TestProviderKeyIsolation(unittest.TestCase):
             key = resolve_tts_api_key({"api_key": "mimo-file-test-key"}, {})
         self.assertEqual(key, "mimo-file-test-key")
 
-    def test_translation_does_not_reuse_mimo_llm_key(self):
+    def test_translation_uses_independent_env_key(self):
         from meapet.config.store import resolve_translate_api_key
 
         with mock.patch.dict(os.environ, _SECRET_ENV_KEYS, clear=False):
             key = resolve_translate_api_key(
                 {},
-                {"backend": "mimo", "api_key": "mimo-test-key"},
+                {"api_key": "deepseek-test-key"},
             )
         self.assertEqual(key, "")
+
+        os.environ["TRANSLATE_API_KEY"] = "translate-test-key"
+        try:
+            key2 = resolve_translate_api_key({}, {})
+            self.assertEqual(key2, "translate-test-key")
+        finally:
+            os.environ.pop("TRANSLATE_API_KEY", None)
 
     def test_translation_never_reuses_deepseek_llm_key(self):
         from meapet.config.store import resolve_translate_api_key
@@ -62,61 +75,53 @@ class TestProviderKeyIsolation(unittest.TestCase):
         with mock.patch.dict(os.environ, _SECRET_ENV_KEYS, clear=False):
             key = resolve_translate_api_key(
                 {},
-                {"backend": "deepseek", "api_key": "deepseek-test-key"},
+                {"api_key": "deepseek-test-key"},
             )
         self.assertEqual(key, "")
 
-    def test_deepseek_backend_does_not_consume_openai_key(self):
+    def test_openai_key_is_used_for_llm_when_no_file_key(self):
         from meapet.config.store import resolve_llm_api_key
 
         env = dict(_SECRET_ENV_KEYS)
         env["OPENAI_API_KEY"] = "openai-test-key"
         with mock.patch.dict(os.environ, env, clear=False):
-            key = resolve_llm_api_key({"backend": "deepseek", "api_key": ""})
-        self.assertEqual(key, "")
+            key = resolve_llm_api_key({"api_key": ""})
+        self.assertEqual(key, "openai-test-key")
 
-    def test_mimo_vision_does_not_reuse_deepseek_llm_key(self):
+    def test_mea_pet_key_is_used_for_vision_when_no_file_key(self):
         from meapet.config.store import resolve_vision_api_key
 
-        with mock.patch.dict(os.environ, _SECRET_ENV_KEYS, clear=False):
-            key = resolve_vision_api_key(
-                {"backend": "mimo", "api_key": ""},
-                {"backend": "deepseek", "api_key": "deepseek-test-key"},
-            )
-        self.assertEqual(key, "")
+        env = dict(_SECRET_ENV_KEYS)
+        env["MEAPET_API_KEY"] = "meapet-vision-key"
+        with mock.patch.dict(os.environ, env, clear=False):
+            key = resolve_vision_api_key({"api_key": ""}, {})
+        self.assertEqual(key, "meapet-vision-key")
 
-    def test_mimo_vision_may_reuse_mimo_llm_key(self):
-        from meapet.config.store import resolve_vision_api_key
-
-        with mock.patch.dict(os.environ, _SECRET_ENV_KEYS, clear=False):
-            key = resolve_vision_api_key(
-                {"backend": "mimo", "api_key": ""},
-                {"backend": "mimo", "api_key": "mimo-test-key"},
-            )
-        self.assertEqual(key, "mimo-test-key")
-
-    def test_ollama_vision_does_not_reuse_cloud_llm_key(self):
-        from meapet.config.store import resolve_vision_api_key
-
-        with mock.patch.dict(os.environ, _SECRET_ENV_KEYS, clear=False):
-            key = resolve_vision_api_key(
-                {"backend": "ollama", "api_key": ""},
-                {"backend": "mimo", "api_key": "mimo-test-key"},
-            )
-        self.assertEqual(key, "")
-
-    def test_mimo_vision_does_not_reuse_deepseek_api_base(self):
+    def test_vision_api_base_inherits_from_llm_when_not_set(self):
         from meapet.config.store import resolve_vision_api_base
 
         base = resolve_vision_api_base(
-            {"backend": "mimo", "api_base": ""},
-            {"backend": "deepseek", "api_base": "https://api.deepseek.example/v1"},
+            {"api_base": ""},
+            {"api_base": "https://api.deepseek.example/v1"},
         )
-        self.assertEqual(base, "https://api.xiaomimimo.com/v1")
+        self.assertEqual(base, "https://api.deepseek.example/v1")
 
+    def test_vision_api_base_explicit_overrides_inherited(self):
+        from meapet.config.store import resolve_vision_api_base
+
+        base = resolve_vision_api_base(
+            {"api_base": "https://vision.example.com/v1"},
+            {"api_base": "https://api.deepseek.example/v1"},
+        )
+        self.assertEqual(base, "https://vision.example.com/v1")
+
+
+# ---------------------------------------------------------------------------
+# Runtime configuration switch
+# ---------------------------------------------------------------------------
 
 class TestRuntimeConfigurationSwitch(unittest.TestCase):
-    def test_saved_configuration_cancels_old_generation_and_rebuilds_one_backend(self):
+    def test_saved_configuration_cancels_old_generation_and_rebuilds(self):
         from meapet.desktop.config_bridge import PetConfigBridgeMixin
 
         class Timer:
@@ -182,8 +187,9 @@ class TestRuntimeConfigurationSwitch(unittest.TestCase):
                 "llm": {
                     "mode": "agent",
                     "agent": {
-                        "kind": "hermes",
-                        "base_url": "http://127.0.0.1:8642",
+                        "base_url": "http://127.0.0.1:11434/v1",
+                        "api_key": "test-key",
+                        "model": "qwen2.5:7b",
                     },
                 }
             }
@@ -198,20 +204,23 @@ class TestRuntimeConfigurationSwitch(unittest.TestCase):
         )
         self.assertIn(("新配置已应用。", 3500, None), host.events)
 
-    def test_unsupported_follow_backend_falls_back_to_local_vision(self):
-        from meapet.config.store import (
-            resolve_vision_backend,
-            resolve_vision_host,
-        )
+    def test_vision_falls_back_to_local_when_disabled(self):
+        """vision 未配置时回退到本地 Ollama 默认地址。"""
+        from meapet.config.store import resolve_vision_api_base, resolve_vision_host
 
-        vision = {"backend": "", "host": ""}
-        llm = {
-            "backend": "deepseek",
-            "host": "https://api.deepseek.example",
-        }
-        self.assertEqual(resolve_vision_backend(vision, llm), "ollama")
-        self.assertEqual(resolve_vision_host(vision, llm), "http://127.0.0.1:11434")
+        vision = {"api_base": "", "host": ""}
+        llm = {"api_base": "https://api.example.com/v1"}
+        # 无 vision 配置 → 使用默认本地地址
+        base = resolve_vision_api_base(vision, llm)
+        self.assertEqual(base, "http://127.0.0.1:11434/v1")
 
+        host = resolve_vision_host(vision, llm)
+        self.assertEqual(host, "http://127.0.0.1:11434")
+
+
+# ---------------------------------------------------------------------------
+# Model artifact validation (GSV)
+# ---------------------------------------------------------------------------
 
 class TestModelArtifactValidation(unittest.TestCase):
     @staticmethod
@@ -281,6 +290,10 @@ class TestModelArtifactValidation(unittest.TestCase):
             self.assertFalse(tts._deps_ready)
 
 
+# ---------------------------------------------------------------------------
+# Config safety
+# ---------------------------------------------------------------------------
+
 class TestConfigSafety(unittest.TestCase):
     def test_startup_config_path_is_independent_of_cwd(self):
         from meapet.config.store import resolve_startup_config_path
@@ -339,7 +352,7 @@ class TestConfigSafety(unittest.TestCase):
         from meapet.config.store import normalize_config, save_config
 
         data = {
-            "llm": {"backend": "deepseek", "api_key": "existing-test-key"},
+            "llm": {"api_key": "existing-test-key"},
             "watcher": {
                 "enabled": False,
                 "custom_field": "keep-me",
@@ -431,7 +444,6 @@ class TestConfigSafety(unittest.TestCase):
                 json.dumps(
                     {
                         "llm": {
-                            "backend": "ollama",
                             "api_key": "disk-key",
                             "model": "keep-me",
                         },
@@ -444,13 +456,12 @@ class TestConfigSafety(unittest.TestCase):
             )
             save_config(
                 {
-                    "llm": {"backend": "deepseek", "api_key": "new-key"},
+                    "llm": {"api_key": "new-key"},
                     "display": {"size_factor": 1.25},
                 },
                 str(path),
             )
             saved = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(saved["llm"]["backend"], "deepseek")
             self.assertEqual(saved["llm"]["api_key"], "new-key")
             self.assertEqual(saved["llm"]["model"], "keep-me")
             self.assertEqual(saved["custom_top"], {"nested": True})
@@ -468,7 +479,7 @@ class TestConfigSafety(unittest.TestCase):
             example.write_text(
                 json.dumps(
                     {
-                        "llm": {"backend": "ollama", "api_key": "from-example"},
+                        "llm": {"api_key": "from-example"},
                         "live2d": {
                             "enabled": True,
                             "model_dir": "./live2d/model/mea",
@@ -488,10 +499,13 @@ class TestConfigSafety(unittest.TestCase):
             saved = json.loads(written.read_text(encoding="utf-8"))
             self.assertTrue(saved["ui"]["first_run_hint_shown"])
             self.assertEqual(saved["llm"]["api_key"], "from-example")
-            # example template must not be rewritten
             example_data = json.loads(example.read_text(encoding="utf-8"))
             self.assertNotIn("ui", example_data)
 
+
+# ---------------------------------------------------------------------------
+# Repository ignore rules
+# ---------------------------------------------------------------------------
 
 class TestRepositoryIgnoreRules(unittest.TestCase):
     def test_example_config_has_unique_keys_and_timeline_default(self):
@@ -538,6 +552,10 @@ class TestRepositoryIgnoreRules(unittest.TestCase):
         self.assertIn("meapet*", package_find["include"])
         self.assertIn("wizard*", package_find["include"])
 
+
+# ---------------------------------------------------------------------------
+# Installer reliability
+# ---------------------------------------------------------------------------
 
 class TestInstallerReliability(unittest.TestCase):
     def test_pip_install_checks_process_return_code(self):
@@ -677,6 +695,10 @@ class TestInstallerReliability(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# Watcher privacy & lifecycle
+# ---------------------------------------------------------------------------
+
 class TestWatcherPrivacyAndLifecycle(unittest.TestCase):
     def test_loopback_url_classification(self):
         from meapet.utils import is_loopback_url
@@ -696,7 +718,8 @@ class TestWatcherPrivacyAndLifecycle(unittest.TestCase):
         ):
             self.assertFalse(is_loopback_url(url), msg=url)
 
-    def test_remote_ollama_is_treated_as_cloud(self):
+    def test_remote_host_is_treated_as_cloud(self):
+        """vision.host 为远程地址时视为云端。"""
         from meapet.desktop.watch_ctrl import PetWatcherMixin
 
         class WatcherConfig(PetWatcherMixin):
@@ -705,13 +728,14 @@ class TestWatcherPrivacyAndLifecycle(unittest.TestCase):
         pet = WatcherConfig()
         pet.config = {
             "vision": {
-                "backend": "ollama",
                 "host": "https://ollama.example.com",
             },
-            "llm": {"backend": "ollama", "host": "http://127.0.0.1:11434"},
+            "llm": {"host": "http://127.0.0.1:11434"},
         }
+        # 远程地址 → 云端
         self.assertTrue(pet._is_cloud_vision())
         pet.config["vision"]["host"] = "http://localhost:11434"
+        # localhost → 本地
         self.assertFalse(pet._is_cloud_vision())
 
     def test_watcher_can_be_prepared_after_stop(self):
@@ -723,15 +747,17 @@ class TestWatcherPrivacyAndLifecycle(unittest.TestCase):
         self.assertTrue(watcher.prepare_start())
         self.assertFalse(watcher._stop)
 
-    def test_watch_output_parser_has_no_backend_probe(self):
-        from meapet.chat.engine import ChatEngine
+    def test_watch_output_parser_has_no_backend_specific_logic(self):
+        """parse_watch_output 不应依赖任何特定后端。"""
         from meapet.watcher.screen import parse_watch_output
 
-        with mock.patch.object(ChatEngine, "_deferred_check") as probe:
-            parsed = parse_watch_output("说\n[happy]你好喵\nこんにちはにゃ")
+        parsed = parse_watch_output("说\n[happy]你好喵\nこんにちはにゃ")
         self.assertEqual(parsed[:4], (True, "你好喵", "こんにちはにゃ", "happy"))
-        probe.assert_not_called()
 
+
+# ---------------------------------------------------------------------------
+# Privacy-safe logging
+# ---------------------------------------------------------------------------
 
 class TestPrivacySafeLogging(unittest.TestCase):
     def test_key_value_secrets_are_redacted_even_without_sk_prefix(self):
@@ -746,47 +772,19 @@ class TestPrivacySafeLogging(unittest.TestCase):
             self.assertNotIn(secret, redacted)
 
     def test_chat_debug_dump_is_opt_in(self):
-        from meapet.chat.engine import ChatEngine
+        """_debug_dump 已移除；改为验证 safe_print 在调试关闭时不输出敏感内容。"""
+        from meapet.utils import safe_print
+        import io
+        import contextlib
 
-        engine = ChatEngine.__new__(ChatEngine)
         marker = "private-conversation-marker"
-        with mock.patch.dict(os.environ, {"MEAPET_DEBUG": ""}, clear=False), mock.patch(
-            "meapet.chat.engine._safe_print"
-        ) as printer:
-            engine._debug_dump("request", {"messages": [marker]})
-        printer.assert_not_called()
-
-        with mock.patch.dict(os.environ, {"MEAPET_DEBUG": "1"}, clear=False), mock.patch(
-            "meapet.chat.engine._safe_print"
-        ) as printer:
-            engine._debug_dump("request", {"messages": [marker]})
-        rendered = " ".join(str(call) for call in printer.call_args_list)
-        self.assertIn(marker, rendered)
-
-    def test_deepseek_error_body_is_hidden_without_debug(self):
-        from meapet.chat.engine import ChatEngine
-
-        engine = ChatEngine.__new__(ChatEngine)
-        engine.model = "test-model"
-        engine.api_base = "https://api.example.invalid"
-        engine.api_key = "test-key"
-        engine.temperature = 0.1
-        engine._post_json = mock.AsyncMock(
-            return_value=SimpleNamespace(
-                status_code=500,
-                text="private-response-body-marker",
-            )
-        )
-        engine._fallback_reply = mock.Mock(return_value="fallback")
-        with mock.patch.dict(os.environ, {"MEAPET_DEBUG": ""}, clear=False), mock.patch(
-            "meapet.chat.engine._safe_print"
-        ) as printer:
-            result = asyncio.run(
-                engine._chat_deepseek_async([{"role": "user", "content": "hello"}])
-            )
-        self.assertEqual(result, "fallback")
-        rendered = " ".join(str(call) for call in printer.call_args_list)
-        self.assertNotIn("private-response-body-marker", rendered)
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {"MEAPET_DEBUG": ""}, clear=False), \
+             contextlib.redirect_stderr(buf):
+            safe_print(f"request: {marker}")
+        output = buf.getvalue()
+        # 非调试模式下不应输出
+        self.assertNotIn(marker, output)
 
     def test_chat_flow_logs_only_input_length_by_default(self):
         from meapet.desktop.chat_flow import PetChatFlowMixin
@@ -798,35 +796,18 @@ class TestPrivacySafeLogging(unittest.TestCase):
             _position_bubble=mock.Mock(),
             _do_chat=mock.Mock(),
         )
-        with mock.patch.dict(os.environ, {"MEAPET_DEBUG": ""}, clear=False), mock.patch(
-            "meapet.desktop.chat_flow.safe_print"
-        ) as printer, mock.patch("meapet.desktop.chat_flow.QTimer.singleShot"):
+        with mock.patch.dict(os.environ, {"MEAPET_DEBUG": ""}, clear=False), \
+             mock.patch("meapet.desktop.chat_flow.safe_print") as printer, \
+             mock.patch("meapet.desktop.chat_flow.QTimer.singleShot"):
             PetChatFlowMixin._on_input_submit(fake_pet, marker)
         rendered = " ".join(str(call) for call in printer.call_args_list)
         self.assertNotIn(marker, rendered)
         self.assertIn(str(len(marker)), rendered)
 
-    def test_chat_flow_logs_only_input_length_by_default(self):
-        from meapet.desktop.chat_flow import PetChatFlowMixin
 
-        marker = "private-user-input-marker"
-        fake_pet = SimpleNamespace(
-            _record_interaction=mock.Mock(),
-            _show_bubble=mock.Mock(),
-            _position_bubble=mock.Mock(),
-            _do_chat=mock.Mock(),
-        )
-        with mock.patch.dict(os.environ, {"MEAPET_DEBUG": ""}, clear=False), mock.patch(
-                "meapet.desktop.chat_flow.log.debug"
-        ) as mock_debug, mock.patch("meapet.desktop.chat_flow.QTimer.singleShot"):
-            PetChatFlowMixin._on_input_submit(fake_pet, marker)
-
-        # 验证日志只记录了长度，没有暴露私密文本
-        mock_debug.assert_called_once()
-        args, _ = mock_debug.call_args
-        self.assertIn("chars=", args[0])  # 包含长度信息
-        self.assertNotIn(marker, args[0])  # 不包含原始私密内容
-
+# ---------------------------------------------------------------------------
+# TTS output paths
+# ---------------------------------------------------------------------------
 
 class TestTtsOutputPaths(unittest.TestCase):
     def test_audio_cache_key_is_deterministic_and_does_not_expose_text(self):
@@ -853,17 +834,21 @@ class TestTtsOutputPaths(unittest.TestCase):
         self.assertTrue(all(Path(path).parent == Path(td) for path in paths))
 
 
+# ---------------------------------------------------------------------------
+# Unsupported / removed backends
+# ---------------------------------------------------------------------------
+
 class TestUnsupportedBackends(unittest.TestCase):
-    def test_openclaw_is_not_advertised_as_available(self):
+    def test_no_backend_specific_engine_construction(self):
+        """ChatEngine 不再接受 backend 参数；构造应使用 api_key/model。"""
         from meapet.chat.engine import ChatEngine
 
-        with mock.patch("meapet.chat.engine._safe_print") as printer:
-            engine = ChatEngine(backend="openclaw")
-        self.assertFalse(engine.available)
-        self.assertTrue(engine._backend_ready)
-        rendered = " ".join(str(call) for call in printer.call_args_list)
-        self.assertIn("未实现", rendered)
+        # 不应抛出异常
+        eng = ChatEngine(api_key="test-key", model="test-model")
+        self.assertIsNotNone(eng)
+        self.assertTrue(hasattr(eng, "quick_chat"))
 
 
 if __name__ == "__main__":
     unittest.main()
+
