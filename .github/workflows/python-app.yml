@@ -84,6 +84,9 @@ jobs:
         python -m compileall -q meapet wizard
 
     - name: Test with pytest (headless)
+      env:
+        PYTHONDEVMODE: "1"
+        QT_QPA_PLATFORM: "offscreen"
       run: |
         export MAKEFLAGS="-j1"
         export QT_QPA_PLATFORM=offscreen
