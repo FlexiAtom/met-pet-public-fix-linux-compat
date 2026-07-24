@@ -85,5 +85,7 @@ jobs:
 
     - name: Test with pytest (headless)
       run: |
+        export MAKEFLAGS="-j1"
         export QT_QPA_PLATFORM=offscreen
+        python -X faulthandler -m pytest -q
         xvfb-run python -m pytest -q
