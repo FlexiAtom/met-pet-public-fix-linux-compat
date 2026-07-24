@@ -97,7 +97,8 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
         messages = adapter._build_messages(req)
         self.assertEqual(len(messages), 2)
         self.assertEqual(messages[0]["role"], "system")
-        self.assertIn("meapet", messages[0]["content"])
+        # System prompt contains the output-protocol markers (not the literal word "meapet")
+        self.assertIn("MEAPET_SEGMENT", messages[0]["content"])
         self.assertEqual(messages[1]["role"], "user")
         self.assertEqual(messages[1]["content"][0]["text"], "Hello world")
 
@@ -139,7 +140,6 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_stream_successful_response(self):
         adapter, _ = self._make_adapter()
 
-        # Create a proper async iterable for lines
         async def _lines():
             yield 'data: {"choices":[{"delta":{"content":"你好"}}]}'
             yield 'data: {"choices":[{"delta":{"content":"，世界"}}]}'
@@ -202,9 +202,11 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_stream_network_error_yields_failure(self):
         adapter, _ = self._make_adapter()
 
-        # Make the stream raise a connection error
+        # chat_stream catches httpx.RequestError -> network_error.
+        # Simulate by raising httpx.ConnectError (subclass of RequestError).
+        import httpx
         async def _raise(*args, **kwargs):
-            raise ConnectionError("DNS failed")
+            raise httpx.ConnectError("DNS failed")
 
         adapter._client.stream = _raise
 
@@ -223,8 +225,6 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
         cancel_event = threading.Event()
         cancel_event.set()  # Already cancelled
 
-        # The stream should not even be called because cancellation is checked before
-        # We need to provide a minimal mock that will be entered but then cancellation triggers
         async def _lines():
             yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
 
@@ -245,9 +245,10 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_stream_format_repair_triggered(self):
         adapter, _ = self._make_adapter()
 
-        # Return content that cannot be parsed by output protocol
+        # Send text that parse_reply_output CANNOT interpret as segments,
+        # so the adapter triggers on_format_repair and yields TurnFailed(format_error).
         async def _lines():
-            yield 'data: {"choices":[{"delta":{"content":"raw text without protocol"}}]}'
+            yield 'data: {"choices":[{"delta":{"content":"@@@<<<garbled nonsense>>>@@@"}}]}'
             yield "data: [DONE]"
 
         mock_response = MagicMock()
@@ -267,7 +268,6 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
         async for result in adapter.chat_stream(req, on_format_repair=on_repair):
             results.append(result)
 
-        # Should yield a TurnFailed with format_error
         self.assertEqual(len(results), 1)
         self.assertEqual(type(results[0]).__name__, "TurnFailed")
         self.assertEqual(results[0].category, "format_error")
@@ -278,13 +278,16 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_repair_format_success(self):
         adapter, _ = self._make_adapter()
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json = AsyncMock(return_value={
-            "choices": [{"message": {"content": "repaired content"}}]
-        })
+        async def _post_json(payload):
+            # Return a MinimalResponse-like object with .json() returning the repaired text
+            response = MagicMock()
+            response.status_code = 200
+            response.json = AsyncMock(return_value={
+                "choices": [{"message": {"content": "repaired content"}}]
+            })
+            return response
 
-        adapter._client.post = MagicMock(return_value=AsyncContextManager(mock_response))
+        adapter._client.post = _post_json
 
         result = await adapter.repair_format("bad content")
         self.assertEqual(result, "repaired content")
@@ -292,10 +295,12 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_repair_format_failure(self):
         adapter, _ = self._make_adapter()
 
-        mock_response = MagicMock()
-        mock_response.status_code = 500
+        async def _post_json(payload):
+            response = MagicMock()
+            response.status_code = 500
+            return response
 
-        adapter._client.post = MagicMock(return_value=AsyncContextManager(mock_response))
+        adapter._client.post = _post_json
 
         result = await adapter.repair_format("bad content")
         self.assertIsNone(result)

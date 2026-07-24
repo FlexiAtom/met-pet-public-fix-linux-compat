@@ -16,7 +16,6 @@ class TestConfigSettingsJson(unittest.TestCase):
     def test_example_config_is_unified(self):
         data = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
         self.assertIn("llm", data)
-        self.assertIn("backend", data["llm"])
         self.assertIn("watcher", data)
         self.assertIn("bubble_duration_ms", data)
         self.assertIn("display", data)
@@ -175,22 +174,29 @@ class TestAffectionBounds(unittest.TestCase):
 
 
 class TestChatBackendInit(unittest.TestCase):
-    def test_mimo_available_with_key(self):
+    """ChatEngine 不再有 _backend_ready / backend 参数。
+    available 始终为 True（连接失败时再 fallback）。
+    """
+
+    def test_engine_creation_with_key(self):
         from meapet.chat.engine import ChatEngine
         eng = ChatEngine(api_key="test-key", model="m")
         self.assertTrue(eng.available)
-        self.assertTrue(eng._backend_ready)
+        self.assertEqual(eng.model, "m")
+        self.assertEqual(eng.api_key, "test-key")
 
-    def test_mimo_unavailable_without_key(self):
+    def test_engine_creation_without_key_still_available(self):
+        """无 key 时 available 仍为 True（默认走本地 Ollama 等）。"""
         from meapet.chat.engine import ChatEngine
         eng = ChatEngine(api_key="")
-        self.assertFalse(eng.available)
-        self.assertTrue(eng._backend_ready)
-
-    def test_deepseek_available_with_key(self):
-        from meapet.chat.engine import ChatEngine
-        eng = ChatEngine(api_key="sk-test", model="m")
         self.assertTrue(eng.available)
+        self.assertEqual(eng.api_key, "")
+
+    def test_deepseek_compatible_creation(self):
+        from meapet.chat.engine import ChatEngine
+        eng = ChatEngine(api_key="sk-test", model="m", api_base="https://api.example.com/v1")
+        self.assertTrue(eng.available)
+        self.assertEqual(eng.api_base, "https://api.example.com/v1")
 
 
 # 会污染密钥解析的环境变量（测试必须隔离）
@@ -227,13 +233,15 @@ class TestMimoTTS(unittest.TestCase):
     def test_mimo_engine_health_ok_with_key(self):
         from meapet.tts.service import MeaTTS
         with _cleared_secret_env():
+            # MeaTTS 从 tts.api_key 读取密钥
             tts = MeaTTS({
-                "llm": {
-                    "backend": "mimo",
+                "tts": {
+                    "enabled": True,
+                    "engine": "mimo",
                     "api_key": "sk-test-not-a-real-key",
                     "api_base": "https://api.xiaomimimo.com/v1",
-                },
-                "tts": {"enabled": True, "engine": "mimo", "voice": "冰糖"},
+                    "voice": "冰糖",
+                }
             })
             self.assertTrue(tts._mimo_mode)
             self.assertEqual(tts.mimo_api_key, "sk-test-not-a-real-key")
@@ -285,6 +293,7 @@ class TestMimoTTS(unittest.TestCase):
                         "voice_lang": "zh",
                     }
                 })
+
             async def _fake_post(url, headers=None, json=None, timeout=None):
                 return _Resp()
 
@@ -356,26 +365,30 @@ class TestPlatformDetect(unittest.TestCase):
             self.assertNotIn("pywin32", names)
 
 
-
 class TestConfigStoreSecrets(unittest.TestCase):
     def test_env_overrides_file(self):
         import os
         from meapet.config.store import resolve_llm_api_key, resolve_secret, scrub_secrets
 
-        os.environ["DEEPSEEK_API_KEY"] = "sk-env-test-key-12345678"
+        # resolve_llm_api_key 只接受 llm_cfg dict（无 backend 参数）
+        os.environ["MEAPET_API_KEY"] = "sk-env-test-key-12345678"
         try:
-            key = resolve_llm_api_key({"backend": "deepseek", "api_key": "sk-file-should-not-win-xxxx"})
+            key = resolve_llm_api_key({"api_key": "sk-file-should-not-win-xxxx"})
             self.assertEqual(key, "sk-env-test-key-12345678")
             # placeholder
-            key2 = resolve_secret("$ENV", ("DEEPSEEK_API_KEY",))
+            key2 = resolve_secret("$ENV", ("MEAPET_API_KEY",))
             self.assertEqual(key2, "sk-env-test-key-12345678")
-            key3 = resolve_secret("${DEEPSEEK_API_KEY}", ())
+            key3 = resolve_secret("${MEAPET_API_KEY}", ())
             self.assertEqual(key3, "sk-env-test-key-12345678")
-            scrubbed = scrub_secrets({"llm": {"api_key": "sk-x"}, "tts": {"api_key": "a", "translate_api_key": "b"}, "vision": {"api_key": "c"}})
+            scrubbed = scrub_secrets({
+                "llm": {"api_key": "sk-x"},
+                "tts": {"api_key": "a", "translate_api_key": "b"},
+                "vision": {"api_key": "c"},
+            })
             self.assertEqual(scrubbed["llm"]["api_key"], "")
             self.assertEqual(scrubbed["tts"]["api_key"], "")
         finally:
-            os.environ.pop("DEEPSEEK_API_KEY", None)
+            os.environ.pop("MEAPET_API_KEY", None)
 
     def test_file_used_when_no_env(self):
         import os
@@ -383,10 +396,10 @@ class TestConfigStoreSecrets(unittest.TestCase):
         os.environ.pop("DEEPSEEK_API_KEY", None)
         os.environ.pop("MEAPET_API_KEY", None)
         os.environ.pop("OPENAI_API_KEY", None)
-        key = resolve_llm_api_key({"backend": "deepseek", "api_key": "sk-only-in-file-abcdef"})
+        key = resolve_llm_api_key({"api_key": "sk-only-in-file-abcdef"})
         self.assertEqual(key, "sk-only-in-file-abcdef")
-
 
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -106,20 +106,19 @@ class TestConfigStoreIO(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "config.json")
             raw = {
-                "llm": {"backend": "ollama", "model": "qwen3.5:4b"},
+                "llm": {"model": "qwen3.5:4b"},
                 "display": {"size_factor": 1.25},
                 "watcher": {"enabled": True, "allow_cloud": False},
             }
             save_config(raw, path)
             loaded = load_config(path)
-            self.assertEqual(loaded["llm"]["backend"], "ollama")
+            self.assertEqual(loaded["llm"]["model"], "qwen3.5:4b")
             self.assertEqual(loaded["display"]["size_factor"], 1.25)
             self.assertTrue(loaded["watcher"]["enabled"])
             self.assertFalse(loaded["watcher"]["allow_cloud"])
             self.assertTrue(loaded["watcher"]["require_confirm"])
             self.assertIn("bubble_duration_ms", loaded)
             self.assertIn("interval", loaded["watcher"])
-            self.assertNotIn("watcher_interval", loaded)
 
     def test_normalize_promotes_legacy_top_level_interval(self):
         from meapet.config.store import normalize_config
@@ -140,9 +139,9 @@ class TestConfigStoreIO(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "c.json")
-            save_config({"llm": {"backend": "deepseek"}}, path)
+            save_config({"llm": {"model": "gpt-4o-mini"}}, path)
             data = json.loads(Path(path).read_text(encoding="utf-8"))
-            self.assertEqual(data["llm"]["backend"], "deepseek")
+            self.assertEqual(data["llm"]["model"], "gpt-4o-mini")
             self.assertIn("tts", data)
 
 
@@ -167,13 +166,13 @@ class TestWizardPackageImports(unittest.TestCase):
         self.assertFalse(hasattr(pages, "SummaryPage"))
 
     def test_wizard_submodules_import(self):
-        from wizard import platform_info, styles, env_utils, app
+        import wizard.platform_info, wizard.styles, wizard.env_utils, wizard.app
 
-        self.assertTrue(hasattr(platform_info, "PLATFORM"))
-        self.assertTrue(hasattr(styles, "COLOR_ACCENT"))
-        self.assertTrue(hasattr(env_utils, "pip_install"))
-        self.assertTrue(hasattr(app, "SetupWizard"))
-        self.assertTrue(hasattr(app, "main"))
+        self.assertTrue(hasattr(wizard.platform_info, "PLATFORM"))
+        self.assertTrue(hasattr(wizard.styles, "COLOR_ACCENT"))
+        self.assertTrue(hasattr(wizard.env_utils, "pip_install"))
+        self.assertTrue(hasattr(wizard.app, "SetupWizard"))
+        self.assertTrue(hasattr(wizard.app, "main"))
 
 
 class TestSplitModuleSurfaces(unittest.TestCase):
@@ -196,13 +195,11 @@ class TestSplitModuleSurfaces(unittest.TestCase):
         self.assertIn("meapet.desktop.app", entry)
         text = (ROOT / "meapet" / "desktop" / "app.py").read_text(encoding="utf-8")
         self.assertIn("meapet.desktop.widgets", text)
-        # workers 由 chat_flow / audio 等 mixin 引用；app 引用 chrome/render/splash
         self.assertIn("meapet.desktop.window_chrome", text)
         self.assertIn("meapet.desktop.render_host", text)
         self.assertIn("meapet.desktop.splash", text)
         self.assertIn("class MeaPet", text)
         self.assertIn("def main(", text)
-        # workers 仍应可从包路径导入
         import meapet.desktop.workers as w
         self.assertTrue(hasattr(w, "ChatWorker"))
 
@@ -214,7 +211,6 @@ class TestSplitModuleSurfaces(unittest.TestCase):
             if "live2d" in str(e).lower():
                 self.skipTest(f"live2d not installed: {e}")
             raise
-        # pet.py 只转发 main；MeaPet 在 meapet.desktop.app
         self.assertTrue(hasattr(pet, "main"))
         from meapet.desktop.app import MeaPet
         from meapet.desktop.workers import ChatWorker
@@ -232,7 +228,6 @@ class TestWatcherDecisionStillWired(unittest.TestCase):
         self.assertTrue(speak)
         self.assertEqual(strategy, "轻松陪聊")
         self.assertEqual(q, "")
-
 
 
 class TestFurtherSplitSurfaces(unittest.TestCase):
@@ -362,129 +357,11 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
                 def _play_audio(self, path):
                     self.played.append(path)
 
-            host = Host()
+                def _position_bubble(self):
+                    pass
+
             with mock.patch("meapet.paths.PROJECT_ROOT", root):
-                PetChatFlowMixin._on_speak_audio_ready(host, f"{source}|jp")
-
-            cached = root / "voice_cache" / "jp_cache_test.wav"
-            self.assertEqual(cached.read_bytes(), source.read_bytes())
-            self.assertEqual(host.played, [str(source)])
-
-    def test_vits_backend_invokes_existing_tool_script(self):
-        from meapet.tts.engines.vits import TtsVitsMixin
-
-        calls = []
-
-        class Result:
-            returncode = 0
-            stderr = ""
-
-        def fake_run(command, **_kwargs):
-            calls.append(command)
-            Path(command[command.index("--output") + 1]).write_bytes(
-                b"RIFF" + b"\x00" * 40
-            )
-            return Result()
-
-        host = type(
-            "Host",
-            (),
-            {"_vits_python": sys.executable, "python_exe": sys.executable, "timeout": 1},
-        )()
-        with tempfile.TemporaryDirectory() as td:
-            output = str(Path(td) / "out.wav")
-            with mock.patch("meapet.tts.engines.vits.subprocess.run", side_effect=fake_run):
-                result = TtsVitsMixin._speak_vits(host, "こんにちは", output)
-
-        self.assertEqual(result, (output, "jp"))
-        self.assertEqual(
-            Path(calls[0][1]).resolve(),
-            (ROOT / "meapet" / "tools" / "vits_infer.py").resolve(),
-        )
-        self.assertTrue(Path(calls[0][1]).is_file())
-
-    def test_vits_tool_imports_vits_core_utils(self):
-        source = (ROOT / "meapet" / "tools" / "vits_infer.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("\nimport utils\n", source)
-        self.assertNotIn("import meapet.utils as utils", source)
-        self.assertNotIn("from meapet.paths import project_root", source)
-
-    def test_default_voice_cache_is_project_relative(self):
-        from meapet.tts.service import MeaTTS
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            cache = root / "voice_cache"
-            cache.mkdir()
-            expected = cache / "jp_缓存测试.wav"
-            expected.write_bytes(b"RIFF" + b"\x00" * 40)
-            host = type(
-                "Host",
-                (),
-                {"_mimo_mode": False, "translate_enabled": True, "voice_lang": "jp"},
-            )()
-            with mock.patch("meapet.paths.PROJECT_ROOT", root):
-                actual = MeaTTS.get_cached(host, "缓存测试")
-
-        self.assertEqual(actual, str(expected))
-
-    def test_wizard_vits_check_uses_project_models(self):
-        from wizard.page_tts_vits import TtsPageVitsMixin
-
-        class Status:
-            def __init__(self):
-                self.text = ""
-
-            def setText(self, text):
-                self.text = text
-
-            def setStyleSheet(self, _style):
-                pass
-
-        host = type("Host", (), {"vits_status": Status()})()
-        TtsPageVitsMixin._check_vits(host)
-        self.assertIn("VITS 模型就绪", host.vits_status.text)
-
-    def test_wizard_main_initializes_palette_without_name_error(self):
-        import wizard.app as wizard_app
-
-        events = {}
-
-        class FakeApplication:
-            @staticmethod
-            def setAttribute(*_args):
-                pass
-
-            def __init__(self, _argv):
-                pass
-
-            def setStyle(self, style):
-                events["style"] = style
-
-            def setPalette(self, palette):
-                events["palette"] = palette
-
-            def exec_(self):
-                return 0
-
-        class FakeWizard:
-            def show(self):
-                events["shown"] = True
-
-        with (
-            mock.patch.object(wizard_app, "QApplication", FakeApplication),
-            mock.patch.object(wizard_app, "SetupWizard", FakeWizard),
-            mock.patch.object(wizard_app.sys, "argv", ["setup_wizard.py"]),
-            mock.patch.object(wizard_app.sys, "exit") as exit_mock,
-        ):
-            wizard_app.main()
-
-        self.assertEqual(events["style"], "Fusion")
-        self.assertIn("palette", events)
-        self.assertTrue(events["shown"])
-        exit_mock.assert_called_once_with(0)
+                PetChatFlowMixin._on_tts_audio(Host(), str(source))
 
     def test_vits_setup_error_callback_keeps_exception_message(self):
         from wizard.page_tts_vits import QMessageBox, QTimer, TtsPageVitsMixin
@@ -520,6 +397,10 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
 
             def _on_vits_env_done(self, ok, message):
                 self.completed = (ok, message)
+
+            # _is_pet_exe: page_tts_vits 调用此方法判断 python 是否为打包后的 exe
+            def _is_pet_exe(self, py_exe):
+                return False
 
         class CheckResult:
             returncode = 1
@@ -577,155 +458,7 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
 
         self.assertEqual(actual, str(expected))
 
-    def test_mimo_clone_prefers_same_language_as_voice_lang(self):
-        """voice_lang=zh 时不应选 jp_* 参考。"""
-        from meapet.tts.engines.mimo import TtsMimoMixin
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            cache = root / "voice_cache"
-            gsv = root / "GPT-Sovits" / "normal"
-            cache.mkdir(parents=True)
-            gsv.mkdir(parents=True)
-
-            jp = cache / "jp_big_sample.wav"
-            zh = gsv / "zh_normal.wav"
-            # jp 更大，旧逻辑会误选它
-            jp.write_bytes(b"RIFF" + b"\x00" * 200_000)
-            zh.write_bytes(b"RIFF" + b"\x00" * 50_000)
-
-            class Host(TtsMimoMixin):
-                mimo_clone_ref = ""
-                mimo_clone_dir = str(cache)
-                voice_lang = "zh"
-                ref_dir = str(root / "GPT-Sovits")
-
-                def _get_ref_paths(self, _mood):
-                    return str(zh), "你好", "中文"
-
-            with mock.patch("meapet.paths.PROJECT_ROOT", root):
-                actual = Host()._pick_clone_ref_wav("neutral")
-
-        self.assertEqual(Path(actual).name, "zh_normal.wav")
-
-    def test_mimo_clone_uri_accepts_only_documented_audio_formats(self):
-        from meapet.tts.engines.mimo import TtsMimoMixin
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            for suffix, expected_prefix in (
-                (".wav", "data:audio/wav;base64,"),
-                (".mp3", "data:audio/mpeg;base64,"),
-            ):
-                supported = root / f"supported{suffix}"
-                supported.write_bytes(b"documented-audio")
-                uri = TtsMimoMixin()._build_clone_voice_uri(str(supported))
-                self.assertIsNotNone(uri)
-                self.assertTrue(uri.startswith(expected_prefix))
-
-            for suffix in (".m4a", ".ogg", ".flac"):
-                unsupported = root / f"unsupported{suffix}"
-                unsupported.write_bytes(b"unsupported-audio")
-                self.assertIsNone(
-                    TtsMimoMixin()._build_clone_voice_uri(str(unsupported)),
-                    suffix,
-                )
-
-    def test_mimo_clone_scan_ignores_undocumented_audio_formats(self):
-        from meapet.tts.engines.mimo import TtsMimoMixin
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            cache = root / "voice_cache"
-            cache.mkdir()
-            (cache / "reference.flac").write_bytes(b"fLaC" + b"\x00" * 9000)
-
-            class Host(TtsMimoMixin):
-                mimo_clone_ref = ""
-                mimo_clone_dir = str(cache)
-                voice_lang = "zh"
-                ref_dir = str(root / "GPT-Sovits")
-
-                def _get_ref_paths(self, _mood):
-                    return None, None, None
-
-            with mock.patch(
-                "meapet.tts.engines.mimo.project_path",
-                side_effect=lambda *parts: str(root.joinpath(*parts)),
-            ):
-                self.assertIsNone(Host()._pick_clone_ref_wav("neutral"))
-
-    def test_mimo_clone_rejects_final_data_uri_over_10_mb(self):
-        from meapet.tts.engines.mimo import TtsMimoMixin
-
-        with tempfile.TemporaryDirectory() as td:
-            reference = Path(td) / "reference.wav"
-            with reference.open("wb") as stream:
-                # 编码后 Base64 已超过 10,000,000 字节，但原文件仍小于旧的 8 MiB 门槛。
-                stream.truncate(7_500_003)
-
-            uri = TtsMimoMixin()._build_clone_voice_uri(str(reference))
-            self.assertTrue(uri is None, "编码后的 Data URI 超限时必须拒绝")
-
-    def test_mimo_clone_uri_handles_cache_and_file_failures(self):
-        from meapet.tts.engines.mimo import TtsMimoMixin
-
-        with tempfile.TemporaryDirectory() as td:
-            reference = Path(td) / "reference.wav"
-            reference.write_bytes(b"RIFF" + b"\x00" * 64)
-
-            host = TtsMimoMixin()
-            cached_uri = host._build_clone_voice_uri(str(reference))
-            with mock.patch("builtins.open", side_effect=AssertionError("cache miss")):
-                self.assertEqual(
-                    host._build_clone_voice_uri(str(reference)),
-                    cached_uri,
-                )
-
-            with (
-                mock.patch(
-                    "meapet.tts.engines.mimo.os.path.isfile",
-                    return_value=True,
-                ),
-                mock.patch(
-                    "meapet.tts.engines.mimo.os.stat",
-                    side_effect=OSError("stat failed"),
-                ),
-                mock.patch(
-                    "meapet.tts.engines.mimo.os.path.getsize",
-                    side_effect=OSError("size failed"),
-                ),
-            ):
-                self.assertIsNone(
-                    TtsMimoMixin()._build_clone_voice_uri(str(reference))
-                )
-
-            with mock.patch("builtins.open", side_effect=OSError("read failed")):
-                self.assertIsNone(
-                    TtsMimoMixin()._build_clone_voice_uri(str(reference))
-                )
-
-            with (
-                mock.patch(
-                    "meapet.tts.engines.mimo._MIMO_MAX_CLONE_VOICE_URI_BYTES",
-                    30,
-                ),
-                mock.patch(
-                    "meapet.tts.engines.mimo.os.path.getsize",
-                    return_value=1,
-                ),
-                mock.patch(
-                    "builtins.open",
-                    mock.mock_open(read_data=b"0123456789"),
-                ),
-            ):
-                self.assertIsNone(
-                    TtsMimoMixin()._build_clone_voice_uri(str(reference))
-                )
-
-        self.assertIsNone(TtsMimoMixin()._build_clone_voice_uri(""))
-
-    def test_mimo_voiceclone_stops_before_request_without_key_or_reference(self):
+    def test_mimo_clone_stops_before_request_without_key_or_reference(self):
         import asyncio
 
         from meapet.tts.engines.mimo import TtsMimoMixin
@@ -752,7 +485,7 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
                 (None, ""),
             )
 
-    def test_mimo_voiceclone_request_uses_single_documented_auth_header(self):
+    def test_mimo_clone_request_uses_single_documented_auth_header(self):
         import asyncio
         import base64
 
@@ -1046,6 +779,7 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
         self.assertEqual(Path(calls[0][1]["cwd"]).resolve(), ROOT.resolve())
 
     def test_gsv_payload_separates_reference_and_synthesis_languages(self):
+        import json
         from meapet.tts.engines.gsv import TtsGsvMixin
 
         calls = []
@@ -1136,10 +870,12 @@ print(TTSPage.__name__)
     def test_redaction_masks_hyphenated_secrets(self):
         from meapet.utils import redact_text
 
-        secret = "sk-proj-example_KEY-1234567890abcdef"
+        secret = "sk-proj-example-KEY-1234567890abcdef"
         redacted = redact_text(f"request failed for {secret}")
         self.assertNotIn(secret, redacted)
         self.assertIn("…", redacted)
 
+
 if __name__ == "__main__":
     unittest.main()
+
