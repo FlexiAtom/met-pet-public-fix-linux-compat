@@ -68,7 +68,6 @@ jobs:
       timeout-minutes: 10
       run: |
         pip install --upgrade pip setuptools wheel
-        pip install PyQt5==5.15.9
         pip install -e ".[linux]"
 
     - name: Install ruff
