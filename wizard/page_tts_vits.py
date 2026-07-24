@@ -23,6 +23,60 @@ from wizard.styles import (
 from wizard.platform_info import PLATFORM, CONFIG_PATH
 from wizard.env_utils import pip_install, check_installed
 
+
+class _MainThreadInvoker(QObject):
+    """经队列信号把回调投递回主线程执行。
+
+    普通 threading.Thread 里调用 QTimer.singleShot 不会触发——工作线程
+    没有 Qt 事件循环，定时器根本不启动，安装完成回调因此永远丢失。
+    """
+
+    trigger = pyqtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+        # 发射方在工作线程、本对象归属主线程 → Qt 自动走 QueuedConnection
+        self.trigger.connect(self._run)
+
+    @staticmethod
+    def _run(fn):
+        try:
+            fn()
+        except Exception:
+            pass
+
+
+_invoker: Optional[_MainThreadInvoker] = None
+
+
+def _ensure_main_invoker() -> None:
+    """必须在主线程先调用一次，确保投递器的线程亲和是主线程。"""
+    global _invoker
+    if _invoker is None:
+        _invoker = _MainThreadInvoker()
+
+
+def _post_to_main(fn) -> None:
+    """线程安全地把回调排到主线程。
+
+    - 已在主线程：直接 QTimer.singleShot(0, …)（兼容现有测试对 singleShot 的 mock）。
+    - 在工作线程：经 _MainThreadInvoker 的 QueuedConnection 投递，
+      因为工作线程没有 Qt 事件循环，单靠 singleShot 永远不会触发。
+    """
+    app = QApplication.instance()
+    if app is not None and QThread.currentThread() is app.thread():
+        QTimer.singleShot(0, fn)
+        return
+    if _invoker is not None:
+        _invoker.trigger.emit(fn)
+        return
+    # 无 QApplication / 投递器未初始化：同步执行（单元测试的 ImmediateThread 路径）
+    try:
+        fn()
+    except Exception:
+        pass
+
+
 class TtsPageVitsMixin:
     def _browse_python(self, input_field):
         dir_path = styled_open_file(
@@ -87,6 +141,7 @@ class TtsPageVitsMixin:
         interpreter — we skip subprocess calls that point to it and search
         for a real system Python instead.
         """
+        _ensure_main_invoker()  # 按钮点击在主线程：先建好跨线程投递器
         ret = styled_message_box(
             self,
             title="按需安装确认",
@@ -103,7 +158,7 @@ class TtsPageVitsMixin:
             return
         import sys as _sys, subprocess, threading, os as _os
         base = os.path.dirname(CONFIG_PATH)
-        log = lambda msg: QTimer.singleShot(0, lambda: self.log(msg)) if hasattr(self, 'log') else None
+        log = lambda msg: _post_to_main(lambda: self.log(msg)) if hasattr(self, 'log') else None
 
         # ── 构建干净的环境（去掉 PYTHONPATH 避免污染其他 Python 的子进程） ──
         _clean_env = _os.environ.copy()
@@ -203,10 +258,10 @@ class TtsPageVitsMixin:
                         _pct = int(_m.group(1))
                         if _pct - _last_pct >= 2:
                             _last_pct = _pct
-                            QTimer.singleShot(0, lambda l=_line: log(f"    {l}"))
+                            _post_to_main(lambda l=_line: log(f"    {l}"))
                         continue
                     # 非进度行直接输出
-                    QTimer.singleShot(0, lambda l=_line: log(f"    {l}"))
+                    _post_to_main(lambda l=_line: log(f"    {l}"))
 
             _reader_thread = threading.Thread(target=_reader, daemon=True)
             _reader_thread.start()
@@ -217,7 +272,7 @@ class TtsPageVitsMixin:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-                QTimer.singleShot(0, lambda: log("  ❌ 超时（>{}s），pip 安装中断".format(timeout_sec)))
+                _post_to_main(lambda: log("  ❌ 超时（>{}s），pip 安装中断".format(timeout_sec)))
                 return 1
 
             _reader_thread.join(timeout=5)  # 等 reader 读完残存输出
@@ -260,7 +315,7 @@ class TtsPageVitsMixin:
             self.setup_vits_btn.setText("正在安装 PyTorch 到 _python…")
             def _task_embedded():
                 _pip_install_deps(_embedded, "[_python] ")
-                QTimer.singleShot(0, lambda: self._on_vits_env_done(True, _embedded))
+                _post_to_main(lambda: self._on_vits_env_done(True, _embedded))
             threading.Thread(target=_task_embedded, daemon=True).start()
             return
 
@@ -336,11 +391,10 @@ class TtsPageVitsMixin:
                                        dirs_exist_ok=True)
                         log("已复制 pyopenjtalk 词典")
 
-                QTimer.singleShot(0, lambda: self._on_vits_env_done(True, py_path))
+                _post_to_main(lambda: self._on_vits_env_done(True, py_path))
             except Exception as e:
                 error = str(e)
-                QTimer.singleShot(
-                    0,
+                _post_to_main(
                     lambda error=error: self._on_vits_env_done(False, error),
                 )
 
@@ -351,6 +405,7 @@ class TtsPageVitsMixin:
 
         打包版中 pet exe 不是真正 Python，跳过子进程检查。
         """
+        _ensure_main_invoker()  # 主线程入口：先建好跨线程投递器
         if TtsPageVitsMixin._path_is_pet_exe(py_exe):
             log("  ⚠ 打包版中无法检查 VITS 依赖（pet exe 不是 Python 解释器）")
             return
@@ -386,11 +441,11 @@ class TtsPageVitsMixin:
                     capture_output=True, text=True, timeout=300, env=env
                 )
                 if r.returncode == 0:
-                    QTimer.singleShot(0, lambda: log("✓ VITS 依赖安装完成"))
+                    _post_to_main(lambda: log("✓ VITS 依赖安装完成"))
                 else:
-                    QTimer.singleShot(0, lambda: log(f"  ⚠ pip 安装失败: {r.stderr[-150:]}"))
+                    _post_to_main(lambda: log(f"  ⚠ pip 安装失败: {r.stderr[-150:]}"))
             except subprocess.TimeoutExpired:
-                QTimer.singleShot(0, lambda: log("  ⚠ pip 安装超时，VITS 可能无法正常工作"))
+                _post_to_main(lambda: log("  ⚠ pip 安装超时，VITS 可能无法正常工作"))
         threading.Thread(target=_task, daemon=True).start()
 
     def _on_vits_env_done(self, ok, result):

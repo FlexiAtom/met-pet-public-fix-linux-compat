@@ -257,6 +257,8 @@ class TestHermesAdapter(unittest.IsolatedAsyncioTestCase):
                 session_id="transcript-a",
                 session_key="agent:main:meapet:user",
                 history_turns=1,
+                # 非回环明文 HTTP 必须显式放行
+                allow_insecure_http=True,
             ),
             client=client,
         )

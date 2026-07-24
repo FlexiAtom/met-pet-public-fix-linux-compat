@@ -7,7 +7,7 @@ import urllib.request
 import urllib.error
 from urllib.parse import urljoin
 
-from PyQt5.QtCore import QTimer, pyqtSignal
+from PyQt5.QtCore import QSignalBlocker, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
@@ -26,8 +26,18 @@ from wizard.styles import (
 from wizard.widgets import WheelSafeComboBox
 
 
-# 改：移除了 _MODEL_ENDPOINT_SUFFIXES 和 _detect_provider_from_url 函数
-# 不再需要根据 URL 推断 provider，全部统一为 custom
+# 改：恢复按 URL 推断 provider（供环境变量解析与 MiMo 联动使用），
+# 未显式选择服务商时以此为准
+def _detect_provider_from_url(url: str) -> str:
+    """Infer the provider name from the endpoint URL for env-var resolution."""
+    lowered = (url or "").strip().lower()
+    if "deepseek" in lowered:
+        return "deepseek"
+    if "xiaomimimo" in lowered or "mimo.mi.com" in lowered:
+        return "mimo"
+    if "11434" in lowered or "localhost" in lowered or "127.0.0.1" in lowered:
+        return "ollama"
+    return "custom"
 
 
 def _normalize_base_url(url: str) -> str:
@@ -54,7 +64,8 @@ class LLMPage(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 改：移除 _provider_override 属性
+        # 显式选择的服务商覆写；编辑 API 地址后清除，恢复自动识别
+        self._provider_override = None
         self._fetch_running = False
         self.setObjectName("PageCard")
         self.setStyleSheet(STYLE_PAGE_CARD)
@@ -80,6 +91,21 @@ class LLMPage(QFrame):
         conn_layout = QVBoxLayout(conn_card)
         conn_layout.setContentsMargins(16, 14, 16, 16)
         conn_layout.setSpacing(10)
+
+        # 服务商：默认按 API 地址自动识别，也可显式指定；
+        # 仅影响保存的 provider 字段，不会自动填充下方表单
+        provider_label = QLabel("服务商：")
+        provider_label.setObjectName("FieldLabel")
+        conn_layout.addWidget(provider_label)
+        self.provider_combo = WheelSafeComboBox()
+        self.provider_combo.setObjectName("ProviderSelector")
+        self.provider_combo.setAccessibleName("服务商")
+        self.provider_combo.addItem("自动识别（按 API 地址判断）", "")
+        self.provider_combo.addItem("DeepSeek", "deepseek")
+        self.provider_combo.addItem("MiMo", "mimo")
+        self.provider_combo.addItem("Ollama（本地）", "ollama")
+        self.provider_combo.addItem("自定义 / 其他", "custom")
+        conn_layout.addWidget(self.provider_combo)
 
         # Base URL
         base_url_label = QLabel("API 地址：")
@@ -247,17 +273,47 @@ class LLMPage(QFrame):
         layout.addStretch()
 
         # Signals
-        # 改：移除 _clear_provider_override 的连接
+        self.endpoint_input.textEdited.connect(self._clear_provider_override)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_selected)
         self.fetch_models_btn.clicked.connect(self._start_fetch_models)
         self.models_fetched.connect(self._apply_fetched_models)
 
-    # ── Provider (always custom) ─────────────────────────────
+    # ── Provider auto-detection ──────────────────────────────
 
-    # 改：移除 get_backend、set_backend、_clear_provider_override 方法
-    # 新增一个简单的 get_backend 返回固定值
     def get_backend(self) -> str:
-        """Always returns 'custom' — no backend detection."""
-        return "custom"
+        """Return the resolved provider name for config storage."""
+        if self._provider_override:
+            return self._provider_override
+        return _detect_provider_from_url(self.endpoint_input.text())
+
+    def set_backend(self, backend: str) -> None:
+        """Explicitly select a provider.
+
+        The explicit selection lasts until the user edits the API address.
+        只改变 provider 选择本身，绝不据此自动填充表单字段。
+        """
+        backend = (backend or "custom").lower()
+        self._provider_override = backend
+        self._sync_provider_combo(backend)
+
+    def _clear_provider_override(self, _endpoint: str) -> None:
+        """Let a user-edited address choose its provider automatically."""
+        self._provider_override = None
+        self._sync_provider_combo("")
+
+    def _on_provider_selected(self, _index: int) -> None:
+        """用户在下拉框显式选择服务商；选"自动识别"即清除覆写。"""
+        data = self.provider_combo.currentData()
+        self._provider_override = str(data).lower() if data else None
+
+    def _sync_provider_combo(self, backend: str) -> None:
+        """同步下拉框显示；屏蔽信号以免覆写状态被重复写入。"""
+        idx = self.provider_combo.findData(backend or "")
+        if idx < 0:
+            return
+        blocker = QSignalBlocker(self.provider_combo)
+        self.provider_combo.setCurrentIndex(idx)
+        del blocker
 
     # ── Fetch models ─────────────────────────────────────────
 
@@ -405,7 +461,7 @@ class LLMPage(QFrame):
         protocol = "openai_chat"
         endpoint = self.endpoint_input.text().strip()
         return {
-            "provider": "custom",  # 改：固定为 custom
+            "provider": self.get_backend(),
             "protocol": protocol,
             "api_base": endpoint,
             "host": "",
@@ -416,8 +472,15 @@ class LLMPage(QFrame):
         }
 
     def apply_direct_profile(self, profile: dict) -> None:
-        """Restore form fields from a previously saved profile."""
+        """Restore form fields from a previously saved profile.
+
+        Provider is deliberately derived from the address after restore.  A
+        restored provider must not pin a later user-edited address to its old
+        backend.
+        """
         profile = profile or {}
+        self._provider_override = None
+        self._sync_provider_combo("")
         endpoint = profile.get("api_base") or profile.get("host") or ""
         self.endpoint_input.setText(str(endpoint))
 

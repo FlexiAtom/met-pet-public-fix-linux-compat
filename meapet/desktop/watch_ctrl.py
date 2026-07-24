@@ -19,10 +19,11 @@ from meapet.desktop.dialogs import (
 )
 from meapet.config.store import (
     resolve_vision_api_base,
-    # resolve_vision_backend 和 resolve_vision_host 已移除
+    resolve_vision_backend,
+    resolve_vision_host,
 )
 from meapet.log import get_color_logger
-from meapet.vision.policy import resolve_vision_route
+from meapet.vision.policy import normalize_vision_mode, resolve_vision_route
 
 log = get_color_logger("watch_ctrl")
 
@@ -54,14 +55,46 @@ class PetWatcherMixin:
         )
 
     def _vision_endpoint(self) -> str:
-        """返回识图请求的实际目标地址，统一使用 api_base。"""
+        """返回截图数据实际发往的端点（云端判定必须与真实上传目标一致）。
+
+        inherit：截图随对话交给主回复后端——direct 看 llm.direct 端点，
+        agent 看 llm.agent.base_url；
+        relay / 旧配置：按视觉后端独立解析（mimo 用 api_base，ollama 用 host）。
+        """
         vision_cfg = self.config.get("vision", {}) or {}
         llm_cfg = self.config.get("llm", {}) or {}
-        # 统一返回 resolve_vision_api_base，不再区分 inherit/relay 和 backend
+        mode = (
+            normalize_vision_mode(vision_cfg.get("mode"))
+            if "mode" in vision_cfg
+            else "relay"
+        )
+        if mode == "inherit":
+            if str(llm_cfg.get("mode") or "direct").strip().lower() == "agent":
+                agent = (
+                    llm_cfg.get("agent")
+                    if isinstance(llm_cfg.get("agent"), dict)
+                    else {}
+                )
+                return str(agent.get("base_url") or "").strip()
+            direct = (
+                llm_cfg.get("direct")
+                if isinstance(llm_cfg.get("direct"), dict)
+                else {}
+            )
+            return str(
+                direct.get("api_base")
+                or llm_cfg.get("api_base")
+                or direct.get("host")
+                or llm_cfg.get("host")
+                or "http://127.0.0.1:11434"
+            ).strip()
+        backend = resolve_vision_backend(vision_cfg, llm_cfg)
+        if backend == "ollama":
+            return resolve_vision_host(vision_cfg, llm_cfg)
         return resolve_vision_api_base(vision_cfg, llm_cfg)
 
     def _is_cloud_vision(self) -> bool:
-        """判断截图是否会离开本机：仅根据 endpoint 是否为回环地址。"""
+        """判断截图是否会离开本机：仅根据实际上传端点是否为回环地址。"""
         return not is_loopback_url(self._vision_endpoint())
 
     def _confirm_cloud_capture(self, force: bool = False) -> bool:

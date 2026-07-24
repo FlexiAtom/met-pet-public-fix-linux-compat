@@ -396,7 +396,6 @@ def _responses_spec(
         "temperature": request.temperature,
         "max_output_tokens": request.max_tokens,
         "stream": request.stream,
-        "think":False,
     }
     if request.response_format is not None:
         body["text"] = {"format": dict(request.response_format)}

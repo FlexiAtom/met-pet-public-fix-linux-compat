@@ -77,5 +77,6 @@ def create_agent_adapter_from_config(config: dict):
             ),
             verify_tls=bool(tls.get("verify", True)),
             ca_file=str(tls.get("ca_file") or ""),
+            allow_insecure_http=bool(agent.get("allow_insecure_http", False)),
         )
     )

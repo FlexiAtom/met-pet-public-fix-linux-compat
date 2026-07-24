@@ -9,9 +9,20 @@ def log(msg):
     """写日志到文件，避免管道阻塞导致死锁"""
     global _LOG_FILE
     if _LOG_FILE is None:
-        from meapet.paths import project_path
-        os.makedirs(project_path("audio_cache"), exist_ok=True)
-        _LOG_FILE = open(project_path("audio_cache", "_gsv_infer.log"), "a", encoding="utf-8")
+        # 本脚本由 GSV 整合包自带的 Python 运行，那个解释器里没有 meapet 包，
+        # 绝不能 import meapet.*（否则启动即 ImportError）。
+        # audio_cache 相对脚本位置定位：meapet/tools/ 上两级即项目/便携数据根。
+        try:
+            root = os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            )
+            cache_dir = os.path.join(root, "audio_cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            _LOG_FILE = open(
+                os.path.join(cache_dir, "_gsv_infer.log"), "a", encoding="utf-8"
+            )
+        except OSError:
+            _LOG_FILE = sys.stderr  # 目录不可写时只保留 stderr 输出
     ts = time.strftime("%H:%M:%S")
     _LOG_FILE.write(f"[{ts}] {msg}\n")
     _LOG_FILE.flush()

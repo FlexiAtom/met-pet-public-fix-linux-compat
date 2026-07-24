@@ -28,7 +28,9 @@ class TtsVitsMixin:
         when no external interpreter is configured, or when the subprocess path
         is unavailable.
         """
-        external_py = self._vits_external_python()
+        # 内部辅助一律经类限定调用：保证以鸭子类型宿主（仅有配置属性、
+        # 不继承本 mixin）非绑定调用 _speak_vits 时同样可用（测试契约）。
+        external_py = TtsVitsMixin._vits_external_python(self)
         force_inprocess = bool(getattr(self, "_vits_inprocess", False))
         # Explicit vits_inprocess=true still allows external fallback on failure.
         prefer_subprocess = bool(external_py) and not (
@@ -40,15 +42,17 @@ class TtsVitsMixin:
             prefer_subprocess = True
 
         if prefer_subprocess and external_py:
-            result = self._speak_vits_subprocess(tts_text, output_wav, external_py)
+            result = TtsVitsMixin._speak_vits_subprocess(
+                self, tts_text, output_wav, external_py
+            )
             if result[0]:
                 return result
             log.warning(
                 "VITS subprocess failed; trying in-process torch as fallback"
             )
-            return self._speak_vits_inprocess(tts_text, output_wav)
+            return TtsVitsMixin._speak_vits_inprocess(self, tts_text, output_wav)
 
-        result = self._speak_vits_inprocess(tts_text, output_wav)
+        result = TtsVitsMixin._speak_vits_inprocess(self, tts_text, output_wav)
         if result[0]:
             return result
         if external_py:
@@ -56,7 +60,9 @@ class TtsVitsMixin:
                 "VITS in-process failed; retrying with external Python %s",
                 external_py,
             )
-            return self._speak_vits_subprocess(tts_text, output_wav, external_py)
+            return TtsVitsMixin._speak_vits_subprocess(
+                self, tts_text, output_wav, external_py
+            )
         return None, ""
 
     def _speak_vits_subprocess(

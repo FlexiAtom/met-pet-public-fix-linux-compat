@@ -168,6 +168,8 @@ class TestAgentFactory(unittest.TestCase):
                         "base_url": "http://192.168.1.8:8642/v1",
                         "auth_token": "$HERMES_API_SERVER_KEY",
                         "history_turns": 5,
+                        # 非回环明文 HTTP 必须显式放行，与 control 面一致
+                        "allow_insecure_http": True,
                         "tls": {"verify": True, "ca_file": ""},
                     },
                 }

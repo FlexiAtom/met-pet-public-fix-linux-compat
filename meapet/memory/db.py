@@ -995,7 +995,9 @@ class MeaMemory:
             self._mark_recalled(top)
             elapsed = (time.perf_counter() - t0) * 1000
             log.debug(f"[SRCH] query={query!r} → 无嵌入, 纯重要度排序 {len(top)}条/共{total_candidates} ({elapsed:.1f}ms)")
-            return top
+            # 统一经 _row_to_memory_dict：tags/metadata/source_ids 必须是解析后的对象，
+            # 否则调用方按列表拼接时会把 JSON 字符串拆成单字符。
+            return [self._row_to_memory_dict(r) for r in top]
 
         scored = []
         for r in rows:
@@ -1023,7 +1025,8 @@ class MeaMemory:
         min_sim = scored[-1][1] if scored else 0.0
         log.debug(f"[SRCH] query={query!r} → {len(result)}条/共{total_candidates}候选 "
                   f"sim范围=[{min_sim:.3f},{max_sim:.3f}] query_emb_dims={len(query_emb)} ({elapsed:.1f}ms)")
-        return result
+        # 同上：返回前解析 JSON 字段，保证 tags 等按列表语义交给上层
+        return [self._row_to_memory_dict(r) for r in result]
 
     def _mark_recalled(self, memories: List[Dict[str, Any]]):
         if not memories:

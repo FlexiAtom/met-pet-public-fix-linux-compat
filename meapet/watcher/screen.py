@@ -221,6 +221,7 @@ class ScreenWatcher(QThread):
                  chat_model: str = "qwen2.5:7b",
                  idle_minutes: float = 0,
                  api_key: str = "",
+                 backend: str = "ollama",
                  mode: str = "relay",
                  capture_scope: str = "full_screen",
                  capture_region: dict | None = None,
@@ -232,6 +233,8 @@ class ScreenWatcher(QThread):
         self.chat_model = chat_model
         self.idle_minutes = idle_minutes
         self.api_key = api_key
+        # relay 视觉后端标识：ollama 走原生 /api/generate，其余走 OpenAI 兼容 /chat/completions
+        self.backend = str(backend or "ollama").strip().lower()
         self.mode = str(mode or "disabled").strip().lower()
         self.capture_scope = str(capture_scope or "full_screen").strip().lower()
         self.capture_region = (
@@ -375,7 +378,24 @@ class ScreenWatcher(QThread):
             return ""
 
     def _request_visual_observation(self, image_base64: str) -> str:
-        """仅 relay 模式调用：独立视觉模型只产生观察 JSON。"""
+        """仅 relay 模式调用：按 backend 路由独立视觉模型，只产生观察 JSON。"""
+        if self.backend == "ollama":
+            # Ollama 原生接口：图片走 images 列表，无需鉴权头
+            response = self._http_post(
+                f"{self.api_base}/api/generate",
+                json={
+                    "model": self.vision_model,
+                    "prompt": RELAY_OBSERVATION_PROMPT,
+                    "images": [image_base64],
+                    "stream": False,
+                    "options": {"num_predict": 600, "temperature": 0.1},
+                },
+                timeout=600,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"vision relay HTTP {response.status_code}")
+            return str(response.json().get("response") or "").strip()
+        # 其余（mimo 等 OpenAI 兼容云端）走统一 /chat/completions
         response = self._openai_chat(
             messages=[
                 {

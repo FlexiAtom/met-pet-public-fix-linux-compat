@@ -426,9 +426,9 @@ class PetChatFlowMixin:
         self._last_user_msg = message
         _log_private_text("[chat] 发送给 LLM", message)
         mode = "agent" if self._is_agent_mode() else "direct"
+        # 正文只经 _log_private_text 的 TRACK 通道，默认日志仅记录长度
         log.info(
-            f"[chat] 请求发起 mode={mode} chars={len(message or '')} "
-            f"text={message}"
+            f"[chat] 请求发起 mode={mode} chars={len(message or '')}"
         )
 
         # 显示思考中提示
@@ -539,8 +539,13 @@ class PetChatFlowMixin:
                         if str(getattr(seg, "display_text", "") or "").strip()
                     )
                     if reply_text:
+                        # 回复正文不写入默认日志（文件日志保留 7 天），
+                        # 全文仅在 TRACK 级调试时输出
                         log.info(
-                            f"[reply] 模型返回文本 chars={len(reply_text)}\n{reply_text}"
+                            f"[reply] 模型返回文本 chars={len(reply_text)}"
+                        )
+                        log.track(
+                            lambda text=reply_text: f"[reply] 模型返回文本:\n{text}"
                         )
                 except Exception as exc:
                     log.debug(

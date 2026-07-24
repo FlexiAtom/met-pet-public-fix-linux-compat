@@ -155,6 +155,8 @@ class _ActiveConnection:
     run_id: str = ""
     session_key: str = ""
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # cancel 发生在 chat.send 响应处理之前时置位，等拿到 runId 再补发 abort。
+    abort_pending: bool = False
 
 
 class _GatewayFailure(Exception):
@@ -485,6 +487,14 @@ class OpenClawAdapter:
         active = self._active.get(safe_turn_id)
         if active is None:
             return
+        if not active.run_id:
+            # chat.send 响应可能尚未处理，runId 未知；
+            # 标记待补发，由流式循环拿到 runId 后再发出 abort。
+            active.abort_pending = True
+            return
+        await self._send_abort(safe_turn_id, active)
+
+    async def _send_abort(self, turn_id: str, active: _ActiveConnection) -> None:
         params: dict[str, object] = {
             "sessionKey": active.session_key or self.config.session_key
         }
@@ -492,7 +502,7 @@ class OpenClawAdapter:
             params["runId"] = active.run_id
         frame = {
             "type": "req",
-            "id": f"abort:{safe_turn_id}",
+            "id": f"abort:{turn_id}",
             "method": "chat.abort",
             "params": params,
         }
@@ -666,22 +676,29 @@ class OpenClawAdapter:
 
                 while True:
                     frame = await self._recv_frame(websocket, max_bytes=max_payload)
-                    if request.turn_id in self._cancelled_turns:
-                        self._cancelled_turns.discard(request.turn_id)
-                        yield TurnCancelled(request.turn_id)
-                        return
-                    if (
+                    is_send_response = (
                         frame.get("type") == "res"
                         and frame.get("id") == f"send:{request.turn_id}"
-                    ):
-                        if not frame.get("ok"):
-                            raise _gateway_error(frame.get("error"))
+                    )
+                    if is_send_response and frame.get("ok"):
+                        # 先记下 runId：cancel 可能赶在响应处理前发生，
+                        # chat.abort 必须带上它才能指向当前活跃 run。
                         response_payload = frame.get("payload")
                         if isinstance(response_payload, Mapping):
                             active.run_id = _safe_identifier(
                                 "run_id",
                                 response_payload.get("runId"),
                             )
+                        if active.abort_pending:
+                            active.abort_pending = False
+                            await self._send_abort(request.turn_id, active)
+                    if request.turn_id in self._cancelled_turns:
+                        self._cancelled_turns.discard(request.turn_id)
+                        yield TurnCancelled(request.turn_id)
+                        return
+                    if is_send_response:
+                        if not frame.get("ok"):
+                            raise _gateway_error(frame.get("error"))
                         continue
                     if frame.get("type") != "event":
                         continue

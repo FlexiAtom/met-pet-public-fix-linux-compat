@@ -51,6 +51,7 @@ class HermesConfig:
     timeout_seconds: float = 120.0
     verify_tls: bool = True
     ca_file: str = ""
+    allow_insecure_http: bool = False
 
     def __post_init__(self) -> None:
         raw_url = str(self.base_url or "").strip().rstrip("/")
@@ -59,6 +60,19 @@ class HermesConfig:
             raise ValueError("base_url must be an http(s) URL")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("base_url must not contain credentials, query, or fragment")
+        # 非回环地址禁止明文 HTTP：Bearer/会话与截图附件都会明文过网。
+        # 与 agent_control / OpenClaw 的 allow_insecure_* 语义保持一致。
+        if parsed.scheme == "http":
+            hostname = (parsed.hostname or "").strip().lower()
+            is_loopback = (
+                hostname in {"localhost", "::1"}
+                or hostname.startswith("127.")
+            )
+            if not is_loopback and not self.allow_insecure_http:
+                raise ValueError(
+                    "refusing plaintext http to a non-loopback Hermes; "
+                    "use https or set llm.agent.allow_insecure_http=true"
+                )
         normalized_url = urlunsplit(
             (parsed.scheme.lower(), parsed.netloc, parsed.path.rstrip("/"), "", "")
         )
@@ -83,6 +97,9 @@ class HermesConfig:
         object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
         object.__setattr__(self, "verify_tls", bool(self.verify_tls))
         object.__setattr__(self, "ca_file", str(self.ca_file or "").strip())
+        object.__setattr__(
+            self, "allow_insecure_http", bool(self.allow_insecure_http)
+        )
 
     @staticmethod
     def _safe_session_value(name: str, value: object) -> str:
@@ -362,7 +379,9 @@ class HermesAdapter:
                     if request.turn_id in self._cancelled_turns:
                         return None
                     if sse.data.strip() == "[DONE]":
-                        continue
+                        # SSE 标准结束标记：立即停止读取。
+                        # 若服务器 DONE 后保持连接，continue 会一直等到超时。
+                        break
                     try:
                         payload = json.loads(sse.data)
                     except json.JSONDecodeError:
@@ -465,7 +484,9 @@ class HermesAdapter:
                         yield TurnCancelled(request.turn_id)
                         return
                     if sse.data.strip() == "[DONE]":
-                        continue
+                        # SSE 标准结束标记：立即停止读取。
+                        # 若服务器 DONE 后保持连接，continue 会一直等到超时。
+                        break
                     try:
                         payload = json.loads(sse.data)
                     except json.JSONDecodeError:
