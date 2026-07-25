@@ -280,8 +280,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         self.assertEqual(agent["auth_token"], "$OPENAI_API_KEY")
         self.assertEqual(agent["history_turns"], 5)
         # 旧字段必须不存在
-        for legacy in ("kind", "auth_token", "session_id", "session_key",
-                       "allow_insecure_ws", "identity_path"):
+        for legacy in ("model", "provider", "protocol"):
             self.assertNotIn(legacy, agent)
         self.assertEqual(config["ui"]["timeline_turns"], 9)
         self.assertEqual(config["llm"]["direct"]["model"], "saved-model")
