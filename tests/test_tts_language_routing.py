@@ -235,6 +235,9 @@ class TestMeaTtsLanguageOverride(unittest.TestCase):
                             "api_key": "test-key-not-real",
                             "voice_lang": "jp",
                             "translate_to_jp": True,
+                            # 本用例只验证「逐次 language 覆盖默认 voice_lang」，
+                            # 不启用 prefer（prefer 会把中文统一译到 jp，见 TestPrefer*）。
+                            "prefer_model_voice_translation": False,
                             "output_dir": td,
                         }
                     }
