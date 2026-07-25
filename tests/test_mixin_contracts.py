@@ -1,4 +1,5 @@
-"""Mixin 组合契约：方法绑定、跨 mixin 调用链、交互异常不抛出"""
+"""Mixin 组合契约：方法绑定、跨 mixin 调用链、交互异常不抛出（OpenAI 兼容版）。"""
+
 from __future__ import annotations
 
 import inspect
@@ -50,6 +51,37 @@ class TestMixinBinding(unittest.TestCase):
         params = list(inspect.signature(obj.__func__).parameters)
         self.assertNotEqual(params[:1], ["self"])
 
+    def test_interaction_methods_are_instance_methods(self):
+        """interaction.py 中的方法是实例方法，且调用链正确。"""
+        from meapet.desktop.interaction import PetInteractionMixin
+
+        # _on_zone_triggered 是实例方法
+        params = list(inspect.signature(PetInteractionMixin._on_zone_triggered).parameters)
+        self.assertEqual(params[0], "self")
+
+        # _on_head_patted 是实例方法
+        params = list(inspect.signature(PetInteractionMixin._on_head_patted).parameters)
+        self.assertEqual(params[0], "self")
+
+        # _show_bubble 是实例方法
+        params = list(inspect.signature(PetInteractionMixin._show_bubble).parameters)
+        self.assertEqual(params[0], "self")
+
+        # _record_interaction 是实例方法
+        params = list(inspect.signature(PetInteractionMixin._record_interaction).parameters)
+        self.assertEqual(params[0], "self")
+
+    def test_interaction_calls_chat_flow_methods(self):
+        """interaction 的 _on_zone_triggered 调用 show_reply（来自 chat_flow）。"""
+        from meapet.desktop.interaction import PetInteractionMixin
+
+        src = inspect.getsource(PetInteractionMixin._on_zone_triggered)
+        # 调用链：_on_zone_triggered → show_reply + _play_audio + _safe_set_mood
+        self.assertIn("show_reply", src)
+        self.assertIn("_play_audio", src)
+        self.assertIn("_safe_set_mood", src)
+        self.assertIn("_record_interaction", src)
+
 
 class _FakeBubble:
     def __init__(self):
@@ -74,7 +106,6 @@ class _Composite:
         from meapet.desktop.chat_flow import PetChatFlowMixin
         from meapet.desktop.interaction import PetInteractionMixin
 
-        # 绑定 mixin 方法到本实例（与多继承解析一致的子集）
         self._mix_audio = PetAudioMixin
         self._mix_chat = PetChatFlowMixin
         self._mix_inter = PetInteractionMixin
@@ -112,6 +143,9 @@ class _Composite:
     def _ensure_tts_poll(self):
         pass
 
+    def _get_wav_duration_ms(self, _path):
+        return 500
+
     def show_reply(self, text, mood="neutral", duration_ms=None):
         from meapet.desktop.chat_flow import PetChatFlowMixin
         return PetChatFlowMixin.show_reply(self, text, mood, duration_ms)
@@ -124,16 +158,13 @@ class _Composite:
         from meapet.desktop.chat_flow import PetChatFlowMixin
         return PetChatFlowMixin._speak_and_show(self, text, duration_ms, mood)
 
-    def _interaction_speak(self, text, duration_ms, mood):
-        from meapet.desktop.interaction import PetInteractionMixin
-        return PetInteractionMixin._interaction_speak(self, text, duration_ms, mood)
-
     def _on_head_patted(self):
         from meapet.desktop.interaction import PetInteractionMixin
         return PetInteractionMixin._on_head_patted(self)
 
-    def _get_cached_interaction(self, text, lang):
-        return None
+    def _on_zone_triggered(self, zone):
+        from meapet.desktop.interaction import PetInteractionMixin
+        return PetInteractionMixin._on_zone_triggered(self, zone)
 
     def _record_interaction(self):
         from meapet.desktop.interaction import PetInteractionMixin
@@ -145,58 +176,63 @@ class _Composite:
 
 
 class TestCrossMixinCallChain(unittest.TestCase):
-    def test_interaction_speak_calls_speak_and_show_with_real_self(self):
+    def test_head_patted_calls_zone_triggered_with_upper(self):
+        """_on_head_patted 应调用 _on_zone_triggered('upper')。"""
         c = _Composite()
-        seen = {}
+        triggered = []
 
-        def fake_speak_and_show(self, text, duration_ms, mood="neutral"):
-            seen["self_type"] = type(self).__name__
-            seen["has_tts"] = hasattr(self, "tts") and not isinstance(self, str)
-            seen["text"] = text
-            seen["mood"] = mood
-            # also exercise show path
-            self.show_reply(text, mood)
+        def fake_zone(self, zone):
+            triggered.append(zone)
 
-        with mock.patch.object(_Composite, "_speak_and_show", fake_speak_and_show):
-            c._interaction_speak("别摸了……", 1000, "annoyed")
+        with mock.patch.object(_Composite, "_on_zone_triggered", fake_zone):
+            c._on_head_patted()
+        self.assertEqual(triggered, ["upper"])
 
-        self.assertEqual(seen.get("self_type"), "_Composite")
-        self.assertTrue(seen.get("has_tts"))
-        self.assertEqual(seen.get("text"), "别摸了……")
+    def test_zone_triggered_calls_show_reply_and_play_audio(self):
+        """_on_zone_triggered 应调用 show_reply + _play_audio + _safe_set_mood。"""
+        c = _Composite()
+        # 让 _pick_zone_audio 返回一个固定结果
+        c._pick_zone_audio = lambda zone: ("/fake/path.wav", "别摸了")
+        c._get_wav_duration_ms = lambda path: 500
+
+        c._on_zone_triggered("upper")
+
         self.assertTrue(c.bubble.texts)
+        self.assertEqual(c.bubble.texts[-1][0], "别摸了")
+        self.assertEqual(c._played, ["/fake/path.wav"])
+        self.assertIn("neutral", c._safe_moods)
 
-    def test_head_patted_does_not_raise_when_tts_pipeline_breaks(self):
+    def test_head_patted_does_not_raise_when_zone_pipeline_breaks(self):
+        """_on_head_patted 异常不应抛出，应 fallback 到 _show_bubble。"""
         c = _Composite()
 
-        def boom(self, text, duration_ms, mood="neutral"):
-            raise RuntimeError("tts pipeline broken")
+        def boom(self, zone):
+            raise RuntimeError("zone pipeline broken")
 
-        with mock.patch.object(_Composite, "_speak_and_show", boom):
+        with mock.patch.object(_Composite, "_on_zone_triggered", boom):
             # should not raise
             c._on_head_patted()
-        # mood attempted
-        self.assertTrue(c._safe_moods)
-        # text still shown via fallback in _interaction_speak
+        # fallback bubble shown
         self.assertTrue(c.bubble.texts)
+
+    def test_lower_left_and_right_patted_call_correct_zones(self):
+        c = _Composite()
+        triggered = []
+
+        def fake_zone(self, zone):
+            triggered.append(zone)
+
+        with mock.patch.object(_Composite, "_on_zone_triggered", fake_zone):
+            from meapet.desktop.interaction import PetInteractionMixin
+            PetInteractionMixin._on_lower_left_patted(c)
+            PetInteractionMixin._on_lower_right_patted(c)
+        self.assertEqual(triggered, ["lower_left", "lower_right"])
 
     def test_speak_and_show_tolerates_missing_tts(self):
         c = _Composite()
         c.tts = None
         c._speak_and_show("你好喵", 1000, "happy")
         self.assertTrue(c.bubble.texts)
-
-    def test_cached_interaction_bubble_outlives_its_audio(self):
-        c = _Composite()
-        with tempfile.TemporaryDirectory() as td:
-            wav_path = Path(td) / "interaction.wav"
-            wav_path.write_bytes(b"RIFF" + b"\x00" * 40)
-            c._get_cached_interaction = lambda _text, _lang: str(wav_path)
-            c._get_wav_duration_ms = lambda _path: 12_000
-
-            c._interaction_speak("别摸了……", 1000, "annoyed")
-
-        self.assertEqual(c.bubble.texts[-1][1], 12_500)
-        self.assertEqual(c._played, [str(wav_path)])
 
     def test_generated_interaction_waits_for_audio_and_outlives_it(self):
         import meapet.desktop.chat_flow as chat_flow
@@ -229,12 +265,9 @@ class TestCrossMixinCallChain(unittest.TestCase):
         """文档化错误形态：若误标 staticmethod，self 会变成 str。"""
         from meapet.desktop.chat_flow import PetChatFlowMixin
 
-        # 直接按错误调用方式应能被我们的防护挡住或至少不认为 str 有 tts
-        # 正确绑定：
         c = _Composite()
         self.assertTrue(hasattr(c, "tts"))
         self.assertFalse(isinstance(c, str))
-        # 函数参数名第一位是 self
         params = list(inspect.signature(PetChatFlowMixin._speak_and_show).parameters)
         self.assertEqual(params[0], "self")
 
@@ -590,16 +623,25 @@ class TestRequiredSurfaceOnMeaPetSource(unittest.TestCase):
         self.assertIn("PetConfigBridgeMixin", text)
         self.assertIn("class MeaPet(", text)
 
-    def test_interaction_depends_on_chat_flow_method(self):
-        """interaction 调用 _speak_and_show，必须由 chat_flow 提供且非 static。"""
+    def test_interaction_depends_on_chat_flow_show_reply(self):
+        """interaction 的 _on_zone_triggered 调用 show_reply（来自 chat_flow）。"""
         from meapet.desktop.chat_flow import PetChatFlowMixin
         from meapet.desktop.interaction import PetInteractionMixin
 
-        self.assertTrue(hasattr(PetChatFlowMixin, "_speak_and_show"))
-        self.assertTrue(hasattr(PetInteractionMixin, "_interaction_speak"))
-        src = inspect.getsource(PetInteractionMixin._interaction_speak)
-        self.assertIn("_speak_and_show", src)
+        # show_reply 必须由 chat_flow 提供且非 static
+        self.assertTrue(hasattr(PetChatFlowMixin, "show_reply"))
+        src_interaction = inspect.getsource(PetInteractionMixin._on_zone_triggered)
+        # interaction 通过 self.show_reply 调用 chat_flow 的方法
+        self.assertIn("show_reply", src_interaction)
+
+    def test_interaction_zone_triggered_calls_record_interaction(self):
+        """_on_zone_triggered 调用 _record_interaction。"""
+        from meapet.desktop.interaction import PetInteractionMixin
+
+        src = inspect.getsource(PetInteractionMixin._on_zone_triggered)
+        self.assertIn("_record_interaction", src)
 
 
 if __name__ == "__main__":
     unittest.main()
+

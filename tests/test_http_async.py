@@ -52,11 +52,12 @@ class TestHttpAsyncPost(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("example.com", calls[0][0])
 
-    def test_chat_async_backend_uses_http_async(self):
+    def test_chat_async_uses_http_async(self):
+        """ChatEngine 统一使用 OpenAI 兼容接口，无 backend 参数。"""
         from meapet.async_runtime import run
         from meapet.chat.engine import ChatEngine
 
-        eng = ChatEngine(backend="deepseek", api_key="k", api_base="https://api.example.com", model="m")
+        eng = ChatEngine(api_key="k", api_base="https://api.example.com", model="m")
         eng.available = True
 
         class Resp:
@@ -73,14 +74,15 @@ class TestHttpAsyncPost(unittest.TestCase):
         self.assertEqual(mood, "happy")
         self.assertEqual(reply, "httpx喵")
 
-    def test_chat_backends_reserve_tokens_for_tts_metadata_line(self):
+    def test_chat_reserves_tokens_for_tts_metadata_line(self):
+        """统一 OpenAI 请求体应包含 max_tokens 字段。"""
         import asyncio
 
         from meapet.chat.engine import ChatEngine
 
         captured = {}
 
-        class DeepSeekResp:
+        class FakeResp:
             status_code = 200
             text = "ok"
 
@@ -88,40 +90,29 @@ class TestHttpAsyncPost(unittest.TestCase):
             def json():
                 return {"choices": [{"message": {"content": "两行加元数据"}}]}
 
-        class OllamaResp:
-            status_code = 200
-            text = "ok"
-
-            @staticmethod
-            def json():
-                return {"message": {"content": "两行加元数据"}}
-
         async def fake_post(_url, *, json_body=None, **_kwargs):
-            if "options" in json_body:
-                captured["ollama"] = json_body["options"]["num_predict"]
-                return OllamaResp()
-            captured["deepseek"] = json_body["max_tokens"]
-            return DeepSeekResp()
+            captured["max_tokens"] = json_body.get("max_tokens")
+            captured["model"] = json_body.get("model")
+            captured["has_stream"] = json_body.get("stream", False)
+            return FakeResp()
 
-        deepseek = ChatEngine(
-            backend="deepseek",
+        eng = ChatEngine(
             api_key="k",
             api_base="https://api.example.com",
             model="m",
+            max_tokens=4000,
         )
-        ollama = ChatEngine.__new__(ChatEngine)
-        ollama.host = "http://127.0.0.1:11434"
-        ollama.model = "local-model"
-        ollama.temperature = 0.7
-        deepseek._post_json = fake_post
-        ollama._post_json = fake_post
+        eng._post_json = fake_post
 
-        asyncio.run(deepseek._chat_deepseek_async([]))
-        asyncio.run(ollama._chat_ollama_async([]))
+        asyncio.run(eng._chat_openai_async([]))
 
-        self.assertGreaterEqual(captured["deepseek"], 320)
-        self.assertGreaterEqual(captured["ollama"], 320)
+        # max_tokens 应被设置（>= 320 是 TTS 元数据预留后的合理值）
+        self.assertGreaterEqual(captured.get("max_tokens", 0), 320)
+        self.assertEqual(captured.get("model"), "m")
+        # 非流式请求不应有 stream=True
+        self.assertFalse(captured.get("has_stream", True))
 
 
 if __name__ == "__main__":
     unittest.main()
+

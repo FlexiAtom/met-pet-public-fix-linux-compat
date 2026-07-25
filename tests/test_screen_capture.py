@@ -302,7 +302,7 @@ class TestScreenCapture(unittest.TestCase):
                 )
 
         adapter = Adapter()
-        watcher = ScreenWatcher(mode="relay", backend="ollama")
+        watcher = ScreenWatcher(mode="relay")
         watcher.configure_reply(adapter, frontend_context={}, tts_enabled=False)
         watcher._capture_image = mock.Mock(return_value=Image.new("RGB", (64, 64)))
         watcher._request_visual_observation = mock.Mock(
