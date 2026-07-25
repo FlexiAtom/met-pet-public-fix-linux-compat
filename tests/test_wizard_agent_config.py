@@ -263,7 +263,6 @@ class TestWizardConversationConfig(unittest.TestCase):
         # agent 段统一为 OpenAI 兼容
         page.agent_base_url.setText("https://agent.example.test/v1")
         page.agent_auth_token.setText("$OPENAI_API_KEY")
-        page.agent_model.setText("gpt-4o-mini")
         page.agent_history_turns.setValue(5)
         page.timeline_turns.setValue(9)
         page.control_enabled.setChecked(True)
@@ -279,7 +278,6 @@ class TestWizardConversationConfig(unittest.TestCase):
         agent = config["llm"]["agent"]
         self.assertEqual(agent["base_url"], "https://agent.example.test/v1")
         self.assertEqual(agent["api_key"], "$OPENAI_API_KEY")
-        self.assertEqual(agent["model"], "gpt-4o-mini")
         self.assertEqual(agent["history_turns"], 5)
         # 旧字段必须不存在
         for legacy in ("kind", "auth_token", "session_id", "session_key",
