@@ -270,19 +270,19 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     # ---------- Repair ----------
     # repair_format 内部调用 await self._client.post(url, json=payload)，
-    # 所以需要用 AsyncMock 返回一个可 await 的响应对象。
-    # resp.json() 也是异步方法，需要用 AsyncMock。
+    # 然后用 resp.json()（同步方法）获取数据。
+    # 因此 mock_response.json 必须是同步返回字典的可调用对象。
 
     async def test_repair_format_success(self):
         adapter, _ = self._make_adapter()
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json = AsyncMock(return_value={
+        # 注意：resp.json() 是同步方法，所以用 MagicMock 而非 AsyncMock
+        mock_response.json = MagicMock(return_value={
             "choices": [{"message": {"content": "repaired content"}}]
         })
 
-        # 让 adapter._client.post 返回一个协程，该协程返回 mock_response
         adapter._client.post = AsyncMock(return_value=mock_response)
 
         result = await adapter.repair_format("bad content")
@@ -293,7 +293,7 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         mock_response = MagicMock()
         mock_response.status_code = 500
-        mock_response.json = AsyncMock(return_value={})
+        mock_response.json = MagicMock(return_value={})
 
         adapter._client.post = AsyncMock(return_value=mock_response)
 
