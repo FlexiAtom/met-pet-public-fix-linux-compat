@@ -81,44 +81,84 @@ class TestProviderKeyIsolation(unittest.TestCase):
         self.assertEqual(key, "openai-test-key")
 
     def test_mea_pet_key_is_used_for_vision_when_no_file_key(self):
+        """MiMo vision can use MEAPET_API_KEY; ollama vision needs no key."""
         from meapet.config.store import resolve_vision_api_key
 
         env = dict(_SECRET_ENV_KEYS)
         env["MEAPET_API_KEY"] = "meapet-vision-key"
         with mock.patch.dict(os.environ, env, clear=False):
-            key = resolve_vision_api_key({"api_key": ""}, {})
+            # 默认视觉后端是 ollama：不消费云端密钥
+            self.assertEqual(resolve_vision_api_key({"api_key": ""}, {}), "")
+            # 显式 mimo 才读取 ENV_VISION_KEY（含 MEAPET_API_KEY）
+            key = resolve_vision_api_key(
+                {"api_key": "", "backend": "mimo"},
+                {},
+            )
         self.assertEqual(key, "meapet-vision-key")
 
     def test_vision_api_base_inherits_from_llm_when_not_set(self):
-        """When vision.api_base is empty, it inherits llm.api_base."""
+        """同后端时 vision.api_base 可继承 llm.api_base；跨厂商不继承。"""
         from meapet.config.store import resolve_vision_api_base
 
         base = resolve_vision_api_base(
+            {"api_base": "", "backend": "mimo"},
+            {"backend": "mimo", "api_base": "https://shared.example.com/v1"},
+        )
+        self.assertEqual(base, "https://shared.example.com/v1")
+        # 默认 ollama 不继承云端 llm.api_base，避免截图发错厂商
+        ollama_base = resolve_vision_api_base(
             {"api_base": ""},
             {"api_base": "https://shared.example.com/v1"},
         )
-        self.assertEqual(base, "https://shared.example.com/v1")
+        self.assertEqual(ollama_base, "http://127.0.0.1:11434")
 
     def test_vision_api_base_explicit_overrides_inherited(self):
-        """Explicit vision.api_base wins over inherited llm api_base."""
+        """Explicit vision.api_base wins over inherited llm api_base (mimo)."""
         from meapet.config.store import resolve_vision_api_base
 
         base = resolve_vision_api_base(
-            {"api_base": "https://vision-only.example.com/v1"},
-            {"api_base": "https://llm-only.example.com/v1"},
+            {"api_base": "https://vision-only.example.com/v1", "backend": "mimo"},
+            {"backend": "mimo", "api_base": "https://llm-only.example.com/v1"},
         )
         self.assertEqual(base, "https://vision-only.example.com/v1")
 
     def test_vision_api_base_falls_back_to_default_when_both_empty(self):
-        """When both vision and llm api_base are empty, falls back to OpenAI default."""
-        from meapet.config.store import resolve_vision_api_base
+        """未指定时视觉默认 ollama host；mimo 空地址回退 MiMo 默认。"""
+        from meapet.config.store import (
+            DEFAULT_MIMO_API_BASE,
+            DEFAULT_OLLAMA_HOST,
+            resolve_vision_api_base,
+        )
 
         base = resolve_vision_api_base(
             {"api_base": ""},
             {"api_base": ""},
         )
-        # Default is OpenAI's public endpoint
-        self.assertEqual(base, "https://api.openai.com/v1")
+        self.assertEqual(base, DEFAULT_OLLAMA_HOST)
+        mimo_base = resolve_vision_api_base(
+            {"api_base": "", "backend": "mimo"},
+            {"api_base": ""},
+        )
+        self.assertEqual(mimo_base, DEFAULT_MIMO_API_BASE)
+
+    def test_mimo_tts_reuses_mimo_llm_key_only(self):
+        from meapet.config.store import resolve_tts_api_key
+
+        with mock.patch.dict(os.environ, _SECRET_ENV_KEYS, clear=False):
+            self.assertEqual(
+                resolve_tts_api_key(
+                    {"api_key": ""},
+                    {"backend": "mimo", "api_key": "mimo-llm"},
+                ),
+                "mimo-llm",
+            )
+            self.assertEqual(
+                resolve_tts_api_key(
+                    {"api_key": ""},
+                    {"backend": "deepseek", "api_key": "ds"},
+                ),
+                "",
+            )
 
 
 class TestRuntimeConfigurationSwitch(unittest.TestCase):
@@ -214,15 +254,13 @@ class TestRuntimeConfigurationSwitch(unittest.TestCase):
         self.assertIn("delete:worker", host.events)
 
     def test_vision_falls_back_to_default_when_disabled(self):
-        """When vision.api_base is empty and llm.api_base is also empty/unset,
-        vision falls back to the default OpenAI-compatible endpoint."""
-        from meapet.config.store import resolve_vision_api_base
+        """未标注视觉后端时默认本地 ollama host，不默认云端 OpenAI。"""
+        from meapet.config.store import DEFAULT_OLLAMA_HOST, resolve_vision_api_base
 
-        # Both empty → default OpenAI endpoint
         vision = {"api_base": ""}
         llm = {"api_base": ""}
         base = resolve_vision_api_base(vision, llm)
-        self.assertEqual(base, "https://api.openai.com/v1")
+        self.assertEqual(base, DEFAULT_OLLAMA_HOST)
 
     def test_remote_host_is_treated_as_cloud(self):
         """A non-loopback vision host is treated as cloud."""
@@ -523,6 +561,30 @@ class TestConfigSafety(unittest.TestCase):
             self.assertEqual(saved["llm"]["api_key"], "from-example")
             example_data = json.loads(example.read_text(encoding="utf-8"))
             self.assertNotIn("ui", example_data)
+
+    def test_normalize_config_empty_dict_does_not_raise(self):
+        from meapet.config.store import normalize_config
+
+        cfg = normalize_config({})
+        self.assertEqual(cfg["llm"]["mode"], "direct")
+        self.assertIn("direct", cfg["llm"])
+        self.assertIn("agent", cfg["llm"])
+        self.assertNotIn("kind", cfg["llm"]["agent"])
+
+    def test_normalize_config_legacy_hermes_backend_defaults_to_agent_mode(self):
+        from meapet.config.store import normalize_config
+
+        cfg = normalize_config({"llm": {"backend": "hermes"}})
+        self.assertEqual(cfg["llm"]["mode"], "agent")
+        # OpenAI 兼容 agent 形状：不再落 hermes kind
+        self.assertNotIn("kind", cfg["llm"]["agent"])
+
+    def test_infer_direct_protocol_known_and_unknown(self):
+        from meapet.config.store import infer_direct_protocol
+
+        self.assertEqual(infer_direct_protocol("ollama"), "ollama_chat")
+        self.assertEqual(infer_direct_protocol("anthropic"), "anthropic_messages")
+        self.assertEqual(infer_direct_protocol("weird"), "openai_chat")
 
 
 class TestRepositoryIgnoreRules(unittest.TestCase):

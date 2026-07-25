@@ -30,16 +30,48 @@ from meapet.utils import mask_secret, normalize_watcher
 from meapet.vision.policy import normalize_vision_mode
 
 
-# 通用环境变量（不再区分后端）
+# 通用 LLM 环境变量（未知/未标注 backend 时的兜底）。
+# MEAPET_API_KEY 是跨后端的通用兜底；厂商专属变量见 ENV_LLM_KEY_BY_BACKEND。
 ENV_LLM_KEY = ("OPENAI_API_KEY", "MEAPET_API_KEY")
+# 环境变量按后端隔离：deepseek 不吃 OPENAI_API_KEY，反之亦然。
+ENV_LLM_KEY_BY_BACKEND = {
+    "deepseek": ("DEEPSEEK_API_KEY", "MEAPET_API_KEY"),
+    "mimo": ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY"),
+    "openai": ("OPENAI_API_KEY", "MEAPET_API_KEY"),
+}
 ENV_TTS_KEY = ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY")
 ENV_TRANSLATE_KEY = ("TRANSLATE_API_KEY",)
 ENV_VISION_KEY = ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY")
 
-# 默认 OpenAI 兼容地址
+# 直连 provider 与协议的默认对应；显式 protocol 始终优先。
+PROTOCOL_BY_PROVIDER = {
+    "ollama": "ollama_chat",
+    "deepseek": "openai_chat",
+    "mimo": "openai_chat",
+    "openai": "openai_chat",
+    "anthropic": "anthropic_messages",
+    "custom": "openai_chat",
+}
+_DIRECT_PROVIDERS = frozenset(PROTOCOL_BY_PROVIDER)
+# 旧顶层 backend 属于 Agent 类时，无 mode 配置迁去 agent。
+_AGENT_KINDS = frozenset({"hermes", "openclaw"})
+# 支持独立识图解析的视觉后端。
+_VISION_BACKENDS = frozenset({"ollama", "mimo"})
+
+# 默认 OpenAI 兼容地址（vision 等路径的公共 fallback）
 DEFAULT_API_BASE = "https://api.openai.com/v1"
+# Ollama 本地默认地址（host 形式，不带 /v1）
+DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
+# MiMo 云端默认地址
+DEFAULT_MIMO_API_BASE = "https://api.xiaomimimo.com/v1"
 
 _ENV_PLACEHOLDERS = ("", "$ENV", "${ENV}", "env", "ENV")
+
+
+def infer_direct_protocol(provider: object) -> str:
+    """按 provider 推断直连协议，未知 provider 走 OpenAI 兼容。"""
+    key = str(provider or "").strip().lower()
+    return PROTOCOL_BY_PROVIDER.get(key, "openai_chat")
 
 DEFAULT_BUBBLE = {
     "default": 5000,
@@ -378,6 +410,7 @@ def _normalize_llm_contract(value: object) -> dict:
     max_tokens / timeout_seconds / history_turns / tls。
     """
     llm = copy.deepcopy(value) if isinstance(value, dict) else {}
+    backend = str(llm.get("backend") or "").strip().lower()
     requested_mode = str(llm.get("mode") or "").strip().lower()
     if requested_mode not in {"direct", "agent"}:
         # 旧配置无 mode：Agent 类 backend 迁去 agent，其余默认 direct

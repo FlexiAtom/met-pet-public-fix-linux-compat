@@ -147,11 +147,15 @@ class TestConfigStoreMore(unittest.TestCase):
             )
         finally:
             os.environ.pop("TRANSLATE_API_KEY", None)
-        # Vision key: 独立环境变量（MEAPET_API_KEY）
+        # Vision key: ollama 默认不消费云端密钥；mimo 才读 ENV_VISION_KEY
         os.environ["MEAPET_API_KEY"] = "sk-vision"
         try:
             self.assertEqual(
                 resolve_vision_api_key({"api_key": ""}, {}),
+                "",
+            )
+            self.assertEqual(
+                resolve_vision_api_key({"api_key": "", "backend": "mimo"}, {}),
                 "sk-vision",
             )
         finally:

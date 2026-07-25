@@ -139,16 +139,33 @@ async def _probe_agent(config: dict) -> ConnectionResult:
 
 async def _probe_tts(config: dict) -> ConnectionResult:
     import copy
+    from meapet.config.normalizers import canonical_tts_language
     from meapet.tts.service import MeaTTS
 
     try:
-        tts = MeaTTS(copy.deepcopy(config))
+        # 探测只用合成路径：副本上关掉「按目标语翻译」，避免引擎正常却因
+        # 中文探测句 + 日语 voice_lang 触发离线翻译失败而误报。
+        probe_cfg = copy.deepcopy(config or {})
+        tts_cfg = (
+            probe_cfg.get("tts") if isinstance(probe_cfg.get("tts"), dict) else {}
+        )
+        if not isinstance(probe_cfg.get("tts"), dict):
+            probe_cfg["tts"] = tts_cfg = {}
+        tts_cfg["prefer_model_voice_translation"] = False
+        tts_cfg["translate_to_jp"] = False
+
+        language = canonical_tts_language(tts_cfg.get("voice_lang") or "zh") or "zh"
+        probe_text = {
+            "zh": "连接测试",
+            "jp": "接続テスト",
+            "en": "connection test",
+        }.get(language, "连接测试")
+
+        tts = MeaTTS(probe_cfg)
         if not tts.enabled:
             return ConnectionResult(False, "语音已关闭，请先启用语音。")
-        tts_cfg = config.get("tts") if isinstance(config.get("tts"), dict) else {}
-        language = str(tts_cfg.get("voice_lang") or "zh")
         result = await tts.speak_async(
-            "连接测试",
+            probe_text,
             mood="neutral",
             language=language,
         )

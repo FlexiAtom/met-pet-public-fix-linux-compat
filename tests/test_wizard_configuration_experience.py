@@ -430,14 +430,20 @@ class ConnectionProbeTests(unittest.IsolatedAsyncioTestCase):
         tts = Mock()
         tts.enabled = True
         tts.speak_async = AsyncMock(
-            return_value=("/tmp/connection-test.wav", "zh")
+            return_value=("/tmp/connection-test.wav", "jp")
         )
-        config = {"tts": {"enabled": True, "engine": "mimo"}}
-        with patch("meapet.tts.service.MeaTTS", return_value=tts):
+        # 故意不带 llm.mode：回归 store.normalize_config 在缺 mode 时的 NameError
+        config = {"tts": {"enabled": True, "engine": "mimo", "voice_lang": "jp"}}
+        with patch("meapet.tts.service.MeaTTS", return_value=tts) as ctor:
             result = await probe_connection("tts", config)
 
         self.assertTrue(result.ok, result.message)
-        tts.speak_async.assert_awaited_once()
+        ctor.assert_called_once()
+        tts.speak_async.assert_awaited_once_with(
+            "接続テスト",
+            mood="neutral",
+            language="jp",
+        )
 
 
 if __name__ == "__main__":
