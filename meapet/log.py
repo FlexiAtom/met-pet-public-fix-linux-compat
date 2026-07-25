@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 # ====================== 全局配置项 ======================
-CONSOLE_LOG_LEVEL = "TRACK"   # 控制台默认级别 协议级调试仅在 CONSOLE_LOG_LEVEL = "TRACK" 时输出
+CONSOLE_LOG_LEVEL = "INFO"    # 控制台默认 INFO；TRACK 载荷日志需显式调到 TRACK 或 MEAPET_DEBUG=1
 FILE_LOG_LEVEL = "DEBUG"     # 文件默认级别 设为 DEBUG 则 TRACK 不落盘
 
 # 日志路径：打包便携模式下与配置/缓存同在 get_data_dir()（_internal）。

@@ -11,6 +11,7 @@ from .types import REPLY_REQUIRED_FIELDS, ReplySegment
 
 
 _SEGMENT_START_RE = re.compile(r"<MEAPET_SEGMENT\s*>", re.IGNORECASE)
+_SEGMENT_CLOSE_RE = re.compile(r"</MEAPET_SEGMENT\s*>", re.IGNORECASE)
 _SEGMENT_BLOCK_RE = re.compile(
     r"<MEAPET_SEGMENT\s*>(.*?)</MEAPET_SEGMENT\s*>",
     re.IGNORECASE | re.DOTALL,
@@ -271,6 +272,9 @@ class MeaPetOutputStreamParser:
 
     # 标签最长约 32 字节，窗口足够覆盖跨块边界
     _BOUNDARY_WINDOW = 48
+    # 累计输入上限：防御后端无视 max_tokens 持续推流导致内存无界增长。
+    # 正常回复不超过几 KB，40 万字符已远超任何合法输出。
+    _MAX_RAW_CHARS = 400_000
 
     def __init__(self) -> None:
         self._raw = ""
@@ -282,6 +286,12 @@ class MeaPetOutputStreamParser:
         self._starts: list[tuple[int, int]] = []  # (start, end) of each <MEAPET_SEGMENT>
         self._last_scan = 0  # bytes of self._raw already scanned for starts
         self._last_close_count = 0  # count of </MEAPET_SEGMENT seen (avoid re-scan)
+        self._overflowed = False
+
+    @property
+    def overflowed(self) -> bool:
+        """累计输入是否已触达上限（调用方应中止流并报协议错误）。"""
+        return self._overflowed
 
     def feed(self, chunk: object) -> Tuple[object, ...]:
         if self._closed:
@@ -289,6 +299,17 @@ class MeaPetOutputStreamParser:
         value = str(chunk or "")
         if not value:
             return ()
+        # 达到上限后丢弃后续输入并置 overflowed；调用方应检查该标志并
+        # 主动中止网络流，避免 raw_chunks 继续无界累积。
+        if self._overflowed:
+            return ()
+        remaining = self._MAX_RAW_CHARS - len(self._raw)
+        if remaining <= 0:
+            self._overflowed = True
+            return ()
+        if len(value) > remaining:
+            value = value[:remaining]
+            self._overflowed = True
         self._raw += value
         events = []
 
@@ -333,8 +354,10 @@ class MeaPetOutputStreamParser:
                 events.append(SegmentTextDelta(index, visible[previous:]))
                 self._display_lengths[index] = len(visible)
 
-        # --- 跟踪 </MEAPET_SEGMENT> 完整闭标签的出现次数，避免全量正则重扫 ---
-        close_count = self._raw.upper().count("</MEAPET_SEGMENT>")
+        # --- 跟踪 </MEAPET_SEGMENT> 完整闭标签的出现次数 ---
+        # 与完整解析用同一容错规则（允许 "</MEAPET_SEGMENT >"），
+        # 否则带空白的合法闭标签不会实时触发 SegmentCompleted。
+        close_count = len(_SEGMENT_CLOSE_RE.findall(self._raw))
         if close_count > self._last_close_count:
             self._last_close_count = close_count
             blocks = list(_SEGMENT_BLOCK_RE.finditer(self._raw))

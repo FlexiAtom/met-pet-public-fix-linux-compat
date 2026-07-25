@@ -8,7 +8,12 @@ from typing import Optional
 
 from PyQt5.QtCore import QTimer
 
-from meapet.utils import safe_print, log_error
+from meapet.utils import (
+    audio_cache_key,
+    legacy_audio_cache_name,
+    safe_print,
+    log_error,
+)
 from meapet.desktop.audio import bubble_duration_for_audio
 
 
@@ -57,7 +62,19 @@ class PetInteractionMixin:
     def _on_head_patted(self):
         """上半区：来自信号或 app.py 拖拽检测"""
         try:
-            self._on_zone_triggered("upper")
+            self._record_interaction()
+            reactions = [
+                ("……别摸我头发。", "annoyed"),
+                ("……有事吗？", "curious"),
+                ("哼。", "melancholy"),
+                ("……", "shy"),
+                ("别摸了……", "annoyed"),
+            ]
+            text, mood = random.choice(reactions)
+            self._safe_set_mood(mood)
+            dur = (self.config.get("bubble_duration_ms") or {}).get("interaction", 3000)
+            self._interaction_speak(text, dur, mood)
+            QTimer.singleShot(3000, lambda: self._safe_set_mood("neutral"))
         except Exception as e:
             log_error("head_patted", f"{type(e).__name__}: {e}")
             safe_print(f"[pet] head_patted error: {e}")
@@ -87,6 +104,53 @@ class PetInteractionMixin:
                 self._show_bubble("唔…出错了喵", 2500)
             except Exception:
                 pass
+
+    def _interaction_speak(self, text: str, duration_ms: int, mood: str):
+        """互动语音：优先缓存，否则走 TTS 合成（失败不抛到 Qt 事件循环）"""
+        try:
+            cache_file = self._get_cached_interaction(text, "jp")
+            if cache_file:
+                bubble_ms = bubble_duration_for_audio(
+                    self._get_wav_duration_ms(cache_file),
+                    duration_ms,
+                )
+                self.show_reply(text, mood, duration_ms=bubble_ms)
+                self._play_audio(cache_file)
+            else:
+                self._speak_and_show(text, duration_ms, mood)
+        except Exception as e:
+            log_error("interaction_speak", f"{type(e).__name__}: {e}")
+            safe_print(f"[pet] interaction_speak error: {e}")
+            try:
+                # 至少显示文字，不因 TTS/缓存失败而静默或崩溃
+                self.show_reply(text, mood, duration_ms=duration_ms)
+            except Exception:
+                try:
+                    self._show_bubble(text, duration_ms or 3000)
+                except Exception:
+                    pass
+
+    def _safe_name(self, text: str) -> str:
+        """文本 → 不暴露原文的稳定缓存键。"""
+        return audio_cache_key(text)
+
+    def _get_cached_interaction(self, text: str, lang: str) -> Optional[str]:
+        """获取互动语音缓存（带语言前缀）"""
+        if not self.tts:
+            return None
+        safe = self._safe_name(text)
+        if not safe:
+            return None
+        from meapet.paths import project_path
+        cache_dir = project_path("voice_cache")
+        path = os.path.join(cache_dir, f"{lang}_{safe}.wav")
+        if os.path.exists(path):
+            return path
+        legacy = legacy_audio_cache_name(text)
+        if not legacy:
+            return None
+        legacy_path = os.path.join(cache_dir, f"{lang}_{legacy}.wav")
+        return legacy_path if os.path.exists(legacy_path) else None
 
     def _idle_action(self):
         """随机空闲表情变化"""

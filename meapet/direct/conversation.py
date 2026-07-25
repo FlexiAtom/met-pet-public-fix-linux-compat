@@ -106,6 +106,8 @@ class DirectConversationAdapter:
                     return None
                 if isinstance(event, TextDelta):
                     parser.feed(event.delta)
+                    if parser.overflowed:
+                        return None
                 elif isinstance(event, StreamDone):
                     break
         except DirectProtocolError:
@@ -224,6 +226,11 @@ class DirectConversationAdapter:
                         elif isinstance(parsed_event, ProtocolCompleted):
                             protocol_completed_emitted = True
                         yield parsed_event
+                    if parser.overflowed:
+                        raise DirectProtocolError(
+                            "protocol",
+                            "模型输出超过长度上限，已中止本回合。",
+                        )
                 elif isinstance(event, ReasoningDelta):
                     # reasoning 仅存在于协议内部，禁止进入气泡、TTS 和时间线正文。
                     continue
@@ -234,10 +241,13 @@ class DirectConversationAdapter:
                 raise DirectProtocolError("protocol", "模型流未正常结束。")
 
             raw_text = "".join(raw_chunks)
+            # 默认日志只记长度；正文可能含用户隐私，仅 TRACK 可见且默认不落盘
             if raw_text.strip():
-                # 控制台默认可见：完整模型文本（非 reasoning）。
                 log.info(
-                    f"[direct] 模型返回文本 turn={turn} chars={len(raw_text)}\n{raw_text}"
+                    f"[direct] 模型返回文本 turn={turn} chars={len(raw_text)}"
+                )
+                log.track(
+                    lambda t=raw_text: "[direct] reply-text:" + chr(10) + t
                 )
             else:
                 log.info(f"[direct] 模型返回文本为空 turn={turn}")
@@ -259,6 +269,11 @@ class DirectConversationAdapter:
                 if cleaned != raw_text:
                     new_parser = MeaPetOutputStreamParser()
                     new_parser.feed(cleaned)
+                    if new_parser.overflowed:
+                        raise DirectProtocolError(
+                            "protocol",
+                            "模型输出超过长度上限，已中止本回合。",
+                        )
                     new_result = new_parser.close(tts_enabled=request.tts_enabled)
                     if not new_result.requires_repair(tts_enabled=request.tts_enabled):
                         log.info(

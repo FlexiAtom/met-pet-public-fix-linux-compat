@@ -150,14 +150,16 @@ async def _iter_sse(response: httpx.Response) -> AsyncIterator[_SseEvent]:
             continue
         if line.startswith(":"):
             continue
-        # 前 10 行原始内容诊断日志，确认实际响应格式
+        # 原始 SSE 帧可能含 reasoning/对话；仅 MEAPET_DEBUG=1 时输出
         if raw_line_count < 20:
-            log.track(
-                lambda l=line, n=raw_line_count: (
-                    f"[sse] raw line #{n}: "
-                    f"first_500={l[:500]!r}"
+            from meapet.utils import debug_enabled
+            if debug_enabled():
+                log.track(
+                    lambda l=line, n=raw_line_count: (
+                        f"[sse] raw line #{n}: "
+                        f"first_500={l[:500]!r}"
+                    )
                 )
-            )
             raw_line_count += 1
         if line.startswith("data:"):
             value = line[5:].lstrip()
@@ -396,7 +398,6 @@ def _responses_spec(
         "temperature": request.temperature,
         "max_output_tokens": request.max_tokens,
         "stream": request.stream,
-        "think":False,
     }
     if request.response_format is not None:
         body["text"] = {"format": dict(request.response_format)}

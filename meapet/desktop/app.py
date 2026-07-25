@@ -40,6 +40,7 @@ from meapet.config.store import (
     resolve_startup_config_path,
     resolve_vision_api_base,
     resolve_vision_api_key,
+    resolve_vision_backend,
 )
 from meapet.config.checker import check_config_lines
 
@@ -369,11 +370,14 @@ class MeaPet(
         vision_mode = str(vision_cfg.get("mode") or "disabled").strip().lower()
 
         api_key = resolve_vision_api_key(vision_cfg, llm_cfg)
+        backend = resolve_vision_backend(vision_cfg, llm_cfg)
+        # 上传目标与云端确认共用同一解析：ollama 只走 host，mimo 走 api_base
         api_base = resolve_vision_api_base(vision_cfg, llm_cfg)
         vision_model = vision_cfg.get("model") or "qwen3.5:4b"
 
         log.info(
-            f"[watcher] 视觉路由: mode={vision_mode} model={vision_model} "
+            f"[watcher] 视觉路由: mode={vision_mode} backend={backend} "
+            f"model={vision_model} "
             f"allow_cloud={self.config.get('watcher', {}).get('allow_cloud', False)}"
         )
         self._watcher = ScreenWatcher(
@@ -381,6 +385,7 @@ class MeaPet(
             vision_model=vision_model,
             chat_model=vision_model,
             api_key=api_key,
+            backend=backend,
             mode=vision_mode,
             capture_scope="full_screen",
             capture_region=None,

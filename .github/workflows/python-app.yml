@@ -67,14 +67,12 @@ jobs:
     - name: Install Python dependencies
       timeout-minutes: 10
       run: |
-        pip install --upgrade pip setuptools wheel
-        pip install -e ".[linux]" pytest pytest-cov
-
-    - name: Install ruff
-      run: |
         python -m pip install --upgrade pip
-        pip install ruff
-    
+        # Install core + linux extras (pins exact PyQt5 / Pillow versions for Linux)
+        # pytest/ruff are not runtime deps; install them explicitly for CI.
+        pip install -e ".[linux]"
+        pip install ruff pytest
+
     - name: Lint with ruff
       run: |
         python -m ruff check meapet wizard scripts tests

@@ -185,6 +185,12 @@ def save_config(config: dict, path: Optional[str] = None) -> None:
     save_json(cpath, normalize_config(merged))
 
 
+def _llm_env_names(backend: object) -> Tuple[str, ...]:
+    """按后端选择可用的环境变量集合，避免跨厂商误用密钥。"""
+    key = str(backend or "").strip().lower()
+    return ENV_LLM_KEY_BY_BACKEND.get(key, ENV_LLM_KEY)
+
+
 def resolve_llm_api_key(llm_cfg: dict) -> str:
     """解析 LLM API Key，优先 agent.api_key > llm.api_key > env。"""
     agent = llm_cfg.get("agent") if isinstance(llm_cfg.get("agent"), dict) else {}
@@ -195,14 +201,36 @@ def resolve_llm_api_key(llm_cfg: dict) -> str:
 
 
 def resolve_direct_api_key(llm_cfg: dict) -> str:
-    """解析显式 direct profile；环境变量仍优先于文件值。"""
+    """解析显式 direct profile；环境变量仍优先于文件值。
+
+    禁止跨厂商回退：direct.provider 与顶层 backend 不一致时，
+    不得把其它后端的环境变量密钥发给当前端点。
+    """
     direct = llm_cfg.get("direct") if isinstance(llm_cfg.get("direct"), dict) else {}
-    value = resolve_secret(str(direct.get("api_key") or ""), ENV_LLM_KEY)
-    return value or resolve_llm_api_key(llm_cfg)
+    explicit_provider = str(direct.get("provider") or "").strip().lower()
+    top_backend = str(llm_cfg.get("backend") or "").strip().lower()
+    provider = explicit_provider or top_backend
+    value = resolve_secret(
+        str(direct.get("api_key") or ""),
+        _llm_env_names(provider),
+    )
+    if value:
+        return value
+    # 仅当没有显式 provider，或显式 provider 与顶层 backend 相同，才回退顶层密钥
+    if not explicit_provider or explicit_provider == top_backend:
+        return resolve_llm_api_key(llm_cfg)
+    return ""
 
 
 def resolve_tts_api_key(tts_cfg: dict, llm_cfg: Optional[dict] = None) -> str:
-    return resolve_secret(tts_cfg.get("api_key", ""), ENV_TTS_KEY)
+    """解析 TTS Key；仅当对话后端同为 MiMo 时才允许复用其密钥。"""
+    key = resolve_secret(tts_cfg.get("api_key", ""), ENV_TTS_KEY)
+    if key:
+        return key
+    llm = llm_cfg or {}
+    if str(llm.get("backend") or "").strip().lower() == "mimo":
+        return resolve_llm_api_key(llm)
+    return ""
 
 
 def resolve_translate_api_key(tts_cfg: dict, llm_cfg: Optional[dict] = None) -> str:
@@ -213,23 +241,58 @@ def resolve_translate_api_key(tts_cfg: dict, llm_cfg: Optional[dict] = None) -> 
     )
 
 
+def resolve_vision_backend(
+    vision_cfg: dict,
+    llm_cfg: Optional[dict] = None,
+) -> str:
+    """解析视觉后端：显式 vision.backend 优先，其次跟随可识图的 llm 后端，
+    否则回退本地 ollama（云端对话后端不支持独立识图跟随）。"""
+    explicit = str(vision_cfg.get("backend") or "").strip().lower()
+    if explicit in _VISION_BACKENDS:
+        return explicit
+    llm = llm_cfg or {}
+    inherited = str(llm.get("backend") or "").strip().lower()
+    if inherited in _VISION_BACKENDS:
+        return inherited
+    return "ollama"
+
+
 def resolve_vision_api_key(vision_cfg: dict, llm_cfg: Optional[dict] = None) -> str:
-    """解析视觉 API Key，统一使用通用环境变量。"""
-    return resolve_secret(vision_cfg.get("api_key", ""), ENV_VISION_KEY)
+    """解析视觉 API Key：密钥按 provider 隔离，仅同后端才允许复用 llm 密钥。"""
+    backend = resolve_vision_backend(vision_cfg, llm_cfg)
+    env_names = ENV_VISION_KEY if backend == "mimo" else ()
+    key = resolve_secret(vision_cfg.get("api_key", ""), env_names)
+    if key:
+        return key
+    llm = llm_cfg or {}
+    if str(llm.get("backend") or "").strip().lower() == backend:
+        return resolve_llm_api_key(llm)
+    return ""
 
 
 def resolve_vision_api_base(
     vision_cfg: dict,
     llm_cfg: Optional[dict] = None,
 ) -> str:
-    """解析视觉 API 地址，优先使用 vision 配置，其次 llm 配置。"""
+    """解析视觉 API 地址：显式配置优先；仅同后端才继承 llm 地址，
+    否则回退该后端自己的默认地址（禁止把截图发往其它厂商的端点）。
+
+    ollama 只认 host：残留的云端 api_base 一律忽略，避免确认走本地、
+    实际上传到 MiMo 默认地址的错位。
+    """
+    backend = resolve_vision_backend(vision_cfg, llm_cfg)
+    if backend == "ollama":
+        return resolve_vision_host(vision_cfg, llm_cfg)
     explicit = (vision_cfg.get("api_base") or "").strip()
     if explicit:
         return explicit
-    if llm_cfg:
-        inherited = (llm_cfg.get("api_base") or "").strip()
+    llm = llm_cfg or {}
+    if str(llm.get("backend") or "").strip().lower() == backend:
+        inherited = (llm.get("api_base") or "").strip()
         if inherited:
             return inherited
+    if backend == "mimo":
+        return DEFAULT_MIMO_API_BASE
     return DEFAULT_API_BASE
 
 
@@ -237,15 +300,17 @@ def resolve_vision_host(
     vision_cfg: dict,
     llm_cfg: Optional[dict] = None,
 ) -> str:
-    """解析视觉主机地址，优先使用 vision 配置，其次 llm 配置。"""
+    """解析视觉主机地址：显式配置优先；仅同后端才继承 llm 主机。"""
     explicit = (vision_cfg.get("host") or "").strip()
     if explicit:
         return explicit
-    if llm_cfg:
-        inherited = (llm_cfg.get("host") or "").strip()
+    backend = resolve_vision_backend(vision_cfg, llm_cfg)
+    llm = llm_cfg or {}
+    if str(llm.get("backend") or "").strip().lower() == backend:
+        inherited = (llm.get("host") or "").strip()
         if inherited:
             return inherited
-    return DEFAULT_API_BASE
+    return DEFAULT_OLLAMA_HOST
 
 
 def load_json(path: str, default: Optional[dict] = None) -> dict:
@@ -315,7 +380,8 @@ def _normalize_llm_contract(value: object) -> dict:
     llm = copy.deepcopy(value) if isinstance(value, dict) else {}
     requested_mode = str(llm.get("mode") or "").strip().lower()
     if requested_mode not in {"direct", "agent"}:
-        requested_mode = "direct"  # 默认 direct
+        # 旧配置无 mode：Agent 类 backend 迁去 agent，其余默认 direct
+        requested_mode = "agent" if backend in _AGENT_KINDS else "direct"
 
     # ---- direct 段 ----
     direct = copy.deepcopy(llm.get("direct")) if isinstance(llm.get("direct"), dict) else {}

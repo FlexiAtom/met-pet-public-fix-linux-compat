@@ -426,9 +426,9 @@ class PetChatFlowMixin:
         self._last_user_msg = message
         _log_private_text("[chat] 发送给 LLM", message)
         mode = "agent" if self._is_agent_mode() else "direct"
+        # 正文只经 _log_private_text 的 TRACK 通道，默认日志仅记录长度
         log.info(
-            f"[chat] 请求发起 mode={mode} chars={len(message or '')} "
-            f"text={message}"
+            f"[chat] 请求发起 mode={mode} chars={len(message or '')}"
         )
 
         # 显示思考中提示
@@ -539,8 +539,13 @@ class PetChatFlowMixin:
                         if str(getattr(seg, "display_text", "") or "").strip()
                     )
                     if reply_text:
+                        # 回复正文不写入默认日志（文件日志保留 7 天），
+                        # 全文仅在 TRACK 级调试时输出
                         log.info(
-                            f"[reply] 模型返回文本 chars={len(reply_text)}\n{reply_text}"
+                            f"[reply] 模型返回文本 chars={len(reply_text)}"
+                        )
+                        log.track(
+                            lambda text=reply_text: f"[reply] 模型返回文本:\n{text}"
                         )
                 except Exception as exc:
                     log.debug(
@@ -867,8 +872,8 @@ class PetChatFlowMixin:
         if context is not None and not self._turn_context_is_current(context):
             return
         _log_private_text("[reply] LLM 回复", reply, suffix=f"mood={mood}")
-        # 控制台默认打印模型返回的可展示文本。
-        log.info(f"[reply] 收到回复 mood={mood} chars={len(reply or '')}\n{reply or ''}")
+        # 默认日志只记长度；正文走 _log_private_text 的 TRACK 通道
+        log.info(f"[reply] 收到回复 mood={mood} chars={len(reply or '')}")
         if hasattr(self, '_chat_timeout'):
             self._chat_timeout.stop()
         eng = getattr(self, "chat_engine", None)

@@ -394,6 +394,8 @@ class DialogueBox(QWidget):
         self.text_label = QLabel()
         self.text_label.setObjectName("DialogueText")
         self.text_label.setAccessibleName("桌宠回复")
+        # 模型/Agent 返回的文本必须按纯文本渲染，防止富文本注入
+        self.text_label.setTextFormat(Qt.PlainText)
         self.text_label.setWordWrap(True)
         self.text_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.text_label.setContentsMargins(0, 0, 0, 0)
