@@ -277,7 +277,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         self.assertEqual(config["llm"]["mode"], "agent")
         agent = config["llm"]["agent"]
         self.assertEqual(agent["base_url"], "https://agent.example.test/v1")
-        self.assertEqual(agent["api_token"], "$OPENAI_API_KEY")
+        self.assertEqual(agent["auth_token"], "$OPENAI_API_KEY")
         self.assertEqual(agent["history_turns"], 5)
         # 旧字段必须不存在
         for legacy in ("kind", "auth_token", "session_id", "session_key",
