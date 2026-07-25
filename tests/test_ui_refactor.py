@@ -329,6 +329,8 @@ class UiRefactorTests(unittest.TestCase):
         wizard = self._track(SetupWizard())
         wizard.tts_page.enable_cb.setChecked(False)
 
+        wizard.backend_page.direct_radio.setChecked(True)
+
         wizard.llm_page.endpoint_input.clear()
         wizard.llm_page.model_combo.setEditText("")
         wizard._refresh_required_tabs()

@@ -262,7 +262,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         page.agent_radio.setChecked(True)
         # agent 段统一为 OpenAI 兼容
         page.agent_base_url.setText("https://agent.example.test/v1")
-        page.agent_api_key.setText("$OPENAI_API_KEY")
+        page.agent_auth_token.setText("$OPENAI_API_KEY")
         page.agent_model.setText("gpt-4o-mini")
         page.agent_history_turns.setValue(5)
         page.timeline_turns.setValue(9)
