@@ -56,13 +56,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         # Install core + linux extras (pins exact PyQt5 / Pillow versions for Linux)
+        # pytest/ruff are not runtime deps; install them explicitly for CI.
         pip install -e ".[linux]"
+        pip install ruff pytest
 
-    - name: Install ruff
-      run: |
-        python -m pip install --upgrade pip
-        pip install ruff
-    
     - name: Lint with ruff
       run: |
         python -m ruff check meapet wizard scripts tests
