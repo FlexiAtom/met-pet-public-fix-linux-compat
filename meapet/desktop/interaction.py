@@ -44,11 +44,15 @@ class PetInteractionMixin:
         chosen = random.choice(files)
         return os.path.join(d, chosen), _text_from_filename(chosen)
 
-    def _on_zone_triggered(self, zone: str):
-        """从分区目录随机播一条语音并显示文字气泡。"""
+    def _on_zone_triggered(self, zone: str) -> bool:
+        """从分区目录随机播一条语音并显示文字气泡。
+
+        Returns:
+            True 若成功播了预制语音；False 若分区目录不存在或为空。
+        """
         picked = self._pick_zone_audio(zone)
         if not picked:
-            return
+            return False
         path, text = picked
         self._record_interaction()
         self._safe_set_mood("neutral")
@@ -58,10 +62,14 @@ class PetInteractionMixin:
         self.show_reply(text, "neutral", duration_ms=bubble_ms)
         self._play_audio(path)
         QTimer.singleShot(4000, lambda: self._safe_set_mood("neutral"))
+        return True
 
     def _on_head_patted(self):
-        """上半区：来自信号或 app.py 拖拽检测"""
+        """上半区：优先 ``voice_cache/upper/`` 预制语音；目录为空时回退文案 + 扁平缓存/TTS。"""
         try:
+            if self._on_zone_triggered("upper"):
+                return
+            # 分区无文件时的回退：文案 + 扁平缓存/TTS
             self._record_interaction()
             reactions = [
                 ("……别摸我头发。", "annoyed"),
@@ -134,23 +142,34 @@ class PetInteractionMixin:
         """文本 → 不暴露原文的稳定缓存键。"""
         return audio_cache_key(text)
 
-    def _get_cached_interaction(self, text: str, lang: str) -> Optional[str]:
-        """获取互动语音缓存（带语言前缀）"""
-        if not self.tts:
-            return None
+    def _get_cached_interaction(self, text: str, lang: str = "jp") -> Optional[str]:
+        """获取互动语音缓存（根目录扁平命名；本地 WAV 不依赖 TTS 实例）。"""
         safe = self._safe_name(text)
         if not safe:
             return None
         from meapet.paths import project_path
         cache_dir = project_path("voice_cache")
-        path = os.path.join(cache_dir, f"{lang}_{safe}.wav")
-        if os.path.exists(path):
-            return path
+        prefixes: list[str] = []
+        for candidate in (
+            lang,
+            getattr(getattr(self, "tts", None), "voice_lang", None),
+            "jp",
+        ):
+            prefix = str(candidate or "").strip()
+            if prefix and prefix not in prefixes:
+                prefixes.append(prefix)
+        for prefix in prefixes:
+            path = os.path.join(cache_dir, f"{prefix}_{safe}.wav")
+            if os.path.exists(path):
+                return path
         legacy = legacy_audio_cache_name(text)
         if not legacy:
             return None
-        legacy_path = os.path.join(cache_dir, f"{lang}_{legacy}.wav")
-        return legacy_path if os.path.exists(legacy_path) else None
+        for prefix in prefixes:
+            legacy_path = os.path.join(cache_dir, f"{prefix}_{legacy}.wav")
+            if os.path.exists(legacy_path):
+                return legacy_path
+        return None
 
     def _idle_action(self):
         """随机空闲表情变化"""

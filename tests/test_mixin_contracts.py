@@ -166,6 +166,18 @@ class _Composite:
         from meapet.desktop.interaction import PetInteractionMixin
         return PetInteractionMixin._on_zone_triggered(self, zone)
 
+    def _pick_zone_audio(self, zone):
+        from meapet.desktop.interaction import PetInteractionMixin
+        return PetInteractionMixin._pick_zone_audio(self, zone)
+
+    def _interaction_speak(self, text, duration_ms, mood):
+        from meapet.desktop.interaction import PetInteractionMixin
+        return PetInteractionMixin._interaction_speak(self, text, duration_ms, mood)
+
+    def _get_cached_interaction(self, text, lang="jp"):
+        from meapet.desktop.interaction import PetInteractionMixin
+        return PetInteractionMixin._get_cached_interaction(self, text, lang)
+
     def _record_interaction(self):
         from meapet.desktop.interaction import PetInteractionMixin
         return PetInteractionMixin._record_interaction(self)
@@ -177,12 +189,13 @@ class _Composite:
 
 class TestCrossMixinCallChain(unittest.TestCase):
     def test_head_patted_calls_zone_triggered_with_upper(self):
-        """_on_head_patted 应调用 _on_zone_triggered('upper')。"""
+        """_on_head_patted 应优先调用 _on_zone_triggered('upper')。"""
         c = _Composite()
         triggered = []
 
         def fake_zone(self, zone):
             triggered.append(zone)
+            return True
 
         with mock.patch.object(_Composite, "_on_zone_triggered", fake_zone):
             c._on_head_patted()
@@ -195,12 +208,62 @@ class TestCrossMixinCallChain(unittest.TestCase):
         c._pick_zone_audio = lambda zone: ("/fake/path.wav", "别摸了")
         c._get_wav_duration_ms = lambda path: 500
 
-        c._on_zone_triggered("upper")
+        self.assertTrue(c._on_zone_triggered("upper"))
 
         self.assertTrue(c.bubble.texts)
         self.assertEqual(c.bubble.texts[-1][0], "别摸了")
         self.assertEqual(c._played, ["/fake/path.wav"])
         self.assertIn("neutral", c._safe_moods)
+
+    def test_head_patted_plays_zone_audio_without_tts(self):
+        """有 upper 预制文件时，应直接播分区 WAV，不走 _interaction_speak。"""
+        c = _Composite()
+        c._pick_zone_audio = lambda zone: ("/fake/upper.wav", "别摸我头发。")
+        spoke = []
+
+        def track_speak(self, text, duration_ms, mood):
+            spoke.append((text, duration_ms, mood))
+
+        with mock.patch.object(_Composite, "_interaction_speak", track_speak):
+            c._on_head_patted()
+
+        self.assertEqual(spoke, [])
+        self.assertEqual(c._played, ["/fake/upper.wav"])
+        self.assertTrue(c.bubble.texts)
+        self.assertEqual(c.bubble.texts[-1][0], "别摸我头发。")
+
+    def test_head_patted_falls_back_to_interaction_speak_when_zone_empty(self):
+        """upper 分区无文件时，回退到文案 + _interaction_speak。"""
+        c = _Composite()
+        c._pick_zone_audio = lambda zone: None
+        spoke = []
+
+        def track_speak(self, text, duration_ms, mood):
+            spoke.append((text, duration_ms, mood))
+
+        with mock.patch.object(_Composite, "_interaction_speak", track_speak):
+            c._on_head_patted()
+
+        self.assertEqual(len(spoke), 1)
+        self.assertIsInstance(spoke[0][0], str)
+        self.assertTrue(spoke[0][0])
+
+    def test_get_cached_interaction_works_without_tts(self):
+        """本地扁平缓存查找不依赖 self.tts。"""
+        import meapet.paths as paths_mod
+        from meapet.desktop.interaction import PetInteractionMixin
+        from meapet.utils import audio_cache_key
+
+        c = _Composite()
+        c.tts = None
+        text = "别摸了……"
+        key = audio_cache_key(text)
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / f"jp_{key}.wav"
+            wav.write_bytes(b"RIFF" + b"\x00" * 40)
+            with mock.patch.object(paths_mod, "project_path", return_value=td):
+                found = PetInteractionMixin._get_cached_interaction(c, text, "jp")
+            self.assertEqual(found, str(wav))
 
     def test_head_patted_does_not_raise_when_zone_pipeline_breaks(self):
         """_on_head_patted 异常不应抛出，应 fallback 到 _show_bubble。"""
