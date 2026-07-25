@@ -10,11 +10,22 @@ from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PyQt5.QtGui import QRegion
 
 from meapet.desktop.renderer import SpriteCanvas, SpriteRenderer
+from meapet.config.store import (
+    DEFAULT_LIVE2D_WINDOW_MASK,
+    normalize_live2d_window_mask,
+)
 from meapet.desktop.widgets import (
     SizeScaleDialog,
     calculate_bubble_stack_opacities,
 )
 from meapet.desktop import status_language
+from meapet.desktop.click_through import (
+    ClickThroughState,
+    RightClickEdgeDetector,
+    disable_click_through,
+    enable_click_through,
+    is_right_button_down,
+)
 from meapet.utils import safe_print
 
 
@@ -269,6 +280,28 @@ def calculate_bubble_tail(pet_rect: QRect, bubble_rect: QRect) -> tuple[str, int
     if bubble_rect.bottom() < pet_rect.top():
         return "bottom", pet_center_x - bubble_rect.left()
     return "top", pet_center_x - bubble_rect.left()
+
+
+def ellipse_mask_region(
+    width: int,
+    height: int,
+    params: dict | None = None,
+) -> QRegion:
+    """按窗口像素尺寸与归一化参数生成椭圆 mask（纯函数，便于单测）。"""
+    mask = normalize_live2d_window_mask(params or DEFAULT_LIVE2D_WINDOW_MASK)
+    w = max(1, int(width))
+    h = max(1, int(height))
+    cx_px = int(round(float(mask["cx"]) * w))
+    cy_px = int(round(float(mask["cy"]) * h))
+    rw_px = max(1, int(round(float(mask["rw"]) * w)))
+    rh_px = max(1, int(round(float(mask["rh"]) * h)))
+    return QRegion(
+        cx_px - rw_px,
+        cy_px - rh_px,
+        rw_px * 2,
+        rh_px * 2,
+        QRegion.Ellipse,
+    )
 
 
 class PetRenderHostMixin:
@@ -610,6 +643,39 @@ class PetRenderHostMixin:
             self.config.setdefault("display", {})["size_factor"] = round(new_factor, 2)
             self._save_config()
 
+    def _apply_hit_region(self):
+        """Live2D 可选椭圆 mask（Qt setMask，Win/Linux 通用）；PNG 始终清空。"""
+        use_live2d = bool(getattr(self, "_use_live2d", False))
+        params = self._live2d_window_mask_params()
+        if not use_live2d or not params.get("enabled", True):
+            self._clear_window_region()
+            return
+
+        # 先清 Win32 残留 region，再用纯 Qt setMask 设椭圆，避免双源。
+        if sys.platform == "win32":
+            try:
+                import win32gui
+
+                win32gui.SetWindowRgn(int(self.winId()), 0, True)
+            except Exception as e:
+                safe_print(f"[WARN] Win32 window region reset failed: {e}")
+
+        region = ellipse_mask_region(self.width(), self.height(), params)
+        self.setMask(region)
+        widget = getattr(self, "sprite_label", None)
+        if widget is not None:
+            try:
+                # QOpenGLWidget 在部分平台不继承父 mask 裁剪，子控件同步一份。
+                widget.setMask(
+                    ellipse_mask_region(widget.width(), widget.height(), params)
+                )
+            except Exception as e:
+                safe_print(f"[WARN] Live2D child mask failed: {e}")
+
+    def _live2d_window_mask_params(self) -> dict:
+        live2d = (getattr(self, "config", {}) or {}).get("live2d") or {}
+        return normalize_live2d_window_mask(live2d.get("window_mask"))
+
     def _position_bubble(self, *, animate: bool = False):
         stack = getattr(self, "_bubble_stack", None)
         if stack is not None:
@@ -678,6 +744,12 @@ class PetRenderHostMixin:
     def _clear_window_region(self):
         """移除会裁剪可见内容的 Qt/Win32 窗口区域。"""
         self.clearMask()
+        widget = getattr(self, "sprite_label", None)
+        if widget is not None:
+            try:
+                widget.clearMask()
+            except Exception:
+                pass
         if sys.platform == "win32":
             try:
                 import win32gui
@@ -685,11 +757,6 @@ class PetRenderHostMixin:
                 win32gui.SetWindowRgn(int(self.winId()), 0, True)
             except Exception as e:
                 safe_print(f"[WARN] Win32 window region reset failed: {e}")
-
-    def _apply_hit_region(self):
-        # QWidget mask / SetWindowRgn 会同时裁掉绘制与鼠标区域。Live2D
-        # 动作会越过上一帧包围盒，因此始终保留完整透明绘制表面。
-        self._clear_window_region()
 
     def _toggle_standby(self):
         self._standby = not self._standby
@@ -699,7 +766,10 @@ class PetRenderHostMixin:
             self._show_bubble(status_language.standby_on(), 0)
             self._position_bubble()
             self._apply_hit_region()
+            self._set_standby_click_through(True)
         else:
+            # 先关穿透，避免离开过程中菜单/气泡仍被忽略输入。
+            self._set_standby_click_through(False)
             self._safe_set_expression("001")
             clear_bubbles = getattr(self, "_clear_bubbles", None)
             if callable(clear_bubbles):
@@ -713,6 +783,145 @@ class PetRenderHostMixin:
         refresh_tray = getattr(self, "_refresh_tray_state", None)
         if callable(refresh_tray):
             refresh_tray()
+
+    def _set_standby_click_through(self, enabled: bool) -> None:
+        """Enable/disable OS click-through + right-click poll + bubble passthrough."""
+        if enabled:
+            self._ensure_standby_click_through()
+            return
+        self._stop_standby_right_click_monitor()
+        state = getattr(self, "_click_through_state", None)
+        if state is not None:
+            disable_click_through(state)
+        self._click_through_state = ClickThroughState()
+        self._set_bubbles_mouse_passthrough(False)
+        # Drop Qt flag fallback if it was used.
+        if getattr(self, "_qt_transparent_for_input", False):
+            try:
+                self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+            except Exception:
+                pass
+            self._qt_transparent_for_input = False
+
+    def _ensure_standby_click_through(self) -> None:
+        """(Re)apply click-through on current winId — safe to call after mode switch."""
+        # Tear down any previous native state first (HWND may have changed).
+        prev = getattr(self, "_click_through_state", None)
+        if prev is not None and prev.active:
+            disable_click_through(prev)
+
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            hwnd = 0
+        width = max(0, int(self.width()))
+        height = max(0, int(self.height()))
+        state = enable_click_through(hwnd, width=width, height=height)
+        self._click_through_state = state
+        if not state.active:
+            # Best-effort: still block Qt-level mouse on this widget tree when
+            # native pass-through is unavailable (e.g. Wayland). Does NOT pass
+            # clicks to windows below — only prevents pet interactions.
+            try:
+                # Do not set WA_TransparentForMouseEvents on the top-level pet:
+                # that would also kill the out-of-band right-click path's ability
+                # to show a menu after temporarily disabling native pass-through.
+                # Guards in mouse handlers cover interaction suppression.
+                pass
+            except Exception:
+                pass
+            safe_print(
+                "[click_through] native pass-through inactive; "
+                "standby still suppresses pet interactions"
+            )
+        self._set_bubbles_mouse_passthrough(True)
+        self._start_standby_right_click_monitor()
+
+    def _start_standby_right_click_monitor(self) -> None:
+        timer = getattr(self, "_standby_rc_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(50)
+            timer.timeout.connect(self._poll_standby_right_click)
+            self._standby_rc_timer = timer
+        detector = getattr(self, "_standby_rc_detector", None)
+        if detector is None:
+            detector = RightClickEdgeDetector()
+            self._standby_rc_detector = detector
+        else:
+            detector.reset()
+        if not timer.isActive():
+            timer.start()
+
+    def _stop_standby_right_click_monitor(self) -> None:
+        timer = getattr(self, "_standby_rc_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        detector = getattr(self, "_standby_rc_detector", None)
+        if detector is not None:
+            detector.reset()
+
+    def _poll_standby_right_click(self) -> None:
+        if not getattr(self, "_standby", False):
+            return
+        if getattr(self, "_standby_menu_open", False):
+            return
+        if not self.isVisible():
+            return
+        try:
+            from PyQt5.QtGui import QCursor
+
+            global_pos = QCursor.pos()
+            geo = self.frameGeometry()
+            cursor_in_pet = geo.contains(global_pos)
+            button_down = is_right_button_down()
+            detector = getattr(self, "_standby_rc_detector", None)
+            if detector is None:
+                detector = RightClickEdgeDetector()
+                self._standby_rc_detector = detector
+            if detector.update(cursor_in_pet=cursor_in_pet, button_down=button_down):
+                local = self.mapFromGlobal(global_pos)
+                self._open_standby_context_menu(local)
+        except Exception as exc:
+            safe_print(f"[click_through] right-click poll error: {exc}")
+
+    def _open_standby_context_menu(self, local_pos) -> None:
+        """Show context menu while standby: temporarily accept mouse input."""
+        if getattr(self, "_standby_menu_open", False):
+            return
+        self._standby_menu_open = True
+        # Pause edge detector so the physical RMB hold doesn't re-fire.
+        detector = getattr(self, "_standby_rc_detector", None)
+        if detector is not None:
+            detector.was_down = True
+        # Temporarily disable native pass-through so the menu is clickable.
+        self._set_standby_click_through(False)
+        try:
+            show_menu = getattr(self, "_show_context_menu", None)
+            if callable(show_menu):
+                show_menu(local_pos)
+        finally:
+            self._standby_menu_open = False
+            # Only re-enable if still in standby (user may have left via menu).
+            if getattr(self, "_standby", False):
+                self._set_standby_click_through(True)
+
+    def _set_bubbles_mouse_passthrough(self, enabled: bool) -> None:
+        stack = getattr(self, "_bubble_stack", None)
+        bubbles = []
+        if stack is not None:
+            bubbles = list(getattr(stack, "bubbles", ()) or ())
+        else:
+            bubble = getattr(self, "bubble", None)
+            if bubble is not None:
+                bubbles = [bubble]
+        for bubble in bubbles:
+            setter = getattr(bubble, "set_mouse_passthrough", None)
+            if callable(setter):
+                try:
+                    setter(bool(enabled))
+                except Exception:
+                    pass
 
     def _toggle_render_mode(self):
         self._clear_window_region()
@@ -732,6 +941,8 @@ class PetRenderHostMixin:
             self._show_bubble("已切回 PNG 立绘喵", 2500)
             self.config.setdefault("live2d", {})["enabled"] = False
             self._save_config()
+            if getattr(self, "_standby", False):
+                self._ensure_standby_click_through()
         else:
             if self.renderer:
                 self.renderer.stop_blink_animation()
@@ -758,6 +969,8 @@ class PetRenderHostMixin:
                     self._show_bubble("已切换到 Live2D 喵", 2500)
                 else:
                     self._show_bubble("Live2D 加载失败，已切回 PNG 喵", 3000)
+                if getattr(self, "_standby", False):
+                    self._ensure_standby_click_through()
 
             self.when_renderer_ready(announce_mode_change)
 

@@ -107,7 +107,14 @@
   "live2d": {
     "model_dir": "./live2d/model/mea_live2d",
     "enabled": true,
-    "scale": 0.15
+    "scale": 0.15,
+    "window_mask": {
+      "enabled": true,
+      "cx": 0.54,
+      "cy": 0.41,
+      "rw": 0.26,
+      "rh": 0.38
+    }
   },
   "watcher": {
     "enabled": false,

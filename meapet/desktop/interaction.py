@@ -188,6 +188,11 @@ class PetInteractionMixin:
         self.bubble = stack.latest
         if hasattr(self, "_position_bubble"):
             self._position_bubble(animate=True)
+        # 待机穿透开启时，新气泡也要立即不抢鼠标。
+        if getattr(self, "_standby", False):
+            set_pass = getattr(self, "_set_bubbles_mouse_passthrough", None)
+            if callable(set_pass):
+                set_pass(True)
 
     def _clear_bubbles(self) -> None:
         stack = getattr(self, "_bubble_stack", None)
@@ -213,6 +218,10 @@ class PetInteractionMixin:
                 self.bubble.show_text(text, duration_ms, mood=mood)
                 if hasattr(self, "_position_bubble"):
                     self._position_bubble()
+            if getattr(self, "_standby", False):
+                set_pass = getattr(self, "_set_bubbles_mouse_passthrough", None)
+                if callable(set_pass):
+                    set_pass(True)
         except Exception as e:
             log_error("show_bubble", f"{type(e).__name__}: {e}")
             safe_print(f"[pet] show_bubble error: {e}")

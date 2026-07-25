@@ -184,11 +184,18 @@ class Live2DWidget(QOpenGLWidget):
         self.installEventFilter(self)
 
 
+    def _parent_in_standby(self) -> bool:
+        parent = self.parentWidget()
+        return bool(parent is not None and getattr(parent, "_standby", False))
+
     def eventFilter(self, obj, event):
-        # 窗口不使用 QWidget mask，避免动态模型越过旧边界时被裁断。
+        # 椭圆 mask 由宿主 render_host 统一管理；此处仅做软点击过滤。
         if obj == self and event.type() == QEvent.MouseButtonPress:
             if event.button() == Qt.RightButton:
                 return False
+            # 待机：吞掉左键等，避免偶发事件仍触发互动（穿透由宿主原生后端负责）。
+            if self._parent_in_standby():
+                return True
             x, y = event.x(), event.y()
             w, h = self.width(), self.height()
             if w * 0.15 < x < w * 0.85 and 0 < y < h * 0.9:
@@ -327,6 +334,12 @@ class Live2DWidget(QOpenGLWidget):
 
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
+        if self._parent_in_standby():
+            self._press_pos = None
+            self._dragging_window = False
+            self._drag_pointer_origin = None
+            self._drag_window_origin = None
+            return
         # 仅当左键按下时，记录初始位置
         if event.button() == Qt.LeftButton:
             self._press_pos = (event.x(), event.y())
@@ -341,6 +354,8 @@ class Live2DWidget(QOpenGLWidget):
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
+        if self._parent_in_standby():
+            return
 
         # 1. 处理窗口拖拽逻辑
         if (
@@ -368,6 +383,12 @@ class Live2DWidget(QOpenGLWidget):
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
+        if self._parent_in_standby():
+            self._press_pos = None
+            self._dragging_window = False
+            self._drag_pointer_origin = None
+            self._drag_window_origin = None
+            return
 
         if event.button() == Qt.LeftButton:
             parent = self.parentWidget()
@@ -424,6 +445,8 @@ class Live2DWidget(QOpenGLWidget):
 
     def mouseDoubleClickEvent(self, event):
         """Live2D 子控件消费鼠标事件时，显式把左键双击转成聊天请求。"""
+        if self._parent_in_standby():
+            return
         if event.button() == Qt.LeftButton:
             self._dragging_window = False
             self._drag_pointer_origin = None

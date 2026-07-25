@@ -462,8 +462,15 @@ class PetWindowChromeMixin:
         return menu
 
     def _show_context_menu(self, pos):
-        menu = self._build_context_menu()
-        menu.exec_(self.mapToGlobal(pos))
+        # 待机穿透重开菜单与 Qt CustomContextMenu 可能叠到同一次右键，避免重入。
+        if getattr(self, "_context_menu_executing", False):
+            return
+        self._context_menu_executing = True
+        try:
+            menu = self._build_context_menu()
+            menu.exec_(self.mapToGlobal(pos))
+        finally:
+            self._context_menu_executing = False
 
     def _show_status_panel(self):
         from meapet.desktop.status_panel import StatusPanel

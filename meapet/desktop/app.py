@@ -143,6 +143,14 @@ class MeaPet(
         self._drag_move_timer.timeout.connect(self._flush_drag_position)
         self._standby = False
         self._standby_bubble = None
+        # Standby click-through (native pass-through + right-click poll).
+        from meapet.desktop.click_through import ClickThroughState, RightClickEdgeDetector
+
+        self._click_through_state = ClickThroughState()
+        self._standby_rc_timer = None
+        self._standby_rc_detector = RightClickEdgeDetector()
+        self._standby_menu_open = False
+        self._qt_transparent_for_input = False
 
         self._init_window()
 
@@ -419,6 +427,9 @@ class MeaPet(
 
     # ── mouse ──────────────────────────────────────────
     def mousePressEvent(self, event):
+        # 待机：左键等交互全部忽略（穿透由原生后端负责；右键走轮询菜单）。
+        if getattr(self, "_standby", False):
+            return
         if event.button() == Qt.LeftButton:
             head_threshold = int(self.height() * 0.35)
             self._is_head_touching = event.y() < head_threshold
@@ -428,6 +439,8 @@ class MeaPet(
             self._drag_window_origin = self.pos()
 
     def mouseMoveEvent(self, event):
+        if getattr(self, "_standby", False):
+            return
         if not (self._dragging and event.buttons() & Qt.LeftButton):
             return
         if self._is_head_touching and self._head_press_x is not None:
@@ -462,6 +475,13 @@ class MeaPet(
         self._position_bubble()
 
     def mouseReleaseEvent(self, event):
+        if getattr(self, "_standby", False):
+            self._dragging = False
+            self._drag_pointer_origin = None
+            self._drag_window_origin = None
+            self._is_head_touching = False
+            self._head_press_x = None
+            return
         self._drag_move_timer.stop()
         self._flush_drag_position()
         self._dragging = False
@@ -471,6 +491,8 @@ class MeaPet(
         self._head_press_x = None
 
     def mouseDoubleClickEvent(self, event):
+        if getattr(self, "_standby", False):
+            return
         self._start_chat()
 
     def showEvent(self, event):
@@ -478,6 +500,11 @@ class MeaPet(
         super().showEvent(event)
         if hasattr(self, '_idle_timer') and self._idle_timer and not self._idle_timer.isActive():
             self._idle_timer.start(20000)
+        # 待机穿透可能因 hide/show 或 HWND 重建失效，显示时重新确保。
+        if getattr(self, "_standby", False) and not getattr(self, "_standby_menu_open", False):
+            ensure = getattr(self, "_ensure_standby_click_through", None)
+            if callable(ensure):
+                ensure()
 
     def closeEvent(self, event):
         # 桌宠是常驻悬浮窗：系统/误触关闭只隐藏，真正退出走右键「退出」

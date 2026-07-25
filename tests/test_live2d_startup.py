@@ -368,10 +368,56 @@ class Live2DStartupTests(unittest.TestCase):
                 (630, 882),
             )
 
-    def test_live2d_hit_region_never_masks_visible_content(self) -> None:
+    def test_ellipse_mask_region_uses_normalized_ratios(self) -> None:
+        from meapet.desktop.render_host import ellipse_mask_region
+
+        region = ellipse_mask_region(
+            200,
+            400,
+            {"enabled": True, "cx": 0.50, "cy": 0.50, "rw": 0.25, "rh": 0.40},
+        )
+        self.assertFalse(region.isEmpty())
+        bounds = region.boundingRect()
+        # Qt ellipse boundingRect 可能比构造矩形略收缩 1px，只校验大致几何。
+        self.assertAlmostEqual(bounds.center().x(), 100, delta=1)
+        self.assertAlmostEqual(bounds.center().y(), 200, delta=1)
+        self.assertAlmostEqual(bounds.width(), 100, delta=2)
+        self.assertAlmostEqual(bounds.height(), 320, delta=2)
+
+    def test_live2d_hit_region_applies_ellipse_mask_when_enabled(self) -> None:
         host = self._host("")
         host._use_live2d = True
         host._size_factor = 1.12
+        host.config["live2d"]["window_mask"] = {
+            "enabled": True,
+            "cx": 0.54,
+            "cy": 0.41,
+            "rw": 0.26,
+            "rh": 0.38,
+        }
+        host.resize(500, 700)
+        host.sprite_label = QWidget(host)
+        host.sprite_label.resize(500, 700)
+
+        PetRenderHostMixin._apply_hit_region(host)
+
+        self.assertFalse(host.mask().isEmpty())
+        bounds = host.mask().boundingRect()
+        # 2*round(0.26*500)=260, 2*round(0.38*700)=532
+        self.assertAlmostEqual(bounds.width(), 260, delta=2)
+        self.assertAlmostEqual(bounds.height(), 532, delta=2)
+        self.assertFalse(host.sprite_label.mask().isEmpty())
+
+    def test_live2d_hit_region_clears_mask_when_disabled(self) -> None:
+        host = self._host("")
+        host._use_live2d = True
+        host.config["live2d"]["window_mask"] = {
+            "enabled": False,
+            "cx": 0.54,
+            "cy": 0.41,
+            "rw": 0.26,
+            "rh": 0.38,
+        }
         host.resize(448, 739)
         host.setMask(QRegion(74, 82, 300, 441))
         self.assertFalse(host.mask().isEmpty())
@@ -379,6 +425,44 @@ class Live2DStartupTests(unittest.TestCase):
         PetRenderHostMixin._apply_hit_region(host)
 
         self.assertTrue(host.mask().isEmpty())
+
+    def test_png_mode_clears_ellipse_mask(self) -> None:
+        host = self._host("")
+        host._use_live2d = False
+        host.resize(200, 300)
+        host.setMask(QRegion(10, 10, 80, 120))
+
+        PetRenderHostMixin._apply_hit_region(host)
+
+        self.assertTrue(host.mask().isEmpty())
+
+    def test_size_factor_preview_reapplies_ellipse_mask(self) -> None:
+        host = self._host("")
+        host._use_live2d = True
+        host._size_factor = 1.0
+        host._l2d_model = _Live2DModelStub("unused")
+        host.sprite_label = QWidget(host)
+        host.config["live2d"]["window_mask"] = {
+            "enabled": True,
+            "cx": 0.50,
+            "cy": 0.50,
+            "rw": 0.25,
+            "rh": 0.25,
+        }
+        # 用真实 mixin 方法（host 默认 stub 掉了 _apply_hit_region）
+        host._apply_hit_region = lambda: PetRenderHostMixin._apply_hit_region(host)
+
+        PetRenderHostMixin._size_factor_preview(host, 1.0)
+        bounds_a = host.mask().boundingRect()
+        self.assertEqual((host.width(), host.height()), (525, 735))
+        self.assertAlmostEqual(bounds_a.width(), 262, delta=2)
+        self.assertAlmostEqual(bounds_a.height(), 368, delta=2)
+
+        PetRenderHostMixin._size_factor_preview(host, 2.0)
+        bounds_b = host.mask().boundingRect()
+        self.assertEqual((host.width(), host.height()), (1050, 1470))
+        self.assertAlmostEqual(bounds_b.width(), 524, delta=2)
+        self.assertAlmostEqual(bounds_b.height(), 736, delta=2)
 
     def test_windows_window_region_is_removed_instead_of_cropping(self) -> None:
         host = self._host("")
@@ -412,9 +496,37 @@ class Live2DStartupTests(unittest.TestCase):
             with sprite_patch, model_patch, init_patch:
                 host._toggle_render_mode()
 
+            # 启动阶段先清旧 mask；椭圆 mask 等到首帧 _apply_hit_region。
             self.assertTrue(host.mask().isEmpty())
             self.assertTrue(host._use_live2d)
             self.assertTrue(host._l2d_pending)
+
+    def test_live2d_to_png_clears_ellipse_mask(self) -> None:
+        with tempfile.TemporaryDirectory() as model_dir:
+            host = self._host(model_dir)
+            host._use_live2d = True
+            host._l2d_pending = False
+            host._scale = 0.5
+            host._size_factor = 1.0
+            host._l2d_model = _Live2DModelStub(model_dir)
+            old_widget = _Live2DWidgetStub(host)
+            host.sprite_label = old_widget
+            host.resize(200, 300)
+            host.setMask(QRegion(20, 20, 100, 150))
+            host._save_config = mock.Mock()
+            host._show_bubble = mock.Mock()
+            host.renderer = None
+
+            sprite_patch, model_patch, init_patch = self._patch_renderers()
+            with sprite_patch, model_patch, init_patch:
+                host._apply_hit_region = (
+                    lambda: PetRenderHostMixin._apply_hit_region(host)
+                )
+                host._toggle_render_mode()
+
+            self.assertFalse(host._use_live2d)
+            self.assertTrue(host.mask().isEmpty())
+            self.assertTrue(old_widget.shutdown_called)
 
     def test_widget_reports_first_frame_and_initialization_failure(self) -> None:
         from meapet.desktop.live2d_widget import Live2DWidget

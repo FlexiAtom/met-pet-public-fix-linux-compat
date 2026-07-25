@@ -95,6 +95,16 @@ DEFAULT_AGENT_CONTROL = {
     "ca_file": "",
 }
 
+# Live2D 顶层窗椭圆 mask：比例相对当前窗口宽高，随 size_factor 自动缩放。
+# 默认值来自实测微调后的贴合参数。
+DEFAULT_LIVE2D_WINDOW_MASK = {
+    "enabled": True,
+    "cx": 0.54,
+    "cy": 0.41,
+    "rw": 0.26,
+    "rh": 0.38,
+}
+
 
 def project_root() -> str:
     from meapet.paths import project_root as _pr
@@ -516,6 +526,29 @@ def _normalize_agent_control(value: object) -> dict:
     return control
 
 
+def _clamp_ratio(value: object, default: float, lo: float, hi: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    if number != number:  # NaN
+        number = default
+    return max(lo, min(hi, number))
+
+
+def normalize_live2d_window_mask(value: object) -> dict:
+    """规范化 Live2D 椭圆窗口 mask（比例 0–1）。"""
+    raw = value if isinstance(value, dict) else {}
+    defaults = DEFAULT_LIVE2D_WINDOW_MASK
+    return {
+        "enabled": bool(raw.get("enabled", defaults["enabled"])),
+        "cx": _clamp_ratio(raw.get("cx", defaults["cx"]), defaults["cx"], 0.05, 0.95),
+        "cy": _clamp_ratio(raw.get("cy", defaults["cy"]), defaults["cy"], 0.05, 0.95),
+        "rw": _clamp_ratio(raw.get("rw", defaults["rw"]), defaults["rw"], 0.10, 0.55),
+        "rh": _clamp_ratio(raw.get("rh", defaults["rh"]), defaults["rh"], 0.10, 0.55),
+    }
+
+
 def _normalize_reference_audios(tts: dict) -> dict:
     """规范化每语言固定参考音频，并只读迁移旧单条 GSV 配置。"""
     raw_mapping = tts.get("reference_audios")
@@ -548,7 +581,9 @@ def normalize_config(config: dict) -> dict:
     cfg.setdefault("tts", {})
     cfg.setdefault("display", {})
     cfg.setdefault("character", {})
-    cfg.setdefault("live2d", {})
+    live2d = cfg.get("live2d") if isinstance(cfg.get("live2d"), dict) else {}
+    live2d["window_mask"] = normalize_live2d_window_mask(live2d.get("window_mask"))
+    cfg["live2d"] = live2d
     cfg["agent_control"] = _normalize_agent_control(cfg.get("agent_control"))
 
     # bubble

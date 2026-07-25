@@ -430,8 +430,28 @@ class DialogueBox(QWidget):
         self._opacity_animation.setEasingCurve(QEasingCurve.OutQuad)
 
         self.hide()
+        self._mouse_passthrough = False
+
+    def set_mouse_passthrough(self, enabled: bool) -> None:
+        """待机穿透时让气泡不抢鼠标；恢复后仍可点开完整回复。"""
+        enabled = bool(enabled)
+        self._mouse_passthrough = enabled
+        targets = [self, self._container, self.text_scroll, self.text_label]
+        try:
+            viewport = self.text_scroll.viewport()
+        except Exception:
+            viewport = None
+        if viewport is not None:
+            targets.append(viewport)
+        for widget in targets:
+            try:
+                widget.setAttribute(Qt.WA_TransparentForMouseEvents, enabled)
+            except Exception:
+                pass
 
     def eventFilter(self, watched, event):
+        if getattr(self, "_mouse_passthrough", False):
+            return super().eventFilter(watched, event)
         if (
             event.type() == QEvent.MouseButtonRelease
             and event.button() == Qt.LeftButton

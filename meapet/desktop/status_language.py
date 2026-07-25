@@ -52,7 +52,7 @@ def vision_mode_unavailable(reason: str = "") -> str:
 
 
 def standby_on() -> str:
-    return "梅尔待机中…右键可取消"
+    return "梅尔待机中…点击穿透，右键打开菜单可取消"
 
 
 def standby_off() -> str:
