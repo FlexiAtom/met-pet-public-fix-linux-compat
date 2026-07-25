@@ -385,6 +385,7 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(seen["url"], "https://models.example.test/v1/responses")
+        # 实际请求体包含 "think": False（由 _responses_spec 注入）
         self.assertEqual(
             seen["body"],
             {
@@ -396,6 +397,7 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
                 "temperature": 0.35,
                 "max_output_tokens": 777,
                 "stream": True,
+                "think": False,
             },
         )
         self.assertEqual(
@@ -536,7 +538,6 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.category, "backend")
         self.assertNotIn("private model details", repr(raised.exception))
 
-
     async def test_retryable_network_error_is_retried_before_success(self):
         from meapet.direct.types import StreamDone, TextDelta
 
@@ -658,3 +659,4 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -269,25 +269,21 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(repair_called)
 
     # ---------- Repair ----------
-    # repair_format 内部调用的是 self._client.post(url, json=payload)（httpx 风格），
-    # 然后 resp.json() 是异步方法。因此要同时 mock：
-    #   1) adapter._client.post 返回 AsyncContextManager(response)
-    #   2) response.json 是一个 AsyncMock 返回字典
+    # repair_format 内部调用 await self._client.post(url, json=payload)，
+    # 所以需要用 AsyncMock 返回一个可 await 的响应对象。
+    # resp.json() 也是异步方法，需要用 AsyncMock。
 
     async def test_repair_format_success(self):
         adapter, _ = self._make_adapter()
 
-        # httpx.Response.json() 是 async 的，所以用 AsyncMock
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json = AsyncMock(return_value={
             "choices": [{"message": {"content": "repaired content"}}]
         })
 
-        # repair_format 使用 self._client.post(...) 并 async with 它
-        adapter._client.post = MagicMock(
-            return_value=AsyncContextManager(mock_response)
-        )
+        # 让 adapter._client.post 返回一个协程，该协程返回 mock_response
+        adapter._client.post = AsyncMock(return_value=mock_response)
 
         result = await adapter.repair_format("bad content")
         self.assertEqual(result, "repaired content")
@@ -299,9 +295,7 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
         mock_response.status_code = 500
         mock_response.json = AsyncMock(return_value={})
 
-        adapter._client.post = MagicMock(
-            return_value=AsyncContextManager(mock_response)
-        )
+        adapter._client.post = AsyncMock(return_value=mock_response)
 
         result = await adapter.repair_format("bad content")
         self.assertIsNone(result)

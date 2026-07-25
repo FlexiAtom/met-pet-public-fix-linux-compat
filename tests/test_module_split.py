@@ -360,6 +360,10 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
                 def _position_bubble(self):
                     pass
 
+                # 添加缺失的方法，使 _on_tts_audio 可以正常调用
+                def _complete_pending_chat_reply(self, wav_path=None):
+                    pass
+
             with mock.patch("meapet.paths.PROJECT_ROOT", root):
                 PetChatFlowMixin._on_tts_audio(Host(), str(source))
 
