@@ -9,7 +9,9 @@ from pathlib import Path
 
 # ====================== 全局配置项 ======================
 CONSOLE_LOG_LEVEL = "INFO"    # 控制台默认 INFO；TRACK 载荷日志需显式调到 TRACK 或 MEAPET_DEBUG=1
-FILE_LOG_LEVEL = "DEBUG"     # 文件默认级别 设为 DEBUG 则 TRACK 不落盘
+# 文件默认 INFO：DEBUG 与 TRACK（含用户聊天/长期记忆等隐私载荷）默认不落盘，
+# 需排障时可设环境变量 MEAPET_DEBUG=1 临时提升。
+FILE_LOG_LEVEL = os.environ.get("MEAPET_FILE_LOG_LEVEL", "").strip().upper() or "INFO"
 
 # 日志路径：打包便携模式下与配置/缓存同在 get_data_dir()（_internal）。
 from meapet.paths import get_data_dir as _get_data_dir

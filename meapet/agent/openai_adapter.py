@@ -26,8 +26,15 @@ from meapet.agent.prompts import (
     build_output_instruction,
     build_repair_instruction,
     build_user_message,
+    frontend_context_json,
 )
-from meapet.conversation.output_protocol import parse_reply_output, ParseResult
+from meapet.conversation.output_protocol import (
+    MeaPetOutputStreamParser,
+    ProtocolCompleted,
+    SegmentCompleted,
+    parse_reply_output,
+    ParseResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,14 +97,16 @@ class OpenAIAdapter:
     def __init__(self, config: OpenAIConfig, capabilities: OpenAICapabilities | None = None) -> None:
         self._config = config
         self._capabilities = capabilities or OpenAICapabilities.from_config(config)
+        self._cancelled_turns: set[str] = set()
         # HTTP 客户端（连接池复用）
+        headers = {"Content-Type": "application/json"}
+        if self._config.api_key:
+            headers["Authorization"] = f"Bearer {self._config.api_key}"
         self._client = httpx.AsyncClient(
             base_url=self._config.base_url.rstrip("/"),
             timeout=httpx.Timeout(self._config.timeout_seconds),
-            headers={
-                "Authorization": f"Bearer {self._config.api_key}" if self._config.api_key else "",
-                "Content-Type": "application/json",
-            },
+            verify=self._config.verify_tls,
+            headers=headers,
         )
 
     @property
@@ -245,12 +254,200 @@ class OpenAIAdapter:
         await self._client.aclose()
 
     # ------------------------------------------------------------------
+    # 统一分段事件接口（与 DirectConversationAdapter.stream_turn 契约一致）
+    # ------------------------------------------------------------------
+
+    async def cancel_turn(self, turn_id: str) -> None:
+        self._cancelled_turns.add(str(turn_id or "").strip())
+
+    # 兼容 direct 侧命名（VisionCoordinator / 旧调用方用 cancel）
+    cancel = cancel_turn
+
+    async def probe(self) -> bool:
+        """轻量连通性探测：优先 GET /models，端点未实现时回退最小 completion。"""
+        try:
+            resp = await self._client.get("/models")
+            if resp.status_code == 200:
+                return True
+            if resp.status_code in (404, 405):
+                mini = await self._client.post(
+                    "/chat/completions",
+                    json={
+                        "model": self._config.model or "gpt-3.5-turbo",
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "max_tokens": 1,
+                        "stream": False,
+                    },
+                )
+                if mini.status_code == 200:
+                    return True
+                raise RuntimeError(
+                    f"模型接口返回 HTTP {mini.status_code}"
+                )
+            raise RuntimeError(f"模型接口返回 HTTP {resp.status_code}")
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"无法连接到模型接口：{exc}") from exc
+
+    async def _repair_result(
+        self, *, request: AgentTurnRequest, malformed_output: str
+    ) -> ParseResult | None:
+        repaired_text = await self.repair_format(malformed_output, request=request)
+        if not repaired_text:
+            return None
+        parser = MeaPetOutputStreamParser()
+        parser.feed(repaired_text)
+        if parser.overflowed:
+            return None
+        result = parser.close(tts_enabled=request.tts_enabled)
+        if result.requires_repair(tts_enabled=request.tts_enabled):
+            return None
+        return result
+
+    async def stream_turn(
+        self, request: AgentTurnRequest
+    ) -> AsyncGenerator[object, None]:
+        """把 OpenAI 兼容 SSE 流转换为 MeaPet 统一分段事件。
+
+        与 DirectConversationAdapter.stream_turn 产出同一组事件：
+        SegmentCompleted / ProtocolCompleted / FormatRepairRequired /
+        TurnCompleted / TurnFailed / TurnCancelled——这样 AgentTurnPresentation
+        才能正确显示气泡并触发 TTS（旧的 chat_stream 只吐一个 TurnCompleted，
+        导致回复不显示、TTS 死锁）。
+        """
+        turn_id = request.turn_id
+        if turn_id in self._cancelled_turns:
+            self._cancelled_turns.discard(turn_id)
+            yield TurnCancelled(turn_id)
+            return
+
+        payload = {
+            "model": self._config.model or "gpt-3.5-turbo",
+            "messages": self._build_messages(request),
+            "stream": True,
+            "temperature": self._config.temperature,
+            "max_tokens": self._config.max_tokens,
+        }
+
+        parser = MeaPetOutputStreamParser()
+        raw_chunks: list[str] = []
+        completed_indices: set[int] = set()
+        protocol_completed_emitted = False
+        try:
+            async with self._client.stream(
+                "POST", "/chat/completions", json=payload
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    yield TurnFailed(
+                        turn_id=turn_id,
+                        category="api_error",
+                        safe_message=(
+                            f"模型接口返回 {response.status_code}："
+                            f"{error_body.decode(errors='replace')[:200]}"
+                        ),
+                        retryable=response.status_code >= 500
+                        or response.status_code == 429,
+                    )
+                    return
+                async for line in response.aiter_lines():
+                    if turn_id in self._cancelled_turns:
+                        self._cancelled_turns.discard(turn_id)
+                        yield TurnCancelled(turn_id)
+                        return
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if not data_str:
+                        continue
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = (choices[0] or {}).get("delta") or {}
+                    content = delta.get("content") or ""
+                    if not content:
+                        continue
+                    raw_chunks.append(content)
+                    for parsed_event in parser.feed(content):
+                        if isinstance(parsed_event, SegmentCompleted):
+                            if parsed_event.segment.missing_required_fields:
+                                continue
+                            completed_indices.add(parsed_event.segment.index)
+                        elif isinstance(parsed_event, ProtocolCompleted):
+                            protocol_completed_emitted = True
+                        yield parsed_event
+                    if parser.overflowed:
+                        yield TurnFailed(
+                            turn_id=turn_id,
+                            category="protocol",
+                            safe_message="模型输出超过长度上限，已中止本回合。",
+                            retryable=False,
+                        )
+                        return
+        except httpx.RequestError as exc:
+            logger.error("OpenAI stream_turn 网络错误: %s", exc)
+            yield TurnFailed(
+                turn_id=turn_id,
+                category="network_error",
+                safe_message=f"网络请求失败：{exc}",
+                retryable=True,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 — 兜底避免后台线程崩溃
+            logger.exception("stream_turn 内部错误")
+            yield TurnFailed(
+                turn_id=turn_id,
+                category="internal_error",
+                safe_message=f"内部错误：{exc}",
+                retryable=False,
+            )
+            return
+
+        result = parser.close(tts_enabled=request.tts_enabled)
+        if result.requires_repair(tts_enabled=request.tts_enabled):
+            yield FormatRepairRequired(result)
+            repaired = await self._repair_result(
+                request=request, malformed_output="".join(raw_chunks)
+            )
+            if turn_id in self._cancelled_turns:
+                self._cancelled_turns.discard(turn_id)
+                yield TurnCancelled(turn_id)
+                return
+            if repaired is not None:
+                result = repaired
+
+        if not any(segment.display_text.strip() for segment in result.segments):
+            yield TurnFailed(
+                turn_id=turn_id,
+                category="protocol",
+                safe_message="模型没有返回可展示的回复。",
+                retryable=False,
+            )
+            return
+
+        for segment in result.segments:
+            if segment.index not in completed_indices:
+                yield SegmentCompleted(segment)
+                completed_indices.add(segment.index)
+        if result.done and not protocol_completed_emitted:
+            yield ProtocolCompleted()
+        yield TurnCompleted(turn_id=turn_id, result=result)
+
+    # ------------------------------------------------------------------
     # 内部方法
     # ------------------------------------------------------------------
 
     def _build_messages(self, request: AgentTurnRequest) -> list[dict]:
         """构造 OpenAI 消息数组。"""
         system_msg = build_output_instruction(request)
+        fc = frontend_context_json(request)
+        if fc and fc not in ("{}", "null"):
+            system_msg = f"{system_msg}\n前端只读摘要：{fc}"
         messages: list[dict] = []
 
         # System prompt

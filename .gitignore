@@ -55,3 +55,7 @@ mea_pet.egg-info/
 dist/
 build/
 debug_grab_frame.png
+
+# 误提交的运行时/调试残留文件
+/_standby=True
+/stop

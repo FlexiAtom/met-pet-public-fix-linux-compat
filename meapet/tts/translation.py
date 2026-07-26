@@ -15,6 +15,11 @@ from meapet.tts.language_policy import voice_text_language_relation
 
 log = get_color_logger("translation")
 
+# 每次机器翻译请求的硬超时（秒）。translators 底层 requests 默认 timeout=None，
+# TCP 停滞可无限阻塞；而聊天回复气泡必须等 TTS（含翻译）完成才显示，
+# 一次挂死的翻译会让回复永不出现、宠物卡在忙碌状态。
+_TRANSLATE_TIMEOUT_SECONDS = 15.0
+
 DEFAULT_TRANSLATION_PROVIDERS = (
     "alibaba",
     "iflytek",
@@ -170,6 +175,7 @@ class TranslationService:
                     translator=provider,
                     from_language=source,
                     to_language=target_code,
+                    timeout=_TRANSLATE_TIMEOUT_SECONDS,
                 )
                 translated = str(result or "").strip()
             except Exception as exc:
