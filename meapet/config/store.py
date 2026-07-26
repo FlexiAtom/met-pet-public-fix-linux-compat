@@ -25,6 +25,7 @@ from meapet.config.normalizers import (
     canonical_tts_language,
     normalize_gsv_ref_language,
 )
+from meapet.config import providers as _providers
 from meapet.ui_theme import normalize_ui_font_scale
 from meapet.utils import mask_secret, normalize_watcher
 from meapet.vision.policy import normalize_vision_mode
@@ -57,6 +58,14 @@ PROTOCOL_BY_ENDPOINT_FAMILY = {
 }
 # 旧名：历史代码/测试可能仍 import。
 PROTOCOL_BY_PROVIDER = PROTOCOL_BY_ENDPOINT_FAMILY
+
+# 从 providers 预设注册表补齐新供应商的协议与密钥环境变量映射（单一数据源）。
+# 用 setdefault：不覆盖上面已有的 5 个内置 family（保持既有行为）。
+for _preset in _providers.all_presets():
+    PROTOCOL_BY_ENDPOINT_FAMILY.setdefault(_preset.id, _preset.protocol)
+    if _preset.env_keys:
+        ENV_LLM_KEY_BY_FAMILY.setdefault(_preset.id, _preset.family_env_keys)
+
 _DIRECT_PROVIDERS = frozenset({"custom"})
 # 旧顶层 backend 属于 Agent 类时，无 mode 配置迁去 agent。
 _AGENT_KINDS = frozenset({"hermes", "openclaw"})
@@ -84,6 +93,12 @@ def _endpoint_family_from_text(text: object) -> str:
         return "anthropic"
     if "deepseek" in value:
         return "deepseek"
+    # 预设注册表里的其余供应商（moonshot / zhipu / qwen / groq / lmstudio 等）。
+    # 放在 loopback 判定之前：LM Studio 这类本地 OpenAI 兼容服务的地址签名更具体，
+    # 不应被下面宽泛的 localhost→ollama 规则吞掉。ollama 仍走既有弱信号逻辑。
+    _preset_hit = _providers.detect_preset_by_url(value)
+    if _preset_hit is not None and _preset_hit.id != "ollama":
+        return _preset_hit.id
     if "11434" in value or "localhost" in value or "127.0.0.1" in value:
         return "ollama"
     if "openai.com" in value:

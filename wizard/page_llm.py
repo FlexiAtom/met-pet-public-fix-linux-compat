@@ -25,6 +25,8 @@ from wizard.styles import (
 )
 from wizard.widgets import WheelSafeComboBox
 
+from meapet.config.providers import CUSTOM_ID, all_presets, preset_by_id
+
 
 def _normalize_base_url(url: str) -> str:
     """Strip common chat endpoint suffixes so /models can be appended."""
@@ -62,9 +64,9 @@ class LLMPage(QFrame):
         title.setObjectName("PageTitle")
         layout.addWidget(title)
         desc = QLabel(
-            "填写 API 地址和模型信息即可。"
-            "DeepSeek、MiMo、Ollama 等均支持；"
-            "服务商由程序按地址自动识别协议与密钥，配置一律保存为 custom。"
+            "从下拉里选一个服务商即可自动填好 API 地址；"
+            "也可以选「自动识别 / 自定义」手填任意 OpenAI 兼容地址。"
+            "配置一律保存为 custom，协议与密钥环境变量按供应商或地址自动确定。"
         )
         desc.setObjectName("PageDescription")
         desc.setWordWrap(True)
@@ -77,21 +79,27 @@ class LLMPage(QFrame):
         conn_layout.setContentsMargins(16, 14, 16, 16)
         conn_layout.setSpacing(10)
 
-        # 服务商：仅展示「自动识别」，不再提供品牌下拉。
-        # provider 字段恒为 custom；协议/密钥由 api_base 推断。
+        # 服务商：选预设即自动填入其 API 地址与协议；也可留在「自动识别」手填。
+        # provider 字段仍恒为 custom，只是把地址/协议填好，省去手打。
         provider_label = QLabel("服务商：")
         provider_label.setObjectName("FieldLabel")
         conn_layout.addWidget(provider_label)
         self.provider_combo = WheelSafeComboBox()
         self.provider_combo.setObjectName("ProviderSelector")
         self.provider_combo.setAccessibleName("服务商")
-        self.provider_combo.addItem("自动识别（按 API 地址判断）", "")
-        self.provider_combo.setEnabled(False)
+        self.provider_combo.addItem("自动识别 / 自定义（手填 API 地址）", CUSTOM_ID)
+        for _preset in all_presets():
+            self.provider_combo.addItem(_preset.name, _preset.id)
         self.provider_combo.setToolTip(
-            "不再手动选择服务商。程序按 API 地址自动识别协议与密钥环境变量，"
-            "配置中的 provider 始终保存为 custom。"
+            "选择服务商会自动填入其 API 地址，并按该厂商的协议发起请求；"
+            "选「自动识别」则由程序按你填写的地址推断协议与密钥环境变量。"
         )
         conn_layout.addWidget(self.provider_combo)
+
+        self.provider_hint = QLabel("")
+        self.provider_hint.setObjectName("HelperText")
+        self.provider_hint.setWordWrap(True)
+        conn_layout.addWidget(self.provider_hint)
 
         # Base URL
         base_url_label = QLabel("API 地址：")
@@ -261,6 +269,31 @@ class LLMPage(QFrame):
         # Signals
         self.fetch_models_btn.clicked.connect(self._start_fetch_models)
         self.models_fetched.connect(self._apply_fetched_models)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+
+    # ── Provider presets ─────────────────────────────────────
+
+    def _selected_preset(self):
+        """当前下拉选中的预设；选「自动识别」时返回 None。"""
+        return preset_by_id(self.provider_combo.currentData() or CUSTOM_ID)
+
+    def _on_provider_changed(self, _index: int) -> None:
+        """选中预设时填入其 API 地址，并给出密钥提示。"""
+        preset = self._selected_preset()
+        if preset is None:
+            self.provider_hint.setText("")
+            return
+        if preset.api_base:
+            self.endpoint_input.setText(preset.api_base)
+        hints = []
+        if not preset.requires_key:
+            hints.append("本地服务，无需 API Key。")
+        elif preset.env_keys:
+            hints.append("也可填 $" + preset.env_keys[0] + " 从环境变量读取。")
+        if preset.note:
+            hints.append(preset.note)
+        self.provider_hint.setText(" ".join(hints))
+
 
     # ── Provider identity（恒为 custom） ──────────────────────
 
@@ -418,12 +451,19 @@ class LLMPage(QFrame):
         from meapet.config.store import infer_direct_protocol
 
         endpoint = self.endpoint_input.text().strip()
-        # provider 恒为 custom；协议按 API 地址自动识别（Ollama→ollama_chat 等）
-        protocol = infer_direct_protocol(
-            "custom",
-            api_base=endpoint,
-            host="",
-        )
+        preset = self._selected_preset()
+        if preset is not None and preset.api_base and endpoint == preset.api_base:
+            # 显式选了服务商且地址未被改动：直接用该厂商协议。
+            # 这样 LM Studio 这类本地 OpenAI 兼容服务不会被
+            # 「localhost → ollama」的宽泛推断规则误判。
+            protocol = preset.protocol
+        else:
+            # provider 恒为 custom；协议按 API 地址自动识别（Ollama→ollama_chat 等）
+            protocol = infer_direct_protocol(
+                "custom",
+                api_base=endpoint,
+                host="",
+            )
         return {
             "provider": "custom",
             "protocol": protocol,
@@ -439,9 +479,11 @@ class LLMPage(QFrame):
         """Restore form fields from a previously saved profile.
 
         Provider is not restored as a brand selection — identity is always custom.
+        下拉只按已保存的 api_base 回选到对应预设，纯属方便查看与再次编辑。
         """
         profile = profile or {}
         endpoint = profile.get("api_base") or profile.get("host") or ""
+        self._select_provider_for_endpoint(str(endpoint))
         self.endpoint_input.setText(str(endpoint))
 
         model = str(profile.get("model") or "")
@@ -459,6 +501,26 @@ class LLMPage(QFrame):
 
 
     # ── Helpers ───────────────────────────────────────────────
+
+    def _select_provider_for_endpoint(self, endpoint: str) -> None:
+        """按已保存的 api_base 回选下拉；未命中则落到「自动识别」。
+
+        只在地址与预设完全一致时才回选，避免把用户自定义的反代地址
+        误标成某个厂商。回选期间屏蔽信号，防止覆写用户已存的地址。
+        """
+        target = str(endpoint or "").strip()
+        index = 0
+        if target:
+            for i in range(self.provider_combo.count()):
+                preset = preset_by_id(self.provider_combo.itemData(i) or CUSTOM_ID)
+                if preset is not None and preset.api_base and preset.api_base == target:
+                    index = i
+                    break
+        self.provider_combo.blockSignals(True)
+        self.provider_combo.setCurrentIndex(index)
+        self.provider_combo.blockSignals(False)
+        preset = self._selected_preset()
+        self.provider_hint.setText(preset.note if preset is not None else "")
 
     def _toggle_api_key_visibility(self, visible: bool) -> None:
         self.direct_api_key_input.setEchoMode(

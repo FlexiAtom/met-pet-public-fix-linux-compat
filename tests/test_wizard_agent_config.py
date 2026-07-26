@@ -238,13 +238,17 @@ class TestWizardConversationConfig(unittest.TestCase):
         page.endpoint_input.setText("https://api.deepseek.com/v1")
 
         self.assertEqual(page.get_backend(), "custom")
-        # 仅保留「自动识别」一项，无品牌下拉
+        # 下拉首项是「自动识别 / 自定义」，其后是供应商预设；
+        # 无论选哪个，保存的 provider 身份都仍是 custom。
         values = [
             page.provider_combo.itemData(i)
             for i in range(page.provider_combo.count())
         ]
-        self.assertEqual(values, [""])
-        self.assertFalse(page.provider_combo.isEnabled())
+        self.assertEqual(values[0], "")
+        self.assertGreater(len(values), 1)
+        self.assertIn("deepseek", values)
+        self.assertTrue(page.provider_combo.isEnabled())
+        self.assertEqual(page.collect_direct_profile()["provider"], "custom")
         # Ollama 地址仍保存 custom，但协议自动识别为 ollama_chat
         page.endpoint_input.setText("http://127.0.0.1:11434")
         profile = page.collect_direct_profile()
