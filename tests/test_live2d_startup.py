@@ -228,12 +228,8 @@ class Live2DStartupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as model_dir:
             host = self._host(model_dir)
             sprite_patch, model_patch, init_patch = self._patch_renderers()
-            with (
-                sprite_patch,
-                model_patch,
-                init_patch,
-                mock.patch("meapet.desktop.render_host.sys.platform", "win32"),
-            ):
+            # OS shape 调用与平台无关（ctypes 封装在 window_shape）；此处不 patch platform。
+            with sprite_patch, model_patch, init_patch:
                 host.init_renderer()
                 self.assertEqual(host.windowOpacity(), 1.0)
 
@@ -243,6 +239,10 @@ class Live2DStartupTests(unittest.TestCase):
                     mock.patch.object(host, "raise_") as raise_window,
                     mock.patch.object(host.sprite_label, "show") as show_widget,
                     mock.patch.object(host.sprite_label, "update") as update_widget,
+                    mock.patch(
+                        "meapet.desktop.render_host.apply_ellipse_window_shape",
+                        return_value=True,
+                    ),
                 ):
                     host.sprite_label.first_frame_ready.emit()
                     QApplication.processEvents()
@@ -464,18 +464,84 @@ class Live2DStartupTests(unittest.TestCase):
         self.assertAlmostEqual(bounds_b.width(), 524, delta=2)
         self.assertAlmostEqual(bounds_b.height(), 736, delta=2)
 
-    def test_windows_window_region_is_removed_instead_of_cropping(self) -> None:
+    def test_clear_window_region_clears_os_shape(self) -> None:
         host = self._host("")
-        set_window_region = mock.Mock()
-        win32gui = SimpleNamespace(SetWindowRgn=set_window_region)
+        host.resize(200, 300)
+        clear_shape = mock.Mock(return_value=True)
 
-        with (
-            mock.patch("meapet.desktop.render_host.sys.platform", "win32"),
-            mock.patch.dict("sys.modules", {"win32gui": win32gui}),
+        with mock.patch(
+            "meapet.desktop.render_host.clear_window_shape", clear_shape
         ):
             host._clear_window_region()
 
-        set_window_region.assert_called_once_with(int(host.winId()), 0, True)
+        clear_shape.assert_called_once()
+        args, kwargs = clear_shape.call_args
+        self.assertEqual(args[0], int(host.winId()))
+        self.assertEqual(kwargs.get("width"), 200)
+        self.assertEqual(kwargs.get("height"), 300)
+
+    def test_apply_hit_region_sets_os_ellipse_shape(self) -> None:
+        host = self._host("")
+        host._use_live2d = True
+        host.resize(500, 700)
+        host.sprite_label = QWidget(host)
+        host.sprite_label.resize(500, 700)
+        host.config["live2d"]["window_mask"] = {
+            "enabled": True,
+            "cx": 0.54,
+            "cy": 0.41,
+            "rw": 0.26,
+            "rh": 0.38,
+        }
+        apply_shape = mock.Mock(return_value=True)
+
+        with mock.patch(
+            "meapet.desktop.render_host.apply_ellipse_window_shape", apply_shape
+        ):
+            PetRenderHostMixin._apply_hit_region(host)
+
+        apply_shape.assert_called_once()
+        args, kwargs = apply_shape.call_args
+        self.assertEqual(args[0], int(host.winId()))
+        self.assertEqual(args[1], 500)
+        self.assertEqual(args[2], 700)
+        self.assertFalse(host.mask().isEmpty())
+
+    def test_ellipse_physical_bounds_scales_with_dpr(self) -> None:
+        from meapet.desktop.window_shape import ellipse_physical_bounds
+
+        left, top, right, bottom = ellipse_physical_bounds(
+            200,
+            400,
+            {"enabled": True, "cx": 0.50, "cy": 0.50, "rw": 0.25, "rh": 0.40},
+            dpr=1.0,
+        )
+        self.assertEqual((left, top, right, bottom), (50, 40, 150, 360))
+
+        left2, top2, right2, bottom2 = ellipse_physical_bounds(
+            200,
+            400,
+            {"enabled": True, "cx": 0.50, "cy": 0.50, "rw": 0.25, "rh": 0.40},
+            dpr=2.0,
+        )
+        # physical size 400x800 → half-width 100, half-height 320
+        self.assertEqual((left2, top2, right2, bottom2), (100, 80, 300, 720))
+
+    def test_ellipse_scanline_rects_stay_inside_bounds(self) -> None:
+        from meapet.desktop.window_shape import ellipse_scanline_rects
+
+        rects = ellipse_scanline_rects(
+            100,
+            100,
+            {"enabled": True, "cx": 0.5, "cy": 0.5, "rw": 0.4, "rh": 0.3},
+            dpr=1.0,
+        )
+        self.assertTrue(rects)
+        for x, y, w, h in rects:
+            self.assertGreaterEqual(w, 1)
+            self.assertEqual(h, 1)
+            self.assertGreaterEqual(y, 20)  # cy-rh = 20
+            self.assertLess(y, 80)
 
     def test_png_to_live2d_clears_the_previous_window_mask_first(self) -> None:
         with tempfile.TemporaryDirectory() as model_dir:
@@ -535,6 +601,37 @@ class Live2DStartupTests(unittest.TestCase):
         self.assertTrue(hasattr(Live2DWidget, "initialization_failed"))
         paint_source = inspect.getsource(Live2DWidget.paintGL)
         self.assertIn("glClearColor(0.0, 0.0, 0.0, 0.0)", paint_source)
+        self.assertIn("_apply_ellipse_stencil_clip", paint_source)
+        init_source = inspect.getsource(Live2DWidget.__init__)
+        self.assertIn("setStencilBufferSize", init_source)
+
+    def test_ellipse_stencil_ndc_vertices_match_normalized_ellipse(self) -> None:
+        from meapet.desktop.live2d_widget import ellipse_stencil_ndc_vertices
+
+        # 中心在窗口中心、半宽半高 0.25 → NDC 中心 (0,0)，半径 0.5
+        verts = ellipse_stencil_ndc_vertices(0.5, 0.5, 0.25, 0.25, segments=8)
+        self.assertEqual(verts[0], (0.0, 0.0))
+        self.assertEqual(verts[0], verts[0])
+        # 闭合：首尾边界点应重合
+        self.assertAlmostEqual(verts[1][0], verts[-1][0], places=5)
+        self.assertAlmostEqual(verts[1][1], verts[-1][1], places=5)
+        # 右端点 angle=0 → (0.5, 0)
+        self.assertAlmostEqual(verts[1][0], 0.5, places=5)
+        self.assertAlmostEqual(verts[1][1], 0.0, places=5)
+        xs = [v[0] for v in verts[1:]]
+        ys = [v[1] for v in verts[1:]]
+        self.assertAlmostEqual(max(xs), 0.5, places=5)
+        self.assertAlmostEqual(min(xs), -0.5, places=5)
+        self.assertAlmostEqual(max(ys), 0.5, places=5)
+        self.assertAlmostEqual(min(ys), -0.5, places=5)
+
+    def test_ellipse_stencil_ndc_respects_qt_y_down_center(self) -> None:
+        from meapet.desktop.live2d_widget import ellipse_stencil_ndc_vertices
+
+        # cy=0.25（偏上）→ NDC y = 1 - 2*0.25 = 0.5
+        verts = ellipse_stencil_ndc_vertices(0.54, 0.25, 0.1, 0.1, segments=4)
+        self.assertAlmostEqual(verts[0][0], 2.0 * 0.54 - 1.0, places=5)
+        self.assertAlmostEqual(verts[0][1], 0.5, places=5)
 
     def test_live2d_left_double_click_emits_chat_request(self) -> None:
         from meapet.desktop.live2d_widget import Live2DWidget

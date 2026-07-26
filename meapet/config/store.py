@@ -204,9 +204,9 @@ DEFAULT_AGENT_CONTROL = {
 DEFAULT_LIVE2D_WINDOW_MASK = {
     "enabled": True,
     "cx": 0.54,
-    "cy": 0.41,
-    "rw": 0.26,
-    "rh": 0.38,
+    "cy": 0.40,
+    "rw": 0.29,
+    "rh": 0.40,
 }
 
 

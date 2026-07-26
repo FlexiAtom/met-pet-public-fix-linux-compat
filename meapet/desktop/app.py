@@ -27,6 +27,7 @@ from typing import Optional
 
 from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QSurfaceFormat
 
 from meapet.utils import (
     safe_print,
@@ -580,6 +581,19 @@ def main():
     log.info(f"[boot] python={sys.version.split()[0]} exe={sys.executable}")
     log.info(f"[boot] cwd={os.getcwd()} root={PROJECT_ROOT} data={get_data_dir()}")
     log.info(f"[boot] FORCE_PNG={os.environ.get('MEAPET_FORCE_PNG', '')}")
+
+    # Live2D 透明窗：在 QApplication 之前请求 alpha+stencil，并在 Windows 上优先
+    # 桌面 OpenGL，减轻打包后 ANGLE/软 GL 把 QOpenGLWidget 合成成不透明矩形。
+    try:
+        if sys.platform == "win32":
+            QApplication.setAttribute(Qt.AA_UseDesktopOpenGL, True)
+        gl_fmt = QSurfaceFormat()
+        gl_fmt.setAlphaBufferSize(8)
+        gl_fmt.setStencilBufferSize(8)
+        gl_fmt.setRenderableType(QSurfaceFormat.OpenGL)
+        QSurfaceFormat.setDefaultFormat(gl_fmt)
+    except Exception as exc:
+        log.warning(f"[boot] OpenGL surface defaults skipped: {exc}")
 
     try:
         app = QApplication(sys.argv)

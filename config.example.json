@@ -111,9 +111,9 @@
     "window_mask": {
       "enabled": true,
       "cx": 0.54,
-      "cy": 0.41,
-      "rw": 0.26,
-      "rh": 0.38
+      "cy": 0.40,
+      "rw": 0.30,
+      "rh": 0.40
     }
   },
   "watcher": {

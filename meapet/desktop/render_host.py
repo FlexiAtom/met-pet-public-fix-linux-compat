@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Callable
 
 from PyQt5.QtWidgets import QApplication, QDialog
@@ -25,6 +24,10 @@ from meapet.desktop.click_through import (
     disable_click_through,
     enable_click_through,
     is_right_button_down,
+)
+from meapet.desktop.window_shape import (
+    apply_ellipse_window_shape,
+    clear_window_shape,
 )
 from meapet.utils import safe_print
 
@@ -644,28 +647,46 @@ class PetRenderHostMixin:
             self._save_config()
 
     def _apply_hit_region(self):
-        """Live2D 可选椭圆 mask（Qt setMask，Win/Linux 通用）；PNG 始终清空。"""
+        """Live2D 椭圆窗口外形 + 命中；PNG 始终清空。
+
+        分层：
+        1. 原生窗形（ctypes SetWindowRgn / XShape）—— 去掉透明矩形碰撞箱
+        2. Qt setMask（宿主 + 子）—— 命中一致
+        3. Live2D paintGL stencil —— OpenGL 内容椭圆裁剪
+        不依赖 pywin32。
+        """
         use_live2d = bool(getattr(self, "_use_live2d", False))
         params = self._live2d_window_mask_params()
         if not use_live2d or not params.get("enabled", True):
             self._clear_window_region()
             return
 
-        # 先清 Win32 残留 region，再用纯 Qt setMask 设椭圆，避免双源。
-        if sys.platform == "win32":
-            try:
-                import win32gui
+        try:
+            dpr = float(self.devicePixelRatioF())
+        except Exception:
+            dpr = float(self.devicePixelRatio() or 1.0) if hasattr(self, "devicePixelRatio") else 1.0
+        if dpr <= 0:
+            dpr = 1.0
 
-                win32gui.SetWindowRgn(int(self.winId()), 0, True)
-            except Exception as e:
-                safe_print(f"[WARN] Win32 window region reset failed: {e}")
+        # 1) OS 椭圆外形（打包后去掉透明矩形窗）
+        try:
+            hwnd = int(self.winId())
+            apply_ellipse_window_shape(
+                hwnd,
+                self.width(),
+                self.height(),
+                params,
+                dpr=dpr,
+            )
+        except Exception as e:
+            safe_print(f"[WARN] OS ellipse window shape failed: {e}")
 
+        # 2) Qt mask：命中 + 部分平台辅助
         region = ellipse_mask_region(self.width(), self.height(), params)
         self.setMask(region)
         widget = getattr(self, "sprite_label", None)
         if widget is not None:
             try:
-                # QOpenGLWidget 在部分平台不继承父 mask 裁剪，子控件同步一份。
                 widget.setMask(
                     ellipse_mask_region(widget.width(), widget.height(), params)
                 )
@@ -742,7 +763,7 @@ class PetRenderHostMixin:
         )
 
     def _clear_window_region(self):
-        """移除会裁剪可见内容的 Qt/Win32 窗口区域。"""
+        """移除 Qt mask 与原生椭圆窗形，恢复全矩形客户区。"""
         self.clearMask()
         widget = getattr(self, "sprite_label", None)
         if widget is not None:
@@ -750,13 +771,15 @@ class PetRenderHostMixin:
                 widget.clearMask()
             except Exception:
                 pass
-        if sys.platform == "win32":
-            try:
-                import win32gui
-
-                win32gui.SetWindowRgn(int(self.winId()), 0, True)
-            except Exception as e:
-                safe_print(f"[WARN] Win32 window region reset failed: {e}")
+        try:
+            hwnd = int(self.winId())
+            clear_window_shape(
+                hwnd,
+                width=max(1, self.width()),
+                height=max(1, self.height()),
+            )
+        except Exception as e:
+            safe_print(f"[WARN] OS window shape clear failed: {e}")
 
     def _toggle_standby(self):
         self._standby = not self._standby

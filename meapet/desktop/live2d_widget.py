@@ -24,6 +24,10 @@ from PyQt5.QtCore import QEvent
 from PyQt5.QtGui import QSurfaceFormat
 
 from meapet.desktop.render_host import calculate_drag_position
+from meapet.config.store import (
+    DEFAULT_LIVE2D_WINDOW_MASK,
+    normalize_live2d_window_mask,
+)
 from meapet.log import get_color_logger
 
 log = get_color_logger("live2d_widget")
@@ -36,6 +40,56 @@ if sys.platform == "win32":
     except Exception:
         win32api = None
         win32con = None
+
+
+_ELLIPSE_STENCIL_SEGMENTS = 64
+
+_STENCIL_VERT_SRC = """
+#version 330 core
+layout(location = 0) in vec2 aPos;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+"""
+
+_STENCIL_FRAG_SRC = """
+#version 330 core
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(0.0);
+}
+"""
+
+
+def ellipse_stencil_ndc_vertices(
+    cx: float,
+    cy: float,
+    rw: float,
+    rh: float,
+    segments: int = _ELLIPSE_STENCIL_SEGMENTS,
+) -> list[tuple[float, float]]:
+    """按与 setMask 相同的 0–1 比例，生成 NDC 下 TRIANGLE_FAN 顶点。
+
+    输入为窗口归一化椭圆（Qt 顶为 y=0）；输出 OpenGL NDC（y 向上）。
+    顶点 0 为中心，其后为 segments+1 个边界点（首尾闭合）。
+    """
+    segs = max(8, int(segments))
+    ndc_cx = 2.0 * float(cx) - 1.0
+    ndc_cy = 1.0 - 2.0 * float(cy)
+    ndc_rw = 2.0 * float(rw)
+    ndc_rh = 2.0 * float(rh)
+    verts: list[tuple[float, float]] = [(ndc_cx, ndc_cy)]
+    for i in range(segs + 1):
+        angle = 2.0 * math.pi * i / segs
+        # Qt y 向下：边界点 y = cy + rh*sin → NDC 需取反 sin 项
+        verts.append(
+            (
+                ndc_cx + ndc_rw * math.cos(angle),
+                ndc_cy - ndc_rh * math.sin(angle),
+            )
+        )
+    return verts
+
 
 class Live2DModel:
     """Live2D 模型控制器，提供与 SpriteRenderer 兼容的接口"""
@@ -145,6 +199,7 @@ class Live2DWidget(QOpenGLWidget):
         # 必须在初始化 QOpenGLWidget 之前设置
         fmt = QSurfaceFormat()
         fmt.setAlphaBufferSize(8)       # 分配 8 位 Alpha 通道
+        fmt.setStencilBufferSize(8)     # 椭圆视觉裁剪用 stencil
         fmt.setRenderableType(QSurfaceFormat.OpenGL)
         fmt.setProfile(QSurfaceFormat.CoreProfile)
         QSurfaceFormat.setDefaultFormat(fmt)
@@ -166,6 +221,12 @@ class Live2DWidget(QOpenGLWidget):
         self._first_frame_emitted = False
         self._drag_target = (0.0, 0.0)  # 眼球追踪坐标（每帧更新）
         self._global_filter_installed = False
+        self._stencil_clip_available = None  # None=未探测, True/False
+        self._stencil_program = 0
+        self._stencil_vao = 0
+        self._stencil_vbo = 0
+        self._stencil_vertex_count = 0
+        self._stencil_logged_skip = False
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_timer)
         self.frameSwapped.connect(self._on_frame_swapped)
@@ -221,6 +282,28 @@ class Live2DWidget(QOpenGLWidget):
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
+            # 探测 stencil；打包后 QOpenGLWidget 常不吃 Qt setMask 的绘制裁剪，
+            # 椭圆外透明依赖 paintGL 内 stencil（见 _apply_ellipse_stencil_clip）。
+            try:
+                stencil_bits = int(self.format().stencilBufferSize())
+            except Exception:
+                stencil_bits = 0
+            self._stencil_clip_available = stencil_bits > 0
+            if self._stencil_clip_available:
+                try:
+                    self._init_stencil_resources()
+                except Exception as exc:
+                    self._stencil_clip_available = False
+                    log.warning(
+                        f"[live2d] stencil resources init failed, "
+                        f"visual ellipse clip disabled: {exc}"
+                    )
+            else:
+                log.debug(
+                    "[live2d] no stencil buffer; visual ellipse clip disabled "
+                    "(hit mask still via Qt setMask)"
+                )
+
             model = live2d.LAppModel()
             model.LoadModelJson(self.l2d._model_json)
             model.SetAutoBlinkEnable(True)
@@ -269,16 +352,28 @@ class Live2DWidget(QOpenGLWidget):
             from OpenGL.GL import (
                 GL_COLOR_BUFFER_BIT,
                 GL_DEPTH_BUFFER_BIT,
+                GL_STENCIL_BUFFER_BIT,
+                GL_STENCIL_TEST,
                 glClear,
                 glClearColor,
+                glDisable,
             )
         except Exception as exc:
             self._report_initialization_failure(exc)
             return
 
         # 即使模型尚未 ready，也先把 framebuffer 清成透明，绝不提交白色空帧。
+        # 上一帧可能把 stencil mask 置 0，清屏前必须恢复，否则 STENCIL clear 无效。
+        try:
+            from OpenGL.GL import glStencilMask
+
+            glStencilMask(0xFF)
+        except Exception:
+            pass
         glClearColor(0.0, 0.0, 0.0, 0.0)
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glClear(
+            GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT
+        )
         if not self._ready or not self.l2d.model:
             # 记录为什么没渲染
             if not hasattr(self, '_dbg_skip'):
@@ -319,9 +414,212 @@ class Live2DWidget(QOpenGLWidget):
             self.l2d.model.SetParameterValue("ParamBodyAngleZ", cx * 10, 1.0)
             self.l2d.model.SetParameterValue("ParamAngleZ", cx * 10, 1.0)
 
-        self.l2d.model.Update()
-        self.l2d.model.Draw()
+        stencil_on = self._apply_ellipse_stencil_clip()
+        try:
+            self.l2d.model.Update()
+            self.l2d.model.Draw()
+        finally:
+            if stencil_on:
+                try:
+                    from OpenGL.GL import glColorMask, glStencilMask
+
+                    glDisable(GL_STENCIL_TEST)
+                    glStencilMask(0xFF)
+                    glColorMask(True, True, True, True)
+                except Exception:
+                    pass
         self._frame_drawn = True
+
+    def _window_mask_params(self) -> dict:
+        """与宿主 setMask 共用同一套归一化椭圆参数。"""
+        parent = self.parentWidget()
+        getter = getattr(parent, "_live2d_window_mask_params", None) if parent else None
+        if callable(getter):
+            try:
+                return normalize_live2d_window_mask(getter())
+            except Exception:
+                pass
+        return dict(DEFAULT_LIVE2D_WINDOW_MASK)
+
+    def _init_stencil_resources(self):
+        """Core Profile 下用极简 shader + VAO 画 stencil 椭圆。"""
+        import ctypes
+        from array import array
+
+        from OpenGL.GL import (
+            GL_ARRAY_BUFFER,
+            GL_COMPILE_STATUS,
+            GL_FALSE,
+            GL_FLOAT,
+            GL_FRAGMENT_SHADER,
+            GL_LINK_STATUS,
+            GL_STATIC_DRAW,
+            GL_VERTEX_SHADER,
+            glAttachShader,
+            glBindBuffer,
+            glBindVertexArray,
+            glBufferData,
+            glCompileShader,
+            glCreateProgram,
+            glCreateShader,
+            glDeleteShader,
+            glEnableVertexAttribArray,
+            glGenBuffers,
+            glGenVertexArrays,
+            glGetProgramiv,
+            glGetShaderiv,
+            glLinkProgram,
+            glShaderSource,
+            glVertexAttribPointer,
+        )
+
+        def _compile(src: str, shader_type: int) -> int:
+            shader = glCreateShader(shader_type)
+            glShaderSource(shader, src)
+            glCompileShader(shader)
+            if not glGetShaderiv(shader, GL_COMPILE_STATUS):
+                from OpenGL.GL import glGetShaderInfoLog
+
+                raise RuntimeError(
+                    f"stencil shader compile failed: {glGetShaderInfoLog(shader)}"
+                )
+            return shader
+
+        vert = _compile(_STENCIL_VERT_SRC, GL_VERTEX_SHADER)
+        frag = _compile(_STENCIL_FRAG_SRC, GL_FRAGMENT_SHADER)
+        program = glCreateProgram()
+        glAttachShader(program, vert)
+        glAttachShader(program, frag)
+        glLinkProgram(program)
+        glDeleteShader(vert)
+        glDeleteShader(frag)
+        if not glGetProgramiv(program, GL_LINK_STATUS):
+            from OpenGL.GL import glGetProgramInfoLog
+
+            raise RuntimeError(
+                f"stencil program link failed: {glGetProgramInfoLog(program)}"
+            )
+
+        vao = glGenVertexArrays(1)
+        vbo = glGenBuffers(1)
+        # 占位缓冲，首帧按 mask 参数上传真实顶点
+        placeholder = array("f", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        glBindVertexArray(vao)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            len(placeholder) * 4,
+            (ctypes.c_float * len(placeholder))(*placeholder),
+            GL_STATIC_DRAW,
+        )
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, ctypes.c_void_p(0))
+        glBindVertexArray(0)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+        self._stencil_program = int(program)
+        self._stencil_vao = int(vao)
+        self._stencil_vbo = int(vbo)
+        self._stencil_vertex_count = 0
+
+    def _upload_ellipse_stencil_geometry(self, params: dict) -> int:
+        """按当前 mask 参数上传 NDC 椭圆扇，返回顶点数量。"""
+        from OpenGL.GL import (
+            GL_ARRAY_BUFFER,
+            GL_DYNAMIC_DRAW,
+            glBindBuffer,
+            glBufferData,
+        )
+        import ctypes
+
+        verts = ellipse_stencil_ndc_vertices(
+            float(params["cx"]),
+            float(params["cy"]),
+            float(params["rw"]),
+            float(params["rh"]),
+        )
+        flat = []
+        for x, y in verts:
+            flat.append(float(x))
+            flat.append(float(y))
+        count = len(verts)
+        buf = (ctypes.c_float * len(flat))(*flat)
+        glBindBuffer(GL_ARRAY_BUFFER, self._stencil_vbo)
+        glBufferData(GL_ARRAY_BUFFER, len(flat) * 4, buf, GL_DYNAMIC_DRAW)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        self._stencil_vertex_count = count
+        return count
+
+    def _apply_ellipse_stencil_clip(self) -> bool:
+        """写入椭圆 stencil 并启用 EQUAL 测试；成功返回 True（调用方须 disable）。"""
+        if not self._stencil_clip_available:
+            return False
+        if not self._stencil_program or not self._stencil_vao:
+            return False
+
+        params = self._window_mask_params()
+        if not params.get("enabled", True):
+            return False
+
+        try:
+            from OpenGL.GL import (
+                GL_ALWAYS,
+                GL_EQUAL,
+                GL_KEEP,
+                GL_REPLACE,
+                GL_STENCIL_TEST,
+                GL_TRIANGLE_FAN,
+                glBindVertexArray,
+                glColorMask,
+                glDisable,
+                glDrawArrays,
+                glEnable,
+                glStencilFunc,
+                glStencilMask,
+                glStencilOp,
+                glUseProgram,
+            )
+        except Exception as exc:
+            if not self._stencil_logged_skip:
+                self._stencil_logged_skip = True
+                log.debug(f"[live2d] stencil imports failed: {exc}")
+            return False
+
+        try:
+            count = self._upload_ellipse_stencil_geometry(params)
+            if count < 3:
+                return False
+
+            # 1) 只写 stencil：椭圆内 = 1
+            glEnable(GL_STENCIL_TEST)
+            glStencilMask(0xFF)
+            glStencilFunc(GL_ALWAYS, 1, 0xFF)
+            glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE)
+            glColorMask(False, False, False, False)
+
+            glUseProgram(self._stencil_program)
+            glBindVertexArray(self._stencil_vao)
+            # VBO 已在 upload 时绑定属性；VAO 记录了 attrib 0
+            glDrawArrays(GL_TRIANGLE_FAN, 0, count)
+            glBindVertexArray(0)
+            glUseProgram(0)
+
+            # 2) 后续 Draw 仅通过 stencil==1
+            glColorMask(True, True, True, True)
+            glStencilFunc(GL_EQUAL, 1, 0xFF)
+            glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP)
+            glStencilMask(0x00)
+            return True
+        except Exception as exc:
+            if not self._stencil_logged_skip:
+                self._stencil_logged_skip = True
+                log.warning(f"[live2d] ellipse stencil clip failed: {exc}")
+            try:
+                glColorMask(True, True, True, True)
+                glDisable(GL_STENCIL_TEST)
+            except Exception:
+                pass
+            return False
 
     def _on_frame_swapped(self):
         """只在 Qt 确认首帧已交换到屏幕后通知宿主显现。"""
@@ -465,6 +763,11 @@ class Live2DWidget(QOpenGLWidget):
     def shutdown(self):
         self._timer.stop()
         self._ready = False
+        self._stencil_clip_available = False
+        self._stencil_program = 0
+        self._stencil_vao = 0
+        self._stencil_vbo = 0
+        self._stencil_vertex_count = 0
 
 
 # ====== 工具函数 ======
