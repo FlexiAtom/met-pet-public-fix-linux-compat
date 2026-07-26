@@ -74,6 +74,7 @@ class ChatWorker:
                 self._future.result(timeout=timeout_ms / 1000)
             except Exception:
                 pass
+        return self._future is None or self._future.done()
 
     def deleteLater(self):
         self._future = None
@@ -151,6 +152,7 @@ class AgentChatWorker:
                 self._future.result(timeout=timeout_ms / 1000)
             except Exception:
                 pass
+        return self._future is None or self._future.done()
 
     def deleteLater(self):
         self._future = None
@@ -238,6 +240,7 @@ class TTSWorker:
                 self._future.result(timeout=timeout_ms / 1000)
             except Exception:
                 pass
+        return self._future is None or self._future.done()
 
     def deleteLater(self):
         self._future = None
