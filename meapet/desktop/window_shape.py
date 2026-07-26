@@ -7,17 +7,22 @@ disappears.
 
 - Windows: ``CreateEllipticRgn`` + ``SetWindowRgn`` via ctypes
 - Linux xcb: XShape ``ShapeBounding`` via horizontal scanline rectangles
+
+X11 shaping only runs when the Qt platform backend is real ``xcb`` /
+``x11`` (same selection as ``click_through.platform_backend_name``).
+Under ``offscreen`` / Wayland / unsupported plugins the helpers no-op so
+CI and headless tests never feed a fake ``winId()`` into XShape.
 """
 from __future__ import annotations
 
 import math
-import sys
 from typing import Optional
 
 from meapet.config.store import (
     DEFAULT_LIVE2D_WINDOW_MASK,
     normalize_live2d_window_mask,
 )
+from meapet.desktop.click_through import platform_backend_name
 from meapet.utils import safe_print
 
 
@@ -91,6 +96,21 @@ def ellipse_scanline_rects(
     return rects or [(left, top, box_w, box_h)]
 
 
+def _shape_backend(
+    platform_name: Optional[str] = None,
+    platform: Optional[str] = None,
+) -> str:
+    """Resolve native shape backend: win32 | x11 | none.
+
+    ``platform_name`` is preferred (Qt name / backend override). ``platform``
+    is kept as a thin alias for older callers; nothing in-repo currently
+    passes either.
+    """
+    return platform_backend_name(
+        platform_name if platform_name is not None else platform
+    )
+
+
 def apply_ellipse_window_shape(
     hwnd: int,
     width: int,
@@ -98,6 +118,7 @@ def apply_ellipse_window_shape(
     params: dict | None = None,
     *,
     dpr: float = 1.0,
+    platform_name: Optional[str] = None,
     platform: Optional[str] = None,
 ) -> bool:
     """Clip native top-level window to the Live2D ellipse. Return True on success."""
@@ -105,10 +126,10 @@ def apply_ellipse_window_shape(
     if handle <= 0 or width <= 0 or height <= 0:
         return False
 
-    plat = (platform or sys.platform).lower()
-    if plat.startswith("win"):
+    backend = _shape_backend(platform_name, platform)
+    if backend == "win32":
         return _apply_win32_ellipse(handle, width, height, params, dpr=dpr)
-    if plat.startswith("linux"):
+    if backend == "x11":
         return _apply_x11_ellipse(handle, width, height, params, dpr=dpr)
     return False
 
@@ -118,6 +139,7 @@ def clear_window_shape(
     *,
     width: int = 0,
     height: int = 0,
+    platform_name: Optional[str] = None,
     platform: Optional[str] = None,
 ) -> bool:
     """Remove native window shape (full rectangular client area)."""
@@ -125,10 +147,10 @@ def clear_window_shape(
     if handle <= 0:
         return False
 
-    plat = (platform or sys.platform).lower()
-    if plat.startswith("win"):
+    backend = _shape_backend(platform_name, platform)
+    if backend == "win32":
         return _clear_win32(handle)
-    if plat.startswith("linux"):
+    if backend == "x11":
         return _clear_x11(handle, width=width, height=height)
     return False
 

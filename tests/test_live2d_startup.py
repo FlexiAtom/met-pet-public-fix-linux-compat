@@ -480,6 +480,102 @@ class Live2DStartupTests(unittest.TestCase):
         self.assertEqual(kwargs.get("width"), 200)
         self.assertEqual(kwargs.get("height"), 300)
 
+    def test_os_window_shape_skipped_on_offscreen_backend(self) -> None:
+        from meapet.desktop import window_shape
+
+        with (
+            mock.patch.object(window_shape, "_apply_x11_ellipse") as apply_x11,
+            mock.patch.object(window_shape, "_clear_x11") as clear_x11,
+            mock.patch.object(window_shape, "_load_x11") as load_x11,
+            mock.patch.object(window_shape, "_apply_win32_ellipse") as apply_win,
+            mock.patch.object(window_shape, "_clear_win32") as clear_win,
+        ):
+            ok_apply = window_shape.apply_ellipse_window_shape(
+                12345,
+                100,
+                200,
+                platform_name="offscreen",
+            )
+            ok_clear = window_shape.clear_window_shape(
+                12345,
+                width=100,
+                height=200,
+                platform_name="offscreen",
+            )
+            ok_wayland = window_shape.apply_ellipse_window_shape(
+                12345,
+                100,
+                200,
+                platform_name="wayland",
+            )
+
+        self.assertFalse(ok_apply)
+        self.assertFalse(ok_clear)
+        self.assertFalse(ok_wayland)
+        apply_x11.assert_not_called()
+        clear_x11.assert_not_called()
+        load_x11.assert_not_called()
+        apply_win.assert_not_called()
+        clear_win.assert_not_called()
+
+    def test_os_window_shape_uses_x11_when_backend_x11(self) -> None:
+        from meapet.desktop import window_shape
+
+        with (
+            mock.patch.object(
+                window_shape, "_apply_x11_ellipse", return_value=True
+            ) as apply_x11,
+            mock.patch.object(
+                window_shape, "_clear_x11", return_value=True
+            ) as clear_x11,
+        ):
+            ok_apply = window_shape.apply_ellipse_window_shape(
+                12345,
+                100,
+                200,
+                platform_name="xcb",
+            )
+            ok_clear = window_shape.clear_window_shape(
+                12345,
+                width=100,
+                height=200,
+                platform_name="x11",
+            )
+
+        self.assertTrue(ok_apply)
+        self.assertTrue(ok_clear)
+        apply_x11.assert_called_once()
+        clear_x11.assert_called_once()
+
+    def test_os_window_shape_uses_win32_when_backend_win32(self) -> None:
+        from meapet.desktop import window_shape
+
+        with (
+            mock.patch.object(
+                window_shape, "_apply_win32_ellipse", return_value=True
+            ) as apply_win,
+            mock.patch.object(
+                window_shape, "_clear_win32", return_value=True
+            ) as clear_win,
+        ):
+            ok_apply = window_shape.apply_ellipse_window_shape(
+                12345,
+                100,
+                200,
+                platform_name="win32",
+            )
+            ok_clear = window_shape.clear_window_shape(
+                12345,
+                width=100,
+                height=200,
+                platform_name="windows",
+            )
+
+        self.assertTrue(ok_apply)
+        self.assertTrue(ok_clear)
+        apply_win.assert_called_once()
+        clear_win.assert_called_once()
+
     def test_apply_hit_region_sets_os_ellipse_shape(self) -> None:
         host = self._host("")
         host._use_live2d = True
