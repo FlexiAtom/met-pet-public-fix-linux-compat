@@ -385,7 +385,7 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(seen["url"], "https://models.example.test/v1/responses")
-        # 实际请求体包含 "think": False（由 _responses_spec 注入）
+        # OpenAI Responses 不使用 Ollama 风格的 think 字段
         self.assertEqual(
             seen["body"],
             {
@@ -397,7 +397,6 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
                 "temperature": 0.35,
                 "max_output_tokens": 777,
                 "stream": True,
-                "think": False,
             },
         )
         self.assertEqual(

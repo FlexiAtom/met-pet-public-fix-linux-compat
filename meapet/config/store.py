@@ -72,25 +72,51 @@ DEFAULT_MIMO_API_BASE = "https://api.xiaomimimo.com/v1"
 _ENV_PLACEHOLDERS = ("", "$ENV", "${ENV}", "env", "ENV")
 
 
+def _endpoint_family_from_text(text: object) -> str:
+    """对单个地址字符串做能力族识别；空串或未识别返回 ""。"""
+    value = str(text or "").strip().lower()
+    if not value:
+        return ""
+    if "xiaomimimo" in value or "mimo.mi.com" in value:
+        return "mimo"
+    if "anthropic" in value:
+        return "anthropic"
+    if "deepseek" in value:
+        return "deepseek"
+    if "11434" in value or "localhost" in value or "127.0.0.1" in value:
+        return "ollama"
+    if "openai.com" in value:
+        return "openai"
+    return ""
+
+
 def detect_endpoint_family(*parts: object) -> str:
     """从 API 地址识别能力族（仅用于协议/密钥/联动，不写入 provider）。
 
+    按参数优先级逐个判断，不拼接：云厂商命中立即返回；loopback/ollama
+    信号最弱，不能压过前面已出现的非空自定义 api_base（否则 ChatEngine
+    默认 host=127.0.0.1:11434 会把所有云端 endpoint 误判成 ollama）。
+
     返回: ollama | mimo | deepseek | anthropic | openai | ""
     """
-    text = " ".join(str(p or "").strip().lower() for p in parts).strip()
-    if not text:
+    saw_unrecognized = False
+    ollama_fallback = ""
+    for part in parts:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        family = _endpoint_family_from_text(text)
+        if family == "ollama":
+            if not ollama_fallback:
+                ollama_fallback = "ollama"
+            continue
+        if family:
+            return family
+        # 非空但未识别（自定义 OpenAI 兼容地址等）：保留为强于默认 host 的信号
+        saw_unrecognized = True
+    if saw_unrecognized:
         return ""
-    if "xiaomimimo" in text or "mimo.mi.com" in text:
-        return "mimo"
-    if "anthropic" in text:
-        return "anthropic"
-    if "deepseek" in text:
-        return "deepseek"
-    if "11434" in text or "localhost" in text or "127.0.0.1" in text:
-        return "ollama"
-    if "openai.com" in text:
-        return "openai"
-    return ""
+    return ollama_fallback
 
 
 def normalize_direct_provider(provider: object = None) -> str:
@@ -132,10 +158,11 @@ def llm_endpoint_family(llm_cfg: Optional[dict] = None) -> str:
     """
     llm = llm_cfg or {}
     direct = llm.get("direct") if isinstance(llm.get("direct"), dict) else {}
+    # api_base 优先于 legacy host，避免默认 127.0.0.1:11434 覆盖云端地址
     family = detect_endpoint_family(
         direct.get("api_base"),
-        direct.get("host"),
         llm.get("api_base"),
+        direct.get("host"),
         llm.get("host"),
     )
     if family:

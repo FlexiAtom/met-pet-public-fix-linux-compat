@@ -169,7 +169,7 @@ class TestProviderKeyIsolation(unittest.TestCase):
             )
 
     def test_infer_direct_protocol_from_endpoint_url(self):
-        from meapet.config.store import infer_direct_protocol
+        from meapet.config.store import detect_endpoint_family, infer_direct_protocol
 
         self.assertEqual(
             infer_direct_protocol(api_base="http://127.0.0.1:11434"),
@@ -182,6 +182,25 @@ class TestProviderKeyIsolation(unittest.TestCase):
         self.assertEqual(
             infer_direct_protocol(api_base="https://api.deepseek.com"),
             "openai_chat",
+        )
+        # 默认 Ollama host 不得覆盖已设置的云端 / 自定义 api_base
+        self.assertEqual(
+            infer_direct_protocol(
+                api_base="https://api.example.com/v1",
+                host="http://127.0.0.1:11434",
+            ),
+            "openai_chat",
+        )
+        self.assertEqual(
+            infer_direct_protocol(api_base="", host="http://127.0.0.1:11434"),
+            "ollama_chat",
+        )
+        self.assertEqual(
+            detect_endpoint_family(
+                "https://api.xiaomimimo.com/v1",
+                "http://127.0.0.1:11434",
+            ),
+            "mimo",
         )
 
 

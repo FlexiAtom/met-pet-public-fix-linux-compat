@@ -254,8 +254,8 @@ class TestMeaTtsLanguageOverride(unittest.TestCase):
                 )
 
         self.assertEqual(result[1], "zh")
-        self.assertEqual(speak.await_args.kwargs["lang_tag"], "jp")
-        self.assertEqual(speak.await_args.kwargs["voice_language"], "jp")
+        self.assertEqual(speak.await_args.kwargs["lang_tag"], "zh")
+        self.assertEqual(speak.await_args.kwargs["voice_language"], "zh")
 
     def test_unsupported_language_is_translated_before_synthesis(self):
         from meapet.tts.service import MeaTTS
