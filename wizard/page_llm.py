@@ -28,6 +28,14 @@ from wizard.widgets import WheelSafeComboBox
 from meapet.config.providers import CUSTOM_ID, all_presets, preset_by_id
 
 
+# 查询模型列表时使用的 UA。不少网关（Cloudflare 等）会 403 掉无 UA 的请求。
+_MODELS_USER_AGENT = "MeaPet/1.0 (+https://github.com/suan-11/mea-pet-public)"
+# 自定义头不得篡改鉴权与协议语义。
+_FETCH_PROTECTED_HEADERS = frozenset(
+    {"authorization", "x-api-key", "anthropic-version", "accept", "user-agent"}
+)
+
+
 def _normalize_base_url(url: str) -> str:
     """Strip common chat endpoint suffixes so /models can be appended."""
     lowered = url.strip().lower()
@@ -53,6 +61,8 @@ class LLMPage(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._fetch_running = False
+        # 已保存配置里的自定义请求头（未选预设时原样保留，不因重开向导丢失）
+        self._custom_headers: dict = {}
         self.setObjectName("PageCard")
         self.setStyleSheet(STYLE_PAGE_CARD)
         layout = QVBoxLayout(self)
@@ -333,83 +343,98 @@ class LLMPage(QFrame):
         self.fetch_models_btn.setEnabled(False)
         set_status(self.models_fetch_status, "warning", "正在获取模型列表...")
         api_key = self.direct_api_key_input.text().strip()
+        preset = self._selected_preset()
+        # 协议决定鉴权头形式；未选预设时按地址推断，保证与真正发起对话时一致。
+        if preset is not None:
+            protocol = preset.protocol
+            extra_headers = preset.headers_dict
+        else:
+            from meapet.config.store import infer_direct_protocol
+            protocol = infer_direct_protocol("custom", api_base=base_url, host="")
+            extra_headers = {}
         thread = threading.Thread(
             target=self._fetch_models_worker,
-            args=(base_url, api_key),
+            args=(base_url, api_key, protocol, extra_headers),
             name="meapet-wizard-fetch-models",
             daemon=True,
         )
         thread.start()
 
-    def _fetch_models_worker(self, base_url: str, api_key: str) -> None:
-        """Background worker: try GET /v1/models only. No Ollama fallback."""
-        names = []
+    def _fetch_models_worker(
+        self,
+        base_url: str,
+        api_key: str,
+        protocol: str = "openai_chat",
+        extra_headers: dict | None = None,
+    ) -> None:
+        """后台线程：按供应商协议查询可用模型列表。
+
+        鉴权头必须与真正发起对话时一致（Anthropic 用 x-api-key + anthropic-version，
+        其余用 Authorization: Bearer），否则这里测得通/不通都没有参考价值。
+        另外必须带 User-Agent：不少网关（Cloudflare 等）会直接 403 掉没有 UA 的请求。
+        """
+        names: list[str] = []
         error = ""
 
-        # Normalize the base URL — strip common chat suffixes
-        norm_url = _normalize_base_url(base_url)
+        headers = {
+            "Accept": "application/json",
+            # 缺省 UA 会被 Cloudflare 之类的防护规则拦成 403（error code 1010）。
+            "User-Agent": _MODELS_USER_AGENT,
+        }
+        for key, value in (extra_headers or {}).items():
+            name = str(key or "").strip()
+            if name and name.lower() not in _FETCH_PROTECTED_HEADERS:
+                headers[name] = str(value)
+        # $VAR 占位符在向导里无法解析，视作未填写（仍尝试匿名查询）。
+        usable_key = api_key if api_key and not api_key.startswith("$") else ""
+        if usable_key:
+            if protocol == "anthropic_messages":
+                headers["x-api-key"] = usable_key
+                headers["anthropic-version"] = "2023-06-01"
+            else:
+                headers["Authorization"] = f"Bearer {usable_key}"
 
-        # Build headers with optional auth
-        headers = {}
-        if api_key and not api_key.startswith("$"):
-            if api_key.startswith("sk-") or "Bearer" not in headers:
-                headers["Authorization"] = f"Bearer {api_key}"
+        if protocol == "ollama_chat":
+            # Ollama 原生接口列的是本地已 pull 的模型。
+            url = urljoin(_normalize_base_url(base_url), "api/tags")
+        else:
+            url = urljoin(_normalize_base_url(base_url), "models")
 
-        # Try OpenAI-compatible /v1/models
         try:
-            url = urljoin(norm_url, "models")
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                if isinstance(data, dict):
-                    models_raw = data.get("data") or data.get("models") or []
-                    if isinstance(models_raw, list):
-                        names = [
-                            m.get("id") or m.get("name") or ""
-                            for m in models_raw
-                            if isinstance(m, dict)
-                        ]
-                        names = [n for n in names if n]
+            if isinstance(data, dict):
+                models_raw = data.get("data") or data.get("models") or []
+                if isinstance(models_raw, list):
+                    names = [
+                        str(m.get("id") or m.get("name") or "")
+                        for m in models_raw
+                        if isinstance(m, dict)
+                    ]
+                    names = [n for n in names if n]
         except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "replace")[:100].strip()
+            except Exception:
+                pass
             if e.code in (401, 403):
-                error = f"需要鉴权（HTTP {e.code}），请填写有效的 API Key 后重试"
+                error = (
+                    f"鉴权或访问被拒（HTTP {e.code}）。请检查 API Key 是否正确"
+                    f"、是否有权访问该地址。{('服务端返回：' + body) if body else ''}"
+                )
+            elif e.code == 404:
+                error = (
+                    f"接口不存在（HTTP 404）：{url}。"
+                    "请确认 API 地址填的是基础地址（通常以 /v1 结尾）。"
+                )
             else:
-                error = f"HTTP {e.code}: {e.reason}"
+                error = f"HTTP {e.code}: {e.reason}{('；' + body) if body else ''}"
         except urllib.error.URLError as e:
             error = f"连接失败：{e.reason}"
         except Exception as e:
             error = str(e)[:120] or type(e).__name__
-
-        # If /v1/models failed with auth error and we have a key, retry with it
-        if not names and error and "需要鉴权" in error and api_key:
-            error = ""
-            try:
-                url = urljoin(norm_url, "models")
-                auth_headers = dict(headers)
-                if "Authorization" not in auth_headers and not api_key.startswith("$"):
-                    auth_headers["Authorization"] = f"Bearer {api_key}"
-                req = urllib.request.Request(url, headers=auth_headers)
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    if isinstance(data, dict):
-                        models_raw = data.get("data") or data.get("models") or []
-                        if isinstance(models_raw, list):
-                            names = [
-                                m.get("id") or m.get("name") or ""
-                                for m in models_raw
-                                if isinstance(m, dict)
-                            ]
-                            names = [n for n in names if n]
-                if names:
-                    error = ""
-            except urllib.error.HTTPError as e:
-                error = f"需要鉴权（HTTP {e.code}），请填写有效的 API Key 后重试"
-            except urllib.error.URLError as e:
-                error = f"连接失败：{e.reason}"
-            except Exception as e:
-                error = str(e)[:120] or type(e).__name__
-
-        # 改：移除 Ollama /api/tags fallback
 
         if not names and not error:
             error = "未能获取到模型列表，请检查地址是否正确。也可手动输入模型名称。"
@@ -468,6 +493,7 @@ class LLMPage(QFrame):
             # 这样 LM Studio 这类本地 OpenAI 兼容服务不会被
             # 「localhost → ollama」的宽泛推断规则误判。
             protocol = preset.protocol
+            headers = preset.headers_dict
         else:
             # provider 恒为 custom；协议按 API 地址自动识别（Ollama→ollama_chat 等）
             protocol = infer_direct_protocol(
@@ -475,7 +501,8 @@ class LLMPage(QFrame):
                 api_base=endpoint,
                 host="",
             )
-        return {
+            headers = dict(self._custom_headers)
+        profile = {
             "provider": "custom",
             "protocol": protocol,
             "api_base": endpoint,
@@ -485,6 +512,9 @@ class LLMPage(QFrame):
             "temperature": self.temperature_input.value(),
             "max_tokens": self.max_tokens_input.value(),
         }
+        if headers:
+            profile["headers"] = headers
+        return profile
 
     def apply_direct_profile(self, profile: dict) -> None:
         """Restore form fields from a previously saved profile.
@@ -493,6 +523,12 @@ class LLMPage(QFrame):
         下拉只按已保存的 api_base 回选到对应预设，纯属方便查看与再次编辑。
         """
         profile = profile or {}
+        saved_headers = profile.get("headers")
+        self._custom_headers = (
+            {str(k): str(v) for k, v in saved_headers.items()}
+            if isinstance(saved_headers, dict)
+            else {}
+        )
         endpoint = profile.get("api_base") or profile.get("host") or ""
         self._select_provider_for_endpoint(str(endpoint))
         self.endpoint_input.setText(str(endpoint))

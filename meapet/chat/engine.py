@@ -88,6 +88,7 @@ class ChatEngine:
         bridge_url: str = "http://127.0.0.1:18888",
         max_tokens: int = 4096,
         direct_client=None,
+        extra_headers: dict | None = None,
     ):
         # 身份标签一律 custom；真正分流看 protocol / api_base。
         self.backend = "custom"
@@ -96,6 +97,10 @@ class ChatEngine:
         self.api_key = api_key
         self.api_base = api_base
         self.temperature = temperature
+        # 供应商自定义请求头（llm.direct.headers），透传给直连客户端。
+        self.extra_headers = {
+            str(k): str(v) for k, v in (extra_headers or {}).items()
+        }
         if not protocol:
             from meapet.config.store import infer_direct_protocol
             protocol = infer_direct_protocol(
@@ -190,6 +195,7 @@ class ChatEngine:
                     base_url=self._direct_base_url(),
                     api_key=self.api_key,
                     timeout_seconds=max(300.0, (self.max_tokens / 1000) * 60.0),
+                    extra_headers=self.extra_headers,
                 )
             )
             self._direct_client = client
@@ -1032,6 +1038,9 @@ def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatE
         memory=memory,
         bridge_url=llm_cfg.get("bridge_url", "http://127.0.0.1:18888"),
         max_tokens=direct.get("max_tokens", llm_cfg.get("max_tokens", 4096)),
+        extra_headers=(
+            direct.get("headers") if isinstance(direct.get("headers"), dict) else {}
+        ),
     )
 
 

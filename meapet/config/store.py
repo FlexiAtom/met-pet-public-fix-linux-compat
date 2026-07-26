@@ -574,6 +574,20 @@ def _normalize_llm_contract(value: object) -> dict:
     direct.setdefault("api_key", str(llm.get("api_key") or "").strip())
     direct.setdefault("temperature", llm.get("temperature", 0.7))
     direct.setdefault("max_tokens", llm.get("max_tokens", 4096))
+    # 供应商自定义请求头：只保留字符串键值，非法结构直接丢弃。
+    raw_headers = direct.get("headers")
+    if isinstance(raw_headers, dict):
+        cleaned_headers = {
+            str(k).strip(): str(v)
+            for k, v in raw_headers.items()
+            if str(k or "").strip()
+        }
+        if cleaned_headers:
+            direct["headers"] = cleaned_headers
+        else:
+            direct.pop("headers", None)
+    else:
+        direct.pop("headers", None)
     # 显式 protocol 优先；缺省时按端点地址（再回落旧 provider 标签）推断。
     if not str(direct.get("protocol") or "").strip():
         direct["protocol"] = infer_direct_protocol(

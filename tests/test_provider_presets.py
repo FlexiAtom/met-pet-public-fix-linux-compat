@@ -190,5 +190,121 @@ class WizardPresetSelectorTests(unittest.TestCase):
         self.assertEqual(self.page.provider_combo.currentData(), "deepseek")
 
 
+class ModelFetchRequestTests(unittest.TestCase):
+    """「获取模型列表」的请求构造（不发真实网络请求，只断言 headers/URL）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt5.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from wizard.page_llm import LLMPage
+        from PyQt5.QtWidgets import QApplication
+        self.page = LLMPage()
+        self.addCleanup(QApplication.processEvents)
+        self.addCleanup(self.page.deleteLater)
+
+    def _capture(self, base_url, api_key, protocol, extra=None):
+        """跑一次 worker，截获它构造的 urllib Request。"""
+        import io
+        import json as _json
+        from unittest import mock
+        seen = {}
+
+        class _Resp(io.BytesIO):
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            seen["url"] = req.full_url
+            seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+            return _Resp(_json.dumps({"data": [{"id": "m1"}]}).encode())
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen):
+            self.page._fetch_models_worker(base_url, api_key, protocol, extra or {})
+        return seen
+
+    def test_always_sends_user_agent(self):
+        """无 UA 的请求会被 Cloudflare 等网关 403（error code 1010）拦掉。"""
+        seen = self._capture("https://api.example.com/v1", "sk-x", "openai_chat")
+        self.assertIn("user-agent", seen["headers"])
+        self.assertTrue(seen["headers"]["user-agent"])
+
+    def test_openai_uses_bearer(self):
+        seen = self._capture("https://api.example.com/v1", "sk-x", "openai_chat")
+        self.assertEqual(seen["headers"].get("authorization"), "Bearer sk-x")
+        self.assertNotIn("x-api-key", seen["headers"])
+        self.assertTrue(seen["url"].endswith("/models"))
+
+    def test_anthropic_uses_x_api_key(self):
+        """Anthropic 用 x-api-key + anthropic-version，不是 Bearer。"""
+        seen = self._capture(
+            "https://api.anthropic.com/v1", "sk-ant", "anthropic_messages"
+        )
+        self.assertEqual(seen["headers"].get("x-api-key"), "sk-ant")
+        self.assertEqual(seen["headers"].get("anthropic-version"), "2023-06-01")
+        self.assertNotIn("authorization", seen["headers"])
+
+    def test_ollama_uses_native_tags_endpoint(self):
+        seen = self._capture("http://127.0.0.1:11434", "", "ollama_chat")
+        self.assertTrue(seen["url"].endswith("/api/tags"), seen["url"])
+
+    def test_env_placeholder_key_is_not_sent_as_literal(self):
+        seen = self._capture("https://api.example.com/v1", "$MY_KEY", "openai_chat")
+        self.assertNotIn("authorization", seen["headers"])
+
+    def test_custom_headers_cannot_override_auth(self):
+        seen = self._capture(
+            "https://api.example.com/v1", "sk-x", "openai_chat",
+            {"X-Title": "MeaPet", "Authorization": "Bearer attacker"},
+        )
+        self.assertEqual(seen["headers"].get("authorization"), "Bearer sk-x")
+        self.assertEqual(seen["headers"].get("x-title"), "MeaPet")
+
+
+class ExtraHeaderMergeTests(unittest.TestCase):
+    """direct 客户端的自定义请求头合并规则。"""
+
+    def _spec(self, extra):
+        from meapet.direct.client import (
+            DirectProtocolConfig,
+            _SPEC_BUILDERS,
+            _with_extra_headers,
+        )
+        from meapet.direct.types import CanonicalChatRequest
+        cfg = DirectProtocolConfig(
+            protocol="openai_chat",
+            base_url="https://api.example.com/v1",
+            api_key="sk-real",
+            extra_headers=extra,
+        )
+        req = CanonicalChatRequest(
+            model="m", messages=({"role": "user", "content": "hi"},)
+        )
+        return _with_extra_headers(_SPEC_BUILDERS[cfg.protocol](cfg, req), extra)
+
+    def test_extra_headers_are_added(self):
+        spec = self._spec({"HTTP-Referer": "https://example.com", "X-Title": "MeaPet"})
+        self.assertEqual(spec.headers["X-Title"], "MeaPet")
+        self.assertEqual(spec.headers["HTTP-Referer"], "https://example.com")
+
+    def test_auth_headers_are_protected(self):
+        """自定义头不得覆盖鉴权/协议头，否则一个配置错误就会把密钥发错地方。"""
+        spec = self._spec({
+            "Authorization": "Bearer attacker",
+            "Content-Type": "text/plain",
+            "x-api-key": "leak",
+        })
+        self.assertEqual(spec.headers["Authorization"], "Bearer sk-real")
+        self.assertEqual(spec.headers["Content-Type"], "application/json")
+        self.assertNotIn("x-api-key", spec.headers)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Mapping, Optional
 from urllib.parse import urlsplit, urlunsplit
@@ -70,6 +70,9 @@ class DirectProtocolConfig:
     timeout_seconds: float = 300.0
     verify_tls: bool = True
     ca_file: str = ""
+    # 供应商自定义请求头（如 OpenRouter 的 HTTP-Referer / 网关要求的额外头）。
+    # 与协议自带的鉴权头合并，但不允许覆盖鉴权与 Content-Type（见 _merge_headers）。
+    extra_headers: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         protocol = str(self.protocol or "").strip().lower()
@@ -460,6 +463,27 @@ _SPEC_BUILDERS = {
     "anthropic_messages": _anthropic_spec,
 }
 
+# 自定义头不得篡改鉴权与协议语义（否则一个配置错误就会把密钥发错地方，
+# 或让 SSE 解析失败）。这些头只能由协议自身决定。
+_PROTECTED_HEADERS = frozenset(
+    {"authorization", "x-api-key", "anthropic-version", "content-type", "accept"}
+)
+
+
+def _with_extra_headers(
+    spec: _RequestSpec, extra: Mapping[str, str]
+) -> _RequestSpec:
+    """把供应商自定义头合并进请求；受保护的鉴权/协议头不可被覆盖。"""
+    if not extra:
+        return spec
+    merged = dict(spec.headers)
+    for key, value in extra.items():
+        name = str(key or "").strip()
+        if not name or name.lower() in _PROTECTED_HEADERS:
+            continue
+        merged[name] = str(value)
+    return _RequestSpec(spec.url, merged, spec.body, spec.stream_kind)
+
 
 class DirectProtocolClient:
     def __init__(
@@ -567,7 +591,10 @@ class DirectProtocolClient:
         *,
         attempt: int = 1,
     ) -> AsyncIterator[object]:
-        spec = _SPEC_BUILDERS[self.config.protocol](self.config, request)
+        spec = _with_extra_headers(
+            _SPEC_BUILDERS[self.config.protocol](self.config, request),
+            self.config.extra_headers,
+        )
         client = await self._get_client()
         log.info(
             f"[direct] HTTP 发起 attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS} "

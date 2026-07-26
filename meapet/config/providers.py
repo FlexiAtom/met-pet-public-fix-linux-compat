@@ -32,6 +32,10 @@ class ProviderPreset:
     requires_key  是否需要 API Key（本地推理如 Ollama 不需要）。
     models        该厂商常见模型 ID（首个作为选中预设时的默认模型）；
                   聚合/本地供应商无固定清单时留空，交由「获取模型列表」或手填。
+    headers       该厂商建议附加的自定义请求头（键值对元组，dataclass 需可哈希）。
+                  鉴权头本身由协议决定（openai/ollama 用 Authorization: Bearer，
+                  anthropic 用 x-api-key + anthropic-version），此处只放额外头，
+                  例如 OpenRouter 用于统计来源的 HTTP-Referer / X-Title。
     note          UI 提示（例如"填你的部署地址"）。
     """
 
@@ -43,11 +47,16 @@ class ProviderPreset:
     url_signatures: Tuple[str, ...] = ()
     requires_key: bool = True
     models: Tuple[str, ...] = ()
+    headers: Tuple[Tuple[str, str], ...] = ()
     note: str = ""
 
     @property
     def default_model(self) -> str:
         return self.models[0] if self.models else ""
+
+    @property
+    def headers_dict(self) -> dict:
+        return {str(k): str(v) for k, v in self.headers}
 
     @property
     def family_env_keys(self) -> Tuple[str, ...]:
@@ -127,6 +136,9 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
     ProviderPreset(
         "openrouter", "OpenRouter", "https://openrouter.ai/api/v1",
         env_keys=("OPENROUTER_API_KEY",), url_signatures=("openrouter.ai",),
+        # OpenRouter 用这两个头标记调用来源，缺失不影响可用性。
+        headers=(("HTTP-Referer", "https://github.com/suan-11/mea-pet-public"),
+                 ("X-Title", "MeaPet")),
         note="聚合多家模型，模型 ID 形如 openai/gpt-4o，点「获取模型列表」查看。",
     ),
     ProviderPreset(
