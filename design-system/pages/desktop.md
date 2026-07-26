@@ -31,6 +31,13 @@
 - 确认窗口按当前范围自适应高度；全屏模式不为已隐藏的区域/应用表单保留空白占位。
 - 云端路径必须同时满足 `watcher.allow_cloud`。
 
+## Context menu
+
+- 桌宠右键菜单是独立顶层窗口（`meapet/desktop/menu_window.py`），不是 popup：失焦不自动关闭，可拖动标题栏或空白处移动到任意位置。
+- 菜单结构与文案仍由 `_build_context_menu()` 的 `QMenu` 定义；分组在窗口内就地折叠/展开，不弹出二级菜单。
+- 关闭方式：关闭按钮、Esc、在菜单上右键；点击任一菜单项后自动关闭并执行动作。
+- 托盘菜单保持原生 `QMenu`。
+
 ## Icons
 
 系统操作使用 `meapet/desktop/icons.py` 的 Qt 标准图标；emoji 仅作心情点缀。

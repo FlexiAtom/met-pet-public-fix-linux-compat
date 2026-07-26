@@ -106,6 +106,10 @@ class PetWindowChromeMixin:
 
     def _quit(self):
         safe_print("[pet] quitting by user/menu…")
+        try:
+            self._close_menu_window()
+        except Exception:
+            pass
         stop_control = getattr(self, "_stop_control", None)
         if callable(stop_control):
             try:
@@ -462,15 +466,38 @@ class PetWindowChromeMixin:
         return menu
 
     def _show_context_menu(self, pos):
+        """以独立可拖动窗口的形式打开右键菜单。"""
         # 待机穿透重开菜单与 Qt CustomContextMenu 可能叠到同一次右键，避免重入。
         if getattr(self, "_context_menu_executing", False):
             return
         self._context_menu_executing = True
         try:
+            self._close_menu_window()
+            from meapet.desktop.menu_window import PetMenuWindow
+
             menu = self._build_context_menu()
-            menu.exec_(self.mapToGlobal(pos))
+            window = PetMenuWindow(menu, self)
+            self._menu_window = window
+            window.show_at(self.mapToGlobal(pos))
+        except Exception as exc:
+            safe_print(f"[menu] 打开菜单窗口失败: {type(exc).__name__}: {exc}")
         finally:
             self._context_menu_executing = False
+
+    def _close_menu_window(self) -> None:
+        """关闭并释放上一次的菜单窗口（含其源 QMenu）。"""
+        window = getattr(self, "_menu_window", None)
+        self._menu_window = None
+        if window is None:
+            return
+        try:
+            source = getattr(window, "_source_menu", None)
+            window.close()
+            window.deleteLater()
+            if source is not None:
+                source.deleteLater()
+        except Exception:
+            pass
 
     def _show_status_panel(self):
         from meapet.desktop.status_panel import StatusPanel

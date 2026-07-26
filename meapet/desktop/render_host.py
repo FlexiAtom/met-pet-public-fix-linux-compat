@@ -917,7 +917,7 @@ class PetRenderHostMixin:
         detector = getattr(self, "_standby_rc_detector", None)
         if detector is not None:
             detector.was_down = True
-        # Temporarily disable native pass-through so the menu is clickable.
+        # Temporarily disable native pass-through so the menu can take the click.
         self._set_standby_click_through(False)
         try:
             show_menu = getattr(self, "_show_context_menu", None)
@@ -925,6 +925,8 @@ class PetRenderHostMixin:
                 show_menu(local_pos)
         finally:
             self._standby_menu_open = False
+            # 菜单现在是独立顶层窗口（非阻塞 popup），本体可以立即恢复穿透，
+            # 菜单窗口自身不穿透，依然可以点击和拖动。
             # Only re-enable if still in standby (user may have left via menu).
             if getattr(self, "_standby", False):
                 self._set_standby_click_through(True)

@@ -17,7 +17,7 @@ from PyQt5.QtCore import (  # noqa: E402
     QSize,
     Qt,
 )
-from PyQt5.QtGui import QKeyEvent, QPainterPath  # noqa: E402
+from PyQt5.QtGui import QKeyEvent, QMouseEvent, QPainterPath  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QAbstractButton,
@@ -1120,7 +1120,7 @@ class UiRefactorTests(unittest.TestCase):
                     (expected_side, expected_anchor),
                 )
 
-    def test_context_menu_groups_secondary_actions_into_submenus(self) -> None:
+    def _make_menu_host(self):
         from meapet.desktop.window_chrome import PetWindowChromeMixin
 
         class MenuHost(QWidget, PetWindowChromeMixin):
@@ -1133,9 +1133,10 @@ class UiRefactorTests(unittest.TestCase):
                 }
                 self._standby = False
                 self._use_live2d = False
+                self.moods = []
 
-            def _safe_set_mood(self, _mood):
-                pass
+            def _safe_set_mood(self, mood):
+                self.moods.append(mood)
 
             def _set_vision_backend(self, _backend):
                 pass
@@ -1158,7 +1159,25 @@ class UiRefactorTests(unittest.TestCase):
             def _do_screen_watch(self, force=False):
                 pass
 
-        host = self._track(MenuHost())
+            def _show_status_panel(self):
+                pass
+
+            def _show_timeline(self):
+                pass
+
+            def _reset_memory(self):
+                pass
+
+            def _reopen_setup_wizard(self):
+                pass
+
+            def _quit(self):
+                pass
+
+        return self._track(MenuHost())
+
+    def test_context_menu_groups_secondary_actions_into_submenus(self) -> None:
+        host = self._make_menu_host()
         menu = self._track(host._build_context_menu())
         self.assertIsInstance(menu, QMenu)
         root_labels = [
@@ -1187,6 +1206,76 @@ class UiRefactorTests(unittest.TestCase):
             submenu_labels,
             {"切换表情", "识图与观察", "显示与立绘", "设置与数据"},
         )
+
+    def test_context_menu_opens_as_movable_standalone_window(self) -> None:
+        from meapet.desktop.menu_window import PetMenuWindow
+
+        host = self._make_menu_host()
+        host.show()
+        host._show_context_menu(QPoint(20, 20))
+        window = self._track(host._menu_window)
+        self.assertIsInstance(window, PetMenuWindow)
+        # 独立顶层窗口，而不是依附桌宠的 popup。
+        self.assertTrue(window.isWindow())
+        self.assertTrue(window.isVisible())
+        flags = int(window.windowFlags())
+        # Qt.Tool（工具窗口）而不是 Qt.Popup（弹出即抓取输入、失焦自关）。
+        self.assertEqual(flags & int(Qt.WindowType_Mask), int(Qt.Tool))
+        self.assertTrue(flags & int(Qt.FramelessWindowHint))
+        self.assertTrue(flags & int(Qt.WindowStaysOnTopHint))
+
+        # 根层动作与分组与 QMenu 结构一致。
+        self.assertEqual(
+            [title for _button, _body, title in window._groups],
+            ["切换表情", "识图与观察", "显示与立绘", "设置与数据"],
+        )
+        self.assertIn("退出", [b.text() for b, _a in window._action_buttons])
+
+        # 拖动窗口：按住空白处移动即可改变位置。
+        start = window.pos()
+        window.mousePressEvent(
+            QMouseEvent(
+                QEvent.MouseButtonPress,
+                QPoint(10, 6),
+                window.mapToGlobal(QPoint(10, 6)),
+                Qt.LeftButton,
+                Qt.LeftButton,
+                Qt.NoModifier,
+            )
+        )
+        window.mouseMoveEvent(
+            QMouseEvent(
+                QEvent.MouseMove,
+                QPoint(70, 66),
+                window.mapToGlobal(QPoint(70, 66)),
+                Qt.NoButton,
+                Qt.LeftButton,
+                Qt.NoModifier,
+            )
+        )
+        self.assertEqual(window.pos() - start, QPoint(60, 60))
+
+        # 分组就地展开，不再弹出二级 popup。
+        toggle, body, _title = window._groups[0]
+        self.assertFalse(body.isVisible())
+        toggle.click()
+        QApplication.processEvents()
+        self.assertTrue(body.isVisible())
+
+    def test_context_menu_window_item_triggers_action_and_closes(self) -> None:
+        host = self._make_menu_host()
+        host.show()
+        host._show_context_menu(QPoint(20, 20))
+        window = self._track(host._menu_window)
+        toggle, _body, _title = window._groups[0]
+        toggle.click()
+        QApplication.processEvents()
+
+        button = next(b for b, a in window._action_buttons if a.text() == "开心")
+        button.click()
+        QApplication.processEvents()
+        self.assertFalse(window.isVisible())
+        self.assertEqual(host.moods, ["happy"])
 
     def test_context_menu_uses_readable_type_and_row_height(self) -> None:
         from meapet.desktop.theme import MENU_STYLE
