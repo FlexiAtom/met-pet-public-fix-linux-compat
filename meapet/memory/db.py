@@ -1071,9 +1071,14 @@ class MeaMemory:
             )
             ids = [r["id"] for r in c.fetchall()]
             if not ids:
-                # 重要度裁剪不够，直接按 last_recalled 裁
+                # 重要度裁剪不够，直接按 last_recalled 裁。
+                # 此处无 importance 前置条件，type_expr 的 "AND ..." 不能直接拼，
+                # 否则得到 "FROM memories AND ..." 的语法错，需改用独立 WHERE。
+                where_expr = ""
+                if avoid_type:
+                    where_expr = f"WHERE memory_type NOT IN ({placeholders})"
                 c.execute(
-                    f"SELECT id FROM memories {type_expr if avoid_type else ''} "
+                    f"SELECT id FROM memories {where_expr} "
                     f"ORDER BY last_recalled ASC, id ASC LIMIT ?",
                     params + [excess],
                 )
