@@ -278,18 +278,29 @@ class LLMPage(QFrame):
         return preset_by_id(self.provider_combo.currentData() or CUSTOM_ID)
 
     def _on_provider_changed(self, _index: int) -> None:
-        """选中预设时填入其 API 地址，并给出密钥提示。"""
+        """选中预设时填入其 API 地址与默认模型，并给出密钥提示。"""
         preset = self._selected_preset()
         if preset is None:
             self.provider_hint.setText("")
             return
         if preset.api_base:
             self.endpoint_input.setText(preset.api_base)
+        # 同步模型：用该厂商候选填充下拉，默认选中第一个；
+        # 聚合/本地供应商无固定清单时清空，提示去「获取模型列表」或手填。
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        for model_id in preset.models:
+            self.model_combo.addItem(model_id)
+        self.model_combo.setEditText(preset.default_model)
+        self.model_combo.blockSignals(False)
+        set_status(self.models_fetch_status, "muted", "")
         hints = []
         if not preset.requires_key:
             hints.append("本地服务，无需 API Key。")
         elif preset.env_keys:
             hints.append("也可填 $" + preset.env_keys[0] + " 从环境变量读取。")
+        if not preset.models:
+            hints.append("该服务商模型较多，点「获取模型列表」或手填模型名。")
         if preset.note:
             hints.append(preset.note)
         self.provider_hint.setText(" ".join(hints))

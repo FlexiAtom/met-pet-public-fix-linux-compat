@@ -51,6 +51,21 @@ class ProviderPresetRegistryTests(unittest.TestCase):
         self.assertIsNone(preset_by_id("nope"))
         self.assertEqual(preset_by_id("deepseek").name, "DeepSeek 深度求索")
 
+    def test_major_providers_have_default_model(self):
+        # 有固定模型清单的主流厂商，切换预设时应能给出默认模型
+        for pid, want in (
+            ("openai", "gpt-4o-mini"),
+            ("deepseek", "deepseek-chat"),
+            ("anthropic", "claude-3-5-sonnet-latest"),
+            ("qwen", "qwen-plus"),
+        ):
+            with self.subTest(provider=pid):
+                p = preset_by_id(pid)
+                self.assertEqual(p.default_model, want)
+                self.assertEqual(p.models[0], want)
+        # 聚合/本地供应商可以没有固定清单
+        self.assertEqual(preset_by_id("openrouter").default_model, "")
+
     def test_detect_preset_by_url(self):
         cases = {
             "https://api.moonshot.cn/v1": "moonshot",
@@ -110,6 +125,69 @@ class StoreIntegrationTests(unittest.TestCase):
             infer_direct_protocol("custom", api_base="http://127.0.0.1:11434"),
             PROTO_OLLAMA,
         )
+
+
+class WizardPresetSelectorTests(unittest.TestCase):
+    """向导 LLM 页的预设选择器行为（离屏 Qt）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt5.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from wizard.page_llm import LLMPage
+        from PyQt5.QtWidgets import QApplication
+        self.page = LLMPage()
+        # 显式管理生命周期，避免整套件同进程运行时裸 widget 被中途 GC
+        # 触发 PyQt5 的原生 teardown 崩溃。
+        self.addCleanup(QApplication.processEvents)
+        self.addCleanup(self.page.deleteLater)
+
+    def _select(self, preset_id: str):
+        idx = next(
+            i for i in range(self.page.provider_combo.count())
+            if self.page.provider_combo.itemData(i) == preset_id
+        )
+        self.page.provider_combo.setCurrentIndex(idx)
+
+    def test_selecting_preset_fills_endpoint_and_model(self):
+        self._select("anthropic")
+        self.assertEqual(
+            self.page.endpoint_input.text(), "https://api.anthropic.com/v1"
+        )
+        # 关键：模型不再残留 OpenAI 的 gpt-4o-mini，而是 Anthropic 默认模型
+        self.assertEqual(
+            self.page.model_combo.currentText(), "claude-3-5-sonnet-latest"
+        )
+        profile = self.page.collect_direct_profile()
+        self.assertEqual(profile["provider"], "custom")
+        self.assertEqual(profile["protocol"], "anthropic_messages")
+        self.assertEqual(profile["model"], "claude-3-5-sonnet-latest")
+
+    def test_switching_between_presets_updates_model(self):
+        for pid, want_url, want_model in (
+            ("deepseek", "https://api.deepseek.com/v1", "deepseek-chat"),
+            ("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+            ("openai", "https://api.openai.com/v1", "gpt-4o-mini"),
+        ):
+            self._select(pid)
+            self.assertEqual(self.page.endpoint_input.text(), want_url)
+            self.assertEqual(self.page.model_combo.currentText(), want_model)
+
+    def test_restore_saved_profile_keeps_saved_model(self):
+        """apply_direct_profile 回选下拉时不得覆写用户已存的模型。"""
+        self.page.apply_direct_profile({
+            "api_base": "https://api.deepseek.com/v1",
+            "model": "deepseek-reasoner",
+        })
+        self.assertEqual(
+            self.page.endpoint_input.text(), "https://api.deepseek.com/v1"
+        )
+        self.assertEqual(self.page.model_combo.currentText(), "deepseek-reasoner")
+        self.assertEqual(self.page.provider_combo.currentData(), "deepseek")
 
 
 if __name__ == "__main__":

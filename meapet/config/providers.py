@@ -30,6 +30,8 @@ class ProviderPreset:
     env_keys      该厂商 API Key 的常见环境变量名（含中立的 MEAPET_API_KEY 兜底）。
     url_signatures 地址中出现即可判定为本供应商的子串（供 store 反查 family）。
     requires_key  是否需要 API Key（本地推理如 Ollama 不需要）。
+    models        该厂商常见模型 ID（首个作为选中预设时的默认模型）；
+                  聚合/本地供应商无固定清单时留空，交由「获取模型列表」或手填。
     note          UI 提示（例如"填你的部署地址"）。
     """
 
@@ -40,7 +42,12 @@ class ProviderPreset:
     env_keys: Tuple[str, ...] = ()
     url_signatures: Tuple[str, ...] = ()
     requires_key: bool = True
+    models: Tuple[str, ...] = ()
     note: str = ""
+
+    @property
+    def default_model(self) -> str:
+        return self.models[0] if self.models else ""
 
     @property
     def family_env_keys(self) -> Tuple[str, ...]:
@@ -56,43 +63,56 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
     ProviderPreset(
         "openai", "OpenAI", "https://api.openai.com/v1",
         env_keys=("OPENAI_API_KEY",), url_signatures=("api.openai.com",),
+        models=("gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "o3-mini"),
     ),
     ProviderPreset(
         "deepseek", "DeepSeek 深度求索", "https://api.deepseek.com/v1",
         env_keys=("DEEPSEEK_API_KEY",), url_signatures=("deepseek.com",),
+        models=("deepseek-chat", "deepseek-reasoner"),
     ),
     ProviderPreset(
         "anthropic", "Anthropic Claude", "https://api.anthropic.com/v1",
         protocol=PROTO_ANTHROPIC,
         env_keys=("ANTHROPIC_API_KEY",), url_signatures=("api.anthropic.com",),
+        models=(
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-haiku-latest",
+            "claude-3-opus-latest",
+        ),
     ),
     ProviderPreset(
         "gemini", "Google Gemini（OpenAI 兼容）",
         "https://generativelanguage.googleapis.com/v1beta/openai/",
         env_keys=("GEMINI_API_KEY", "GOOGLE_API_KEY"),
         url_signatures=("generativelanguage.googleapis.com",),
+        models=("gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"),
     ),
     ProviderPreset(
         "qwen", "通义千问 Qwen（DashScope 兼容模式）",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
         env_keys=("DASHSCOPE_API_KEY",), url_signatures=("dashscope.aliyuncs.com",),
+        models=("qwen-plus", "qwen-turbo", "qwen-max"),
     ),
     ProviderPreset(
         "zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4",
         env_keys=("ZHIPU_API_KEY", "ZHIPUAI_API_KEY"),
         url_signatures=("open.bigmodel.cn", "bigmodel.cn"),
+        models=("glm-4-plus", "glm-4-flash", "glm-4-air"),
     ),
     ProviderPreset(
         "moonshot", "月之暗面 Kimi（Moonshot）", "https://api.moonshot.cn/v1",
         env_keys=("MOONSHOT_API_KEY",), url_signatures=("moonshot.cn",),
+        models=("moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"),
     ),
     ProviderPreset(
         "xai", "xAI Grok", "https://api.x.ai/v1",
         env_keys=("XAI_API_KEY",), url_signatures=("api.x.ai",),
+        models=("grok-2-latest", "grok-2-vision-latest"),
     ),
     ProviderPreset(
         "minimax", "MiniMax", "https://api.minimaxi.com/v1",
         env_keys=("MINIMAX_API_KEY",), url_signatures=("minimaxi.com",),
+        models=("MiniMax-Text-01", "abab6.5s-chat"),
     ),
     ProviderPreset(
         "mimo", "小米 MiMo", "https://api.xiaomimimo.com/v1",
@@ -102,34 +122,42 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
     ProviderPreset(
         "siliconflow", "SiliconFlow 硅基流动", "https://api.siliconflow.cn/v1",
         env_keys=("SILICONFLOW_API_KEY",), url_signatures=("siliconflow.cn",),
+        note="聚合多家模型，点「获取模型列表」或手填模型 ID。",
     ),
     ProviderPreset(
         "openrouter", "OpenRouter", "https://openrouter.ai/api/v1",
         env_keys=("OPENROUTER_API_KEY",), url_signatures=("openrouter.ai",),
+        note="聚合多家模型，模型 ID 形如 openai/gpt-4o，点「获取模型列表」查看。",
     ),
     ProviderPreset(
         "groq", "Groq", "https://api.groq.com/openai/v1",
         env_keys=("GROQ_API_KEY",), url_signatures=("api.groq.com",),
+        models=("llama-3.3-70b-versatile", "llama-3.1-8b-instant"),
     ),
     ProviderPreset(
         "modelscope", "魔搭 ModelScope", "https://api-inference.modelscope.cn/v1",
         env_keys=("MODELSCOPE_API_KEY",), url_signatures=("modelscope.cn",),
+        note="聚合多家模型，点「获取模型列表」或手填模型 ID。",
     ),
     ProviderPreset(
         "nvidia", "NVIDIA NIM", "https://integrate.api.nvidia.com/v1",
         env_keys=("NVIDIA_API_KEY",), url_signatures=("integrate.api.nvidia.com",),
+        note="模型 ID 形如 meta/llama-3.1-70b-instruct，点「获取模型列表」查看。",
     ),
     ProviderPreset(
         "ai302", "302.AI", "https://api.302.ai/v1",
         env_keys=("AI302_API_KEY",), url_signatures=("api.302.ai",),
+        note="聚合多家模型，点「获取模型列表」或手填模型 ID。",
     ),
     ProviderPreset(
         "ppio", "PPIO 派欧云", "https://api.ppinfra.com/v3/openai",
         env_keys=("PPIO_API_KEY",), url_signatures=("ppinfra.com",),
+        note="聚合多家模型，点「获取模型列表」或手填模型 ID。",
     ),
     ProviderPreset(
         "aihubmix", "AIHubMix", "https://aihubmix.com/v1",
         env_keys=("AIHUBMIX_API_KEY",), url_signatures=("aihubmix.com",),
+        note="聚合多家模型，点「获取模型列表」或手填模型 ID。",
     ),
     ProviderPreset(
         "longcat", "LongCat", "https://api.longcat.chat/openai",
@@ -139,12 +167,12 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
         "ollama", "Ollama（本地）", "http://127.0.0.1:11434",
         protocol=PROTO_OLLAMA, requires_key=False,
         url_signatures=("11434",),
-        note="本地运行的 Ollama，无需 API Key。",
+        note="本地运行的 Ollama，无需 API Key；模型 ID 即你 ollama pull 的名字。",
     ),
     ProviderPreset(
         "lmstudio", "LM Studio（本地）", "http://127.0.0.1:1234/v1",
         requires_key=False, url_signatures=("1234/v1",),
-        note="本地运行的 LM Studio（OpenAI 兼容），无需 API Key。",
+        note="本地运行的 LM Studio（OpenAI 兼容），无需 API Key；点「获取模型列表」。",
     ),
     ProviderPreset(
         "azure", "Azure OpenAI", "",
