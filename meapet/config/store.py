@@ -38,6 +38,7 @@ ENV_LLM_KEY_BY_FAMILY = {
     "deepseek": ("DEEPSEEK_API_KEY", "MEAPET_API_KEY"),
     "mimo": ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY"),
     "openai": ("OPENAI_API_KEY", "MEAPET_API_KEY"),
+    "anthropic": ("ANTHROPIC_API_KEY", "MEAPET_API_KEY"),
 }
 # 旧名兼容：部分测试/调用仍引用 BY_BACKEND。
 ENV_LLM_KEY_BY_BACKEND = ENV_LLM_KEY_BY_FAMILY
@@ -361,11 +362,14 @@ def resolve_direct_api_key(llm_cfg: dict) -> str:
         str(direct.get("host") or "").strip()
         or str(llm_cfg.get("host") or "").strip()
     )
-    env_names = ENV_LLM_KEY
     url_names = _env_names_for_api_base(api_base, host)
     if url_names:
-        # URL 专属 key 优先于通用 OPENAI_API_KEY，避免误用其它厂商密钥。
-        env_names = tuple(dict.fromkeys(url_names + env_names))
+        # 识别出厂商端点：只读该厂商专属变量 + 中立的 MEAPET_API_KEY，
+        # 绝不并入 OPENAI_API_KEY，避免环境里的 OpenAI 密钥压过显式文件密钥
+        # 并被发往 DeepSeek/MiMo/Anthropic 等第三方端点（跨厂商凭据泄露）。
+        env_names = url_names
+    else:
+        env_names = ENV_LLM_KEY
 
     value = resolve_secret(
         str(direct.get("api_key") or ""),
@@ -594,8 +598,14 @@ def _normalize_llm_contract(value: object) -> dict:
         agent_base = default_url
     agent["base_url"] = agent_base
 
-    # api_key：agent.api_key > llm.api_key
-    agent.setdefault("api_key", str(llm.get("api_key") or "").strip())
+    # api_key：agent.api_key > agent.auth_token（旧向导 Bearer Token 迁移）> llm.api_key
+    # 重构后 OpenAIAdapter 只用 agent.api_key 鉴权，而向导后端页仍在收集 auth_token；
+    # 若不迁移，用户填的 Bearer Token 会在下面的 legacy 清理中被静默丢弃。
+    if not str(agent.get("api_key") or "").strip():
+        agent["api_key"] = (
+            str(agent.get("auth_token") or "").strip()
+            or str(llm.get("api_key") or "").strip()
+        )
 
     # model：agent.model > llm.model > direct.model > fallback
     agent_model = str(agent.get("model") or "").strip()
