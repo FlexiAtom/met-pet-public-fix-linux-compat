@@ -282,7 +282,6 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
                 "max_tokens": 777,
                 "stream": True,
                 "stream_options": {"include_usage": True},
-                "think": False,
             },
         )
         # content 为空时 reasoning 兜底到 TextDelta → "private thought你好"

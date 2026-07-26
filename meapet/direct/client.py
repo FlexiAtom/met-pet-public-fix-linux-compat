@@ -337,7 +337,6 @@ def _openai_chat_spec(
         "max_tokens": request.max_tokens,
         "stream": request.stream,
         "stream_options": {"include_usage": True},
-        "think": False,
     }
     if request.response_format is not None:
         body["response_format"] = dict(request.response_format)
