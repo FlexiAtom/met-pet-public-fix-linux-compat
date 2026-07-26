@@ -78,10 +78,10 @@ class PetChatFlowMixin:
                 str(agent.get("session_id") or "pending"),
             )
         else:
-            direct = llm.get("direct") or {}
+            # 直连身份恒为 custom；不再用厂商品牌拆时间线。
             key = ConversationKey(
                 "direct",
-                str(direct.get("provider") or llm.get("backend") or "ollama"),
+                "custom",
                 "local",
             )
         self._conversation_key = key

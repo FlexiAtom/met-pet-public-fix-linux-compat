@@ -81,14 +81,14 @@ Do not ship a developer `config.json` that contains API keys. Only `config.examp
 
 Direct mode lets MeaPet manage character prompts, recent context, SQLite memory, and output constraints. All providers connect via the unified OpenAI-compatible interface.
 
-You configure three things in the wizard: the API base URL, the model name (with optional auto-discovery via "Fetch Models"), and your API key. The provider is auto-detected from the URL (deepseek.com → DeepSeek, xiaomimimo.com → MiMo, localhost → Ollama, otherwise custom) for environment variable resolution.
+You configure three things in the wizard: the API base URL, the model name (with optional auto-discovery via "Fetch Models"), and your API key. The saved `provider` is always `custom`. Transport is decided by `protocol` + `api_base` (Ollama local URLs auto-select `ollama_chat`; everything else defaults to OpenAI-compatible chat). URL hints only affect which environment variable is probed for the key, and MiMo/Ollama linkage for TTS/vision.
 
-| API Base URL Example | Provider | Environment Variable |
-|----------------------|----------|---------------------|
-| `https://api.deepseek.com/v1` | DeepSeek | `DEEPSEEK_API_KEY` |
-| `https://api.xiaomimimo.com/v1` | MiMo | `MIMO_API_KEY` |
-| `http://localhost:11434` | Ollama | (none — key optional) |
-| Custom endpoint | Custom | `MEAPET_API_KEY` |
+| API Base URL Example | Saved provider | Auto protocol | Environment Variable |
+|----------------------|----------------|---------------|---------------------|
+| `https://api.deepseek.com/v1` | `custom` | `openai_chat` | `DEEPSEEK_API_KEY` (also `MEAPET_API_KEY`) |
+| `https://api.xiaomimimo.com/v1` | `custom` | `openai_chat` | `MIMO_API_KEY` |
+| `http://localhost:11434` | `custom` | `ollama_chat` | (none — key optional) |
+| Other OpenAI-compatible endpoint | `custom` | `openai_chat` | `MEAPET_API_KEY` / `OPENAI_API_KEY` |
 
 ### Agent
 

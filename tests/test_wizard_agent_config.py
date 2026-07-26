@@ -238,6 +238,18 @@ class TestWizardConversationConfig(unittest.TestCase):
         page.endpoint_input.setText("https://api.deepseek.com/v1")
 
         self.assertEqual(page.get_backend(), "custom")
+        # 仅保留「自动识别」一项，无品牌下拉
+        values = [
+            page.provider_combo.itemData(i)
+            for i in range(page.provider_combo.count())
+        ]
+        self.assertEqual(values, [""])
+        self.assertFalse(page.provider_combo.isEnabled())
+        # Ollama 地址仍保存 custom，但协议自动识别为 ollama_chat
+        page.endpoint_input.setText("http://127.0.0.1:11434")
+        profile = page.collect_direct_profile()
+        self.assertEqual(profile["provider"], "custom")
+        self.assertEqual(profile["protocol"], "ollama_chat")
 
     # ------------------------------------------------------------------
     # Agent 模式：保存 OpenAI 兼容配置 + 控制监听

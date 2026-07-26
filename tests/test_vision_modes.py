@@ -20,8 +20,9 @@ class TestVisionRoutePolicy(unittest.TestCase):
             {
                 "mode": "direct",
                 "direct": {
-                    "provider": "mimo",
+                    "provider": "custom",
                     "protocol": "openai_chat",
+                    "api_base": "https://api.xiaomimimo.com/v1",
                     "model": "mimo-v2.5",
                 },
             },
@@ -33,6 +34,7 @@ class TestVisionRoutePolicy(unittest.TestCase):
                 "direct": {
                     "provider": "custom",
                     "protocol": "openai_chat",
+                    "api_base": "https://private.example/v1",
                     "model": "private-model",
                 },
             },

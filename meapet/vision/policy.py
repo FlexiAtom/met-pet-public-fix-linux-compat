@@ -58,15 +58,20 @@ def main_model_supports_vision(
         if isinstance(llm_cfg.get("direct"), Mapping)
         else {}
     )
-    provider = str(
-        direct.get("provider") or llm_cfg.get("backend") or ""
-    ).strip().lower()
+    from meapet.config.store import detect_endpoint_family
+
+    family = detect_endpoint_family(
+        direct.get("api_base"),
+        direct.get("host"),
+        llm_cfg.get("api_base"),
+        llm_cfg.get("host"),
+    )
     model = str(
         direct.get("model") or llm_cfg.get("model") or ""
     ).strip().lower()
-    if provider == "mimo":
+    if family == "mimo":
         return True
-    if provider == "ollama":
+    if family == "ollama":
         return any(marker in model for marker in _KNOWN_OLLAMA_VISION_MARKERS)
     return False
 

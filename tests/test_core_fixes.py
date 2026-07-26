@@ -198,6 +198,13 @@ class TestChatBackendInit(unittest.TestCase):
         self.assertTrue(eng.available)
         self.assertEqual(eng.api_base, "https://api.example.com/v1")
 
+    def test_legacy_deepseek_backend_label_collapses_to_custom(self):
+        from meapet.chat.engine import ChatEngine
+
+        eng = ChatEngine(backend="deepseek", api_key="", model="m")
+        self.assertEqual(eng.backend, "custom")
+        self.assertTrue(eng.available)
+
 
 # 会污染密钥解析的环境变量（测试必须隔离）
 _SECRET_ENV_KEYS = (

@@ -236,6 +236,86 @@ class TestConversationConfigMigration(unittest.TestCase):
         )
         # direct 段不再有 backend 概念
         self.assertNotIn("backend", cfg["llm"]["direct"])
+        # 顶层 backend 与 direct.provider 对齐，消除 deepseek/custom 分叉
+        self.assertEqual(cfg["llm"]["backend"], "custom")
+
+    def test_explicit_deepseek_provider_collapses_to_custom(self):
+        from meapet.config.store import normalize_config
+
+        cfg = normalize_config(
+            {
+                "llm": {
+                    "mode": "direct",
+                    "backend": "deepseek",
+                    "direct": {
+                        "provider": "deepseek",
+                        "protocol": "openai_chat",
+                        "api_base": "https://api.deepseek.com",
+                        "model": "deepseek-chat",
+                    },
+                }
+            }
+        )
+        self.assertEqual(cfg["llm"]["direct"]["provider"], "custom")
+        self.assertEqual(cfg["llm"]["backend"], "custom")
+        self.assertEqual(cfg["llm"]["direct"]["protocol"], "openai_chat")
+
+    def test_ollama_and_mimo_providers_also_collapse_to_custom(self):
+        from meapet.config.store import normalize_config
+
+        ollama = normalize_config(
+            {
+                "llm": {
+                    "mode": "direct",
+                    "backend": "ollama",
+                    "host": "http://127.0.0.1:11434",
+                    "model": "qwen",
+                }
+            }
+        )
+        self.assertEqual(ollama["llm"]["direct"]["provider"], "custom")
+        self.assertEqual(ollama["llm"]["backend"], "custom")
+        self.assertEqual(ollama["llm"]["direct"]["protocol"], "ollama_chat")
+
+        mimo = normalize_config(
+            {
+                "llm": {
+                    "mode": "direct",
+                    "direct": {
+                        "provider": "mimo",
+                        "api_base": "https://api.xiaomimimo.com/v1",
+                        "model": "mimo-v2",
+                    },
+                }
+            }
+        )
+        self.assertEqual(mimo["llm"]["direct"]["provider"], "custom")
+        self.assertEqual(mimo["llm"]["backend"], "custom")
+        self.assertEqual(mimo["llm"]["direct"]["protocol"], "openai_chat")
+
+    def test_custom_deepseek_url_reads_deepseek_env_key(self):
+        import os
+        from unittest import mock
+
+        from meapet.config.store import resolve_direct_api_key
+
+        llm = {
+            "backend": "custom",
+            "direct": {
+                "provider": "custom",
+                "api_base": "https://api.deepseek.com",
+                "api_key": "",
+            },
+        }
+        env = {
+            "DEEPSEEK_API_KEY": "ds-from-env",
+            "OPENAI_API_KEY": "",
+            "MEAPET_API_KEY": "",
+            "MIMO_API_KEY": "",
+            "XIAOMIMIMO_API_KEY": "",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(resolve_direct_api_key(llm), "ds-from-env")
 
     def test_legacy_openclaw_config_migrates_to_agent_with_openai_compatible_fields(self):
         from meapet.config.store import normalize_config

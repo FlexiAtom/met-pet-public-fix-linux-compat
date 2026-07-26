@@ -46,7 +46,9 @@
 }
 ```
 
-`backend` 保留供应商身份和旧配置兼容；实际请求由 `llm.direct` 决定。
+`backend` / `direct.provider` 只是兼容字段，**不是**传输后端。直连模式下二者恒为 `custom`。实际请求由 `llm.direct.protocol` + `api_base`/`host`/`model`/`api_key` 决定。
+
+程序按 API 地址自动识别协议与密钥环境变量（Ollama 本地地址 → `ollama_chat`；DeepSeek/MiMo/其它 → 默认 `openai_chat`；Anthropic 域名 → `anthropic_messages`）。MiMo TTS/识图联动也按地址识别，不再依赖 provider 品牌标签。
 
 | `protocol` | Base URL 示例 | 实际路径 | 流格式 |
 |------------|---------------|----------|--------|

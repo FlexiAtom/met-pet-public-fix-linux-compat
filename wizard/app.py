@@ -666,7 +666,10 @@ class SetupWizard(QWidget):
         issues[self.TAB_ENV].extend(self.env_page.required_missing())
 
         conversation_mode = self.backend_page.mode()
-        llm_backend = self.llm_page.get_backend()
+        from meapet.config.store import detect_endpoint_family
+
+        llm_endpoint = self.llm_page.endpoint_input.text().strip()
+        llm_family = detect_endpoint_family(llm_endpoint)
         llm_key = self.llm_page.direct_api_key_input.text().strip()
         if conversation_mode == "agent":
             if not self.backend_page.agent_base_url.text().strip():
@@ -682,7 +685,7 @@ class SetupWizard(QWidget):
                             "内网监听需 HTTPS 证书，或明确允许 HTTP"
                         )
         else:
-            if not self.llm_page.endpoint_input.text().strip():
+            if not llm_endpoint:
                 issues[self.TAB_CHAT].append("API 地址")
             if not self.llm_page.model_combo.currentText().strip():
                 issues[self.TAB_CHAT].append("模型 ID")
@@ -695,7 +698,7 @@ class SetupWizard(QWidget):
             if (
                 not tts_key
                 and conversation_mode == "direct"
-                and llm_backend == "mimo"
+                and llm_family == "mimo"
             ):
                 tts_key = llm_key
             if not tts_key:
@@ -711,7 +714,7 @@ class SetupWizard(QWidget):
                 if conversation_mode == "agent":
                     endpoint = self.backend_page.agent_base_url.text().strip()
                 else:
-                    endpoint = self.llm_page.endpoint_input.text().strip()
+                    endpoint = llm_endpoint
                 from meapet.utils import is_loopback_url
                 if (
                     endpoint
@@ -728,15 +731,15 @@ class SetupWizard(QWidget):
                 actual_backend = selected_backend
                 if selected_backend == "auto":
                     actual_backend = (
-                        llm_backend
-                        if llm_backend in {"ollama", "mimo"}
+                        llm_family
+                        if llm_family in {"ollama", "mimo"}
                         else "ollama"
                     )
                 if actual_backend == "mimo":
                     if not self.vision_page.allow_cloud_cb.isChecked():
                         issues[self.TAB_VISION].append("云端识图授权")
                     vision_key = self.vision_page.api_key_input.text().strip()
-                    if not vision_key and llm_backend == "mimo":
+                    if not vision_key and llm_family == "mimo":
                         vision_key = llm_key
                     if not vision_key:
                         issues[self.TAB_VISION].append("云端识图 API Key")
@@ -968,19 +971,24 @@ class SetupWizard(QWidget):
 
         llm = config.get("llm") or {}
         direct = llm.get("direct") or {}
+        from meapet.config.store import detect_endpoint_family
+
         tts_key = self.tts_page.mimo_api_key_input.text().strip()
         tts_base = self.tts_page.mimo_api_base_input.text().strip()
-        if (
-            not tts_key
-            and llm.get("mode") == "direct"
-            and direct.get("provider") == "mimo"
-        ):
+        llm_is_mimo = (
+            llm.get("mode") == "direct"
+            and detect_endpoint_family(
+                direct.get("api_base"),
+                direct.get("host"),
+                llm.get("api_base"),
+                llm.get("host"),
+            )
+            == "mimo"
+        )
+        if not tts_key and llm_is_mimo:
             tts_key = str(direct.get("api_key") or "")
         if not tts_base:
-            if (
-                llm.get("mode") == "direct"
-                and direct.get("provider") == "mimo"
-            ):
+            if llm_is_mimo:
                 tts_base = str(direct.get("api_base") or "")
             tts_base = tts_base or "https://api.xiaomimimo.com/v1"
 
@@ -1052,8 +1060,10 @@ class SetupWizard(QWidget):
         llm["backend"] = (
             str(agent.get("kind") or "hermes")
             if mode == "agent"
-            else str(direct.get("provider") or "ollama")
+            else "custom"
         )
+        if mode == "direct":
+            direct["provider"] = "custom"
         # 兼容当前 ChatEngine；协议适配层完成后可逐步淡出这些镜像字段。
         llm["host"] = str(direct.get("host") or "")
         llm["api_base"] = str(direct.get("api_base") or "")

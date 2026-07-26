@@ -66,20 +66,22 @@ class TtsPageMimoMixin:
                         str(tts.get("api_key", "")).strip(),
                         str(tts.get("api_base") or "").strip(),
                     ))
-                if (
-                    direct.get("provider") == "mimo"
-                    and direct.get("api_key")
-                ):
+                from meapet.config.store import detect_endpoint_family
+
+                llm_family = detect_endpoint_family(
+                    direct.get("api_base"),
+                    direct.get("host"),
+                    llm.get("api_base"),
+                    llm.get("host"),
+                )
+                if llm_family == "mimo" and direct.get("api_key"):
                     candidates.append((
                         2,
                         "当前配置 → llm.direct.api_key（MiMo）",
                         str(direct.get("api_key", "")).strip(),
                         str(direct.get("api_base") or "").strip(),
                     ))
-                elif (
-                    llm.get("api_key")
-                    and "mimo" in str(llm.get("api_base", "")).lower()
-                ):
+                elif llm_family == "mimo" and llm.get("api_key"):
                     candidates.append((
                         3,
                         "当前配置 → llm.api_key（MiMo 地址）",

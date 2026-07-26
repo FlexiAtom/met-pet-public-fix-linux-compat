@@ -148,17 +148,41 @@ class TestProviderKeyIsolation(unittest.TestCase):
             self.assertEqual(
                 resolve_tts_api_key(
                     {"api_key": ""},
-                    {"backend": "mimo", "api_key": "mimo-llm"},
+                    {
+                        "backend": "custom",
+                        "api_key": "mimo-llm",
+                        "api_base": "https://api.xiaomimimo.com/v1",
+                    },
                 ),
                 "mimo-llm",
             )
             self.assertEqual(
                 resolve_tts_api_key(
                     {"api_key": ""},
-                    {"backend": "deepseek", "api_key": "ds"},
+                    {
+                        "backend": "custom",
+                        "api_key": "ds",
+                        "api_base": "https://api.deepseek.com",
+                    },
                 ),
                 "",
             )
+
+    def test_infer_direct_protocol_from_endpoint_url(self):
+        from meapet.config.store import infer_direct_protocol
+
+        self.assertEqual(
+            infer_direct_protocol(api_base="http://127.0.0.1:11434"),
+            "ollama_chat",
+        )
+        self.assertEqual(
+            infer_direct_protocol(api_base="https://api.anthropic.com"),
+            "anthropic_messages",
+        )
+        self.assertEqual(
+            infer_direct_protocol(api_base="https://api.deepseek.com"),
+            "openai_chat",
+        )
 
 
 class TestRuntimeConfigurationSwitch(unittest.TestCase):

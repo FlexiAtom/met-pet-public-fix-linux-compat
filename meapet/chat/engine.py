@@ -67,12 +67,11 @@ _TTS_DELIVERY_MAX_CHARS = 60
 class ChatEngine:
     """统一对话引擎 + 记忆/养成系统。
 
-    传输层按 provider 分发（ollama 原生 / OpenAI 兼容），
+    传输层按 protocol 分流（ollama 原生 / OpenAI 兼容），
     协议与密钥解析都以 llm.direct 显式 profile 为准。
+    provider 身份标签恒为 custom，不按厂商品牌分后端。
     """
 
-    # 云端后端必须有显式 Key 才视为可用；本地后端沿用「假定可用，失败再兜底」。
-    _CLOUD_BACKENDS_NEED_KEY = frozenset({"deepseek", "mimo", "openai"})
     # Agent 类后端没有直连实现，只能走 llm.mode=agent。
     _UNSUPPORTED_DIRECT_BACKENDS = frozenset({"openclaw", "hermes"})
 
@@ -90,16 +89,21 @@ class ChatEngine:
         max_tokens: int = 4096,
         direct_client=None,
     ):
-        self.backend = str(backend or "custom").strip().lower() or "custom"
-        if not protocol:
-            from meapet.config.store import infer_direct_protocol
-            protocol = infer_direct_protocol(self.backend)
-        self.protocol = str(protocol).strip().lower()
+        # 身份标签一律 custom；真正分流看 protocol / api_base。
+        self.backend = "custom"
         self.host = host
         self.model = model
         self.api_key = api_key
         self.api_base = api_base
         self.temperature = temperature
+        if not protocol:
+            from meapet.config.store import infer_direct_protocol
+            protocol = infer_direct_protocol(
+                "custom",
+                api_base=self.api_base,
+                host=self.host,
+            )
+        self.protocol = str(protocol).strip().lower() or "openai_chat"
         try:
             self.max_tokens = max(1, int(max_tokens))
         except (TypeError, ValueError):
@@ -107,25 +111,18 @@ class ChatEngine:
         self.bridge_url = bridge_url.rstrip("/")
         self.memory = memory
 
-        if self.backend in self._UNSUPPORTED_DIRECT_BACKENDS:
+        raw_backend = str(backend or "custom").strip().lower() or "custom"
+        if raw_backend in self._UNSUPPORTED_DIRECT_BACKENDS:
             # 不虚假宣传可用性：openclaw/hermes 只有 Agent 模式实现
             self.available = False
             _safe_print(
-                f"⚠ {self.backend} 直连后端未实现，请将 llm.mode 设为 agent",
+                f"⚠ {raw_backend} 直连后端未实现，请将 llm.mode 设为 agent",
                 flush=True,
             )
-        elif self.backend in self._CLOUD_BACKENDS_NEED_KEY:
-            self.available = bool((self.api_key or "").strip())
-            if self.available:
-                _safe_print(f"✓ {self.backend} 后端已配置: {self.model}", flush=True)
-            else:
-                _safe_print(
-                    f"⚠ {self.backend} 后端缺少 API Key，暂不可用（本地兜底句生效）",
-                    flush=True,
-                )
         else:
-            self.available = True                      # 本地/自定义后端假定可用
-            _safe_print(f"✓ {self.backend} 后端已配置: {self.model}", flush=True)
+            # 统一假定可用：连接失败时再走 fallback。
+            self.available = True
+            _safe_print(f"✓ 模型服务已配置: {self.model}", flush=True)
         self._backend_ready = True
 
         self.history: List[Dict[str, str]] = [
@@ -155,15 +152,19 @@ class ChatEngine:
         _safe_print(f"[debug] {label}: {text[:bound]}", flush=True)
 
     def _deferred_check(self) -> None:
-        """后台连通性探测（仅本地 ollama）；探测失败不推翻「假定可用」。
+        """后台连通性探测（仅本地 ollama 协议）；探测失败不推翻「假定可用」。
 
         只允许桌面初始化路径在工作线程调用，解析/识图等纯函数路径不得触发。
         """
-        if getattr(self, "backend", "") != "ollama":
+        protocol = str(getattr(self, "protocol", "") or "").strip().lower()
+        if protocol != "ollama_chat":
             return
         try:
             from meapet.async_runtime import run as _arun
-            base = (self.host or "http://127.0.0.1:11434").rstrip("/")
+            base = (self.api_base or self.host or "http://127.0.0.1:11434").rstrip("/")
+            # Ollama tags 在 host 根，不在 /v1
+            if base.endswith("/v1"):
+                base = base[:-3].rstrip("/")
             resp = _arun(self._get_json(f"{base}/api/tags", timeout=3), timeout=5)
             if getattr(resp, "status_code", 0) == 200:
                 self.available = True
@@ -558,13 +559,15 @@ class ChatEngine:
             return self._fallback_reply(), "neutral"
 
     async def _dispatch_chat_async(self, messages: List[Dict[str, str]]) -> str:
-        """按 provider 分发：ollama 走原生 /api/chat，云厂商走各自 OpenAI 兼容端点。"""
-        backend = str(getattr(self, "backend", "") or "").strip().lower()
-        if backend == "ollama":
+        """按 protocol 分发：ollama_chat 走原生 /api/chat，其余走 OpenAI 兼容。"""
+        protocol = str(getattr(self, "protocol", "") or "").strip().lower()
+        if protocol == "ollama_chat":
             return await self._chat_ollama_async(messages)
-        if backend == "deepseek":
-            return await self._chat_deepseek_async(messages)
-        if backend == "mimo":
+        # MiMo 等 OpenAI 兼容端点共用同一路径；default_base 仅作 api_base 空时兜底。
+        from meapet.config.store import detect_endpoint_family
+
+        family = detect_endpoint_family(self.api_base, self.host)
+        if family == "mimo":
             return await self._chat_mimo_async(messages)
         return await self._chat_openai_async(messages)
 
@@ -750,14 +753,6 @@ class ChatEngine:
             _safe_print(f"[chat] {label} 空 content → 本地兜底句", flush=True)
             return self._fallback_reply()
         return content
-
-    async def _chat_deepseek_async(self, messages: List[Dict[str, str]] = None) -> str:
-        """DeepSeek OpenAI 兼容请求。"""
-        return await self._chat_openai_compatible_async(
-            messages,
-            default_base="https://api.deepseek.com",
-            label="DeepSeek",
-        )
 
     async def _chat_mimo_async(self, messages: List[Dict[str, str]] = None) -> str:
         """MiMo OpenAI 兼容请求（content 为空时从 reasoning 弱兜底）。"""
@@ -1000,7 +995,7 @@ class ChatEngine:
 
 def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatEngine:
     """从配置创建引擎：llm.direct 显式 profile 是运行时真源，旧顶层字段仅兜底。"""
-    from meapet.config.store import resolve_direct_api_key
+    from meapet.config.store import infer_direct_protocol, resolve_direct_api_key
 
     llm_cfg = config.get("llm", {})
     direct = (
@@ -1010,22 +1005,24 @@ def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatE
     )
     api_key = resolve_direct_api_key(llm_cfg)
 
-    backend = (
-        str(direct.get("provider") or llm_cfg.get("backend") or "custom")
-        .strip().lower() or "custom"
-    )
-    protocol = str(direct.get("protocol") or "").strip().lower()
     model = direct.get("model") or llm_cfg.get("model") or "gpt-4o-mini"
     api_base = direct.get("api_base") or llm_cfg.get("api_base") or ""
     host = direct.get("host") or llm_cfg.get("host") or "http://127.0.0.1:11434"
+    protocol = str(direct.get("protocol") or "").strip().lower()
+    if not protocol:
+        protocol = infer_direct_protocol(
+            "custom",
+            api_base=api_base,
+            host=host,
+        )
 
     _safe_print(
-        f"[DEBUG] create_engine_from_config: backend={backend}, host={host}, "
-        f"api_base={api_base}, model={model}",
+        f"[DEBUG] create_engine_from_config: backend=custom, host={host}, "
+        f"api_base={api_base}, model={model}, protocol={protocol}",
         flush=True,
     )
     return ChatEngine(
-        backend=backend,
+        backend="custom",
         protocol=protocol,
         host=host,
         model=model,
