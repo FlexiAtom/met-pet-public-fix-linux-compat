@@ -13,13 +13,24 @@ from PyQt5.QtWidgets import (
     QSystemTrayIcon,
 )
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRect, Qt
 
 from meapet.desktop import status_language
 from meapet.desktop.icons import standard_icon
+from meapet.desktop.screen_geometry import (
+    available_geometry_for,
+    calculate_centered_position,
+    calculate_popup_position,
+    move_within_screen,
+    widget_size,
+)
 from meapet.desktop.theme import COLOR_ACCENT, COLOR_ACCENT_2, COLOR_TEXT, MENU_STYLE
 from meapet.paths import PROJECT_ROOT
-from meapet.ui_theme import set_scaled_stylesheet
+from meapet.ui_theme import (
+    PET_SIZE_PRESETS,
+    normalize_pet_size_factor,
+    set_scaled_stylesheet,
+)
 from meapet.utils import safe_print
 
 
@@ -408,9 +419,29 @@ class PetWindowChromeMixin:
         mode_action.triggered.connect(self._toggle_render_mode)
         display_menu.addAction(mode_action)
 
-        size_action = QAction("调整立绘大小…", self)
+        current_factor = normalize_pet_size_factor(
+            (self.config.get("display") or {}).get("size_factor", 1.0)
+        )
+        size_menu = QMenu(
+            status_language.menu_window_size(current_factor), self
+        )
+        size_menu.setObjectName("WindowSizeMenu")
+        set_scaled_stylesheet(size_menu, MENU_STYLE)
+        size_menu.setAccessibleName("桌宠窗口大小")
+        for percent in PET_SIZE_PRESETS:
+            preset_action = QAction(f"{percent}%", self)
+            preset_action.setCheckable(True)
+            preset_action.setChecked(round(current_factor * 100) == percent)
+            preset_action.triggered.connect(
+                lambda _checked=False, p=percent: self._set_size_factor(p / 100.0)
+            )
+            size_menu.addAction(preset_action)
+        size_menu.addSeparator()
+        size_action = QAction("自定义…", self)
+        size_action.setToolTip("滑块实时预览，30%–300%")
         size_action.triggered.connect(self._open_size_dialog)
-        display_menu.addAction(size_action)
+        size_menu.addAction(size_action)
+        display_menu.addMenu(size_menu)
         menu.addMenu(display_menu)
 
         settings_menu = QMenu("设置与数据", self)
@@ -503,9 +534,39 @@ class PetWindowChromeMixin:
         from meapet.desktop.status_panel import StatusPanel
         if not hasattr(self, "_status_panel") or self._status_panel is None:
             self._status_panel = StatusPanel(self.memory)
-            self._status_panel.move(self.x() + self.width() + 10, self.y())
+            self._place_beside_pet(self._status_panel, placement="right", gap=10)
+        else:
+            # 已存在的面板保留用户拖动过的位置，只在越界时（换屏幕、改分辨率）拉回来。
+            move_within_screen(self._status_panel, self._status_panel.pos())
         self._status_panel.show()
         self._status_panel.refresh()
+
+    def _pet_rect(self) -> QRect:
+        return QRect(self.x(), self.y(), self.width(), self.height())
+
+    def _place_beside_pet(self, window, *, placement: str, gap: int) -> None:
+        """把弹出窗口放在桌宠旁边，并保证完整落在所在屏幕的可用区域内。"""
+        pet_rect = self._pet_rect()
+        size = widget_size(window)
+        area = available_geometry_for(pet_rect)
+        if area is None:
+            window.move(pet_rect.right() + 1 + gap, pet_rect.top())
+            return
+        window.move(
+            calculate_popup_position(
+                pet_rect, size, area, placement=placement, gap=gap
+            )
+        )
+
+    def _place_dialog_near_pet(self, dialog) -> None:
+        """对话框以桌宠为中心显示；桌宠贴边时夹回屏幕内，避免标题栏跑到屏幕外。"""
+        pet_rect = self._pet_rect()
+        area = available_geometry_for(pet_rect)
+        if area is None:
+            return
+        dialog.move(
+            calculate_centered_position(pet_rect, widget_size(dialog), area)
+        )
 
     def _show_timeline(self) -> None:
         timeline = getattr(self, "_conversation_timeline", None)
@@ -518,6 +579,9 @@ class PetWindowChromeMixin:
         if dialog is None:
             dialog = TimelineDialog(timeline, self)
             self._timeline_dialog = dialog
+            self._place_dialog_near_pet(dialog)
+        else:
+            move_within_screen(dialog, dialog.pos())
         dialog.refresh()
         dialog.show()
         dialog.raise_()
@@ -533,6 +597,7 @@ class PetWindowChromeMixin:
 
         dialog = TurnDetailDialog(turn, self)
         self._timeline_turn_dialog = dialog
+        self._place_dialog_near_pet(dialog)
         dialog.show()
         dialog.raise_()
 

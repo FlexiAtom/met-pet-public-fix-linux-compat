@@ -260,14 +260,71 @@ class UiRefactorTests(unittest.TestCase):
         self.assertIn("font-size: 18px;", wizard.styleSheet())
         wizard._existing_config = {
             "display": {
-                "size_factor": 1.33,
                 "custom_display_key": "keep-me",
             }
         }
+        # 窗口大小改由配置页管理，其余 display 字段仍原样保留。
+        wizard.pet_size_slider.setValue(133)
         display_config = wizard.collect_config()["display"]
         self.assertEqual(display_config["font_scale"], 1.25)
         self.assertEqual(display_config["size_factor"], 1.33)
         self.assertEqual(display_config["custom_display_key"], "keep-me")
+
+    def test_configuration_exposes_pet_window_size_in_percent(self) -> None:
+        from meapet.ui_theme import (
+            PET_SIZE_FACTOR_MAX,
+            PET_SIZE_FACTOR_MIN,
+            set_ui_font_scale,
+        )
+        from wizard.app import SetupWizard
+
+        self.addCleanup(set_ui_font_scale, 1.0)
+        wizard = self._track(SetupWizard())
+        wizard._load_timer.stop()
+
+        slider = wizard.pet_size_slider
+        self.assertIsInstance(slider, QSlider)
+        self.assertEqual(slider.minimum(), round(PET_SIZE_FACTOR_MIN * 100))
+        self.assertEqual(slider.maximum(), round(PET_SIZE_FACTOR_MAX * 100))
+        self.assertTrue(slider.accessibleName())
+
+        slider.setValue(150)
+        self.assertEqual(wizard.pet_size_value.text(), "150%")
+        self.assertEqual(
+            wizard.collect_config()["display"]["size_factor"], 1.5
+        )
+
+        # 越界值按支持范围收敛，不会写出畸形配置。
+        slider.setValue(slider.maximum())
+        self.assertEqual(
+            wizard.collect_config()["display"]["size_factor"],
+            PET_SIZE_FACTOR_MAX,
+        )
+
+    def test_configuration_restores_pet_window_size_from_existing_config(
+        self,
+    ) -> None:
+        import json
+        import tempfile
+
+        from meapet.ui_theme import set_ui_font_scale
+        from wizard.app import SetupWizard
+
+        self.addCleanup(set_ui_font_scale, 1.0)
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = os.path.join(directory, "config.json")
+            with open(config_path, "w", encoding="utf-8") as file:
+                json.dump({"display": {"size_factor": 2.25}}, file)
+
+            wizard = self._track(SetupWizard(config_path=config_path))
+            wizard._load_timer.stop()
+            wizard._load_existing_config()
+
+            self.assertEqual(wizard.pet_size_slider.value(), 225)
+            self.assertEqual(wizard.pet_size_value.text(), "225%")
+            self.assertEqual(
+                wizard.collect_config()["display"]["size_factor"], 2.25
+            )
 
     def test_environment_check_timer_is_owned_by_its_page(self) -> None:
         from wizard.page_env import EnvCheckPage
@@ -1120,6 +1177,373 @@ class UiRefactorTests(unittest.TestCase):
                     (expected_side, expected_anchor),
                 )
 
+    def _assert_within_screen(self, rect: QRect, area: QRect) -> None:
+        """窗口必须完整可见；比屏幕还大的窗口只要求左上角对齐在可见区域内。"""
+        self.assertGreaterEqual(rect.left(), area.left())
+        self.assertGreaterEqual(rect.top(), area.top())
+        if rect.width() <= area.width():
+            self.assertLessEqual(rect.right(), area.right())
+        if rect.height() <= area.height():
+            self.assertLessEqual(rect.bottom(), area.bottom())
+
+    def test_popup_position_falls_back_when_the_preferred_side_is_off_screen(
+        self,
+    ) -> None:
+        from meapet.desktop.screen_geometry import (
+            POPUP_SCREEN_MARGIN,
+            calculate_centered_position,
+            calculate_popup_position,
+        )
+
+        screen = QRect(0, 0, 1200, 900)
+        safe = screen.adjusted(
+            POPUP_SCREEN_MARGIN,
+            POPUP_SCREEN_MARGIN,
+            -POPUP_SCREEN_MARGIN,
+            -POPUP_SCREEN_MARGIN,
+        )
+        popup = QSize(480, 220)
+
+        # 桌宠贴着屏幕顶部：上方放不下，退到下方而不是被截断在屏幕外。
+        top_pet = QRect(500, 0, 200, 300)
+        top = QRect(
+            calculate_popup_position(top_pet, popup, screen, placement="above"),
+            popup,
+        )
+        self.assertTrue(safe.contains(top))
+        self.assertGreater(top.top(), top_pet.bottom())
+
+        # 四个角落：无论首选方位是什么，结果都必须完整落在安全区内。
+        corners = (
+            QRect(0, 0, 200, 300),
+            QRect(1000, 0, 200, 300),
+            QRect(0, 600, 200, 300),
+            QRect(1000, 600, 200, 300),
+        )
+        for pet in corners:
+            for placement in ("above", "below", "left", "right"):
+                with self.subTest(pet=pet, placement=placement):
+                    position = calculate_popup_position(
+                        pet, popup, screen, placement=placement
+                    )
+                    self.assertTrue(safe.contains(QRect(position, popup)))
+                    self.assertTrue(
+                        safe.contains(
+                            QRect(
+                                calculate_centered_position(pet, popup, screen),
+                                popup,
+                            )
+                        )
+                    )
+
+    def test_clamp_position_keeps_oversized_popups_anchored_top_left(self) -> None:
+        from meapet.desktop.screen_geometry import clamp_position
+
+        screen = QRect(0, 0, 400, 300)
+        oversized = QSize(900, 700)
+        position = clamp_position(QPoint(600, 400), oversized, screen, margin=8)
+        self.assertEqual(position, QPoint(8, 8))
+
+    def test_chat_composer_pops_up_inside_the_screen_at_any_pet_position(
+        self,
+    ) -> None:
+        from meapet.desktop.chat_flow import PetChatFlowMixin
+        from meapet.desktop.chat_input import ChatInputBox
+
+        available = QApplication.primaryScreen().availableGeometry()
+
+        class ChatHost:
+            def __init__(self, point: QPoint) -> None:
+                self._pos = point
+                self.bubble = None
+
+            def pos(self) -> QPoint:
+                return self._pos
+
+            def width(self) -> int:
+                return 200
+
+            def height(self) -> int:
+                return 300
+
+            def _on_input_submit(self, _text: str) -> None:
+                pass
+
+        corners = (
+            QPoint(available.left(), available.top()),
+            QPoint(available.right() - 200, available.top()),
+            QPoint(available.left(), available.bottom() - 300),
+            QPoint(available.right() - 200, available.bottom() - 300),
+        )
+        for corner in corners:
+            with self.subTest(corner=(corner.x(), corner.y())):
+                host = ChatHost(corner)
+                PetChatFlowMixin._start_chat(host)
+                composer = self._track(host._chat_input)
+                self.assertIsInstance(composer, ChatInputBox)
+                self._assert_within_screen(
+                    QRect(composer.pos(), composer.size()), available
+                )
+                composer.close()
+
+    def test_status_panel_pops_up_inside_the_screen_when_the_pet_hugs_an_edge(
+        self,
+    ) -> None:
+        from meapet.desktop.window_chrome import PetWindowChromeMixin
+
+        class PanelHost(QWidget, PetWindowChromeMixin):
+            def __init__(self) -> None:
+                super().__init__()
+                self.memory = _MemoryStub()
+
+        available = QApplication.primaryScreen().availableGeometry()
+        host = self._track(PanelHost())
+        host.resize(200, 300)
+        host.move(available.right() - 200, available.bottom() - 300)
+        host._show_status_panel()
+        panel = self._track(host._status_panel)
+        self._assert_within_screen(QRect(panel.pos(), panel.size()), available)
+
+        # 面板被拖出屏幕后再次打开时会被拉回可见区域。
+        panel.move(available.right() + 400, available.bottom() + 400)
+        host._show_status_panel()
+        self._assert_within_screen(QRect(panel.pos(), panel.size()), available)
+
+    def test_choose_screen_index_prefers_the_center_then_the_overlap(self) -> None:
+        from meapet.desktop.screen_geometry import choose_screen_index
+
+        left = QRect(0, 0, 1920, 1080)
+        right = QRect(1920, 0, 1280, 1024)
+        screens = (left, right)
+
+        # 中心点落在哪块屏就归哪块屏。
+        self.assertEqual(choose_screen_index(QRect(200, 200, 300, 300), screens), 0)
+        self.assertEqual(choose_screen_index(QRect(2400, 200, 300, 300), screens), 1)
+        # 跨屏时按重叠面积归属。
+        self.assertEqual(choose_screen_index(QRect(1800, 100, 400, 300), screens), 1)
+        # 完全脱离所有屏幕（分辨率调小、显示器拔掉）时返回 None，由调用方回退主屏。
+        self.assertIsNone(choose_screen_index(QRect(4000, 3000, 200, 300), screens))
+        self.assertIsNone(choose_screen_index(QRect(0, 0, 200, 300), ()))
+
+    def test_is_sufficiently_visible_tolerates_edge_parking(self) -> None:
+        from meapet.desktop.screen_geometry import is_sufficiently_visible
+
+        screen = QRect(0, 0, 1200, 900)
+        # 压在任务栏上/稍微贴边：仍算可见，不该被挪动。
+        self.assertTrue(is_sufficiently_visible(QRect(60, 700, 200, 300), screen))
+        # 只剩一角露在屏幕里，以及整块跑到屏幕外：都需要拉回来。
+        self.assertFalse(is_sufficiently_visible(QRect(1150, 850, 200, 300), screen))
+        self.assertFalse(is_sufficiently_visible(QRect(1600, 1200, 200, 300), screen))
+
+    def _make_screen_guard_host(self):
+        from meapet.desktop.interaction import PetInteractionMixin
+        from meapet.desktop.render_host import PetRenderHostMixin
+
+        class ScreenGuardHost(PetInteractionMixin, PetRenderHostMixin, QWidget):
+            def __init__(self) -> None:
+                super().__init__()
+                self.config = {"bubble_duration_ms": {"default": 5000}}
+                self.bubble = None
+
+        host = self._track(ScreenGuardHost())
+        host.resize(200, 300)
+        return host
+
+    def test_pet_returns_to_the_visible_area_after_the_screen_changes(self) -> None:
+        available = QApplication.primaryScreen().availableGeometry()
+        host = self._make_screen_guard_host()
+
+        # 分辨率调小后遗留的旧坐标：整块落在桌面之外。
+        host.move(available.right() + 600, available.bottom() + 400)
+        host._ensure_on_screen()
+        self._assert_within_screen(
+            QRect(host.pos(), host.size()), available
+        )
+
+        # 已经完整可见的桌宠不该被挪动。
+        inside = QPoint(available.left() + 120, available.top() + 90)
+        host.move(inside)
+        host._ensure_on_screen()
+        self.assertEqual(host.pos(), inside)
+
+    def test_screen_layout_signals_are_debounced_into_one_correction(self) -> None:
+        from meapet.desktop.render_host import SCREEN_GUARD_DEBOUNCE_MS
+
+        available = QApplication.primaryScreen().availableGeometry()
+        host = self._make_screen_guard_host()
+        host._init_screen_guard()
+        self.assertTrue(host._screen_guard_timer.isSingleShot())
+
+        host.move(available.right() + 600, available.bottom() + 400)
+        for _ in range(3):
+            host._on_screen_layout_changed()
+        self.assertTrue(host._screen_guard_timer.isActive())
+        QTest.qWait(SCREEN_GUARD_DEBOUNCE_MS + 150)
+        self._assert_within_screen(QRect(host.pos(), host.size()), available)
+
+    def test_open_overlays_follow_the_pet_back_onto_the_screen(self) -> None:
+        from meapet.desktop.chat_flow import PetChatFlowMixin
+        from meapet.desktop.status_panel import StatusPanel
+
+        available = QApplication.primaryScreen().availableGeometry()
+
+        from meapet.desktop.interaction import PetInteractionMixin
+        from meapet.desktop.render_host import PetRenderHostMixin
+
+        class OverlayHost(
+            PetChatFlowMixin, PetInteractionMixin, PetRenderHostMixin, QWidget
+        ):
+            def __init__(self) -> None:
+                super().__init__()
+                self.config = {"bubble_duration_ms": {"default": 5000}}
+                self.bubble = None
+
+        host = self._track(OverlayHost())
+        host.resize(200, 300)
+        host.move(available.right() + 600, available.bottom() + 400)
+
+        host._start_chat()
+        composer = self._track(host._chat_input)
+        panel = self._track(StatusPanel(_MemoryStub()))
+        host._status_panel = panel
+        panel.show()
+        panel.move(available.right() + 900, available.bottom() + 900)
+
+        host._ensure_on_screen()
+
+        self._assert_within_screen(QRect(host.pos(), host.size()), available)
+        self._assert_within_screen(QRect(composer.pos(), composer.size()), available)
+        self._assert_within_screen(QRect(panel.pos(), panel.size()), available)
+
+    def _make_size_host(self, factor: float = 1.0):
+        """带 PNG 渲染替身的桌宠宿主，用于验证窗口大小调节。"""
+        from meapet.desktop.interaction import PetInteractionMixin
+        from meapet.desktop.render_host import PetRenderHostMixin
+
+        class _RendererStub:
+            def get_current_pixmap(self):
+                from PyQt5.QtGui import QPixmap
+
+                pixmap = QPixmap(200, 300)
+                pixmap.fill(Qt.transparent)
+                return pixmap
+
+        class SizeHost(PetInteractionMixin, PetRenderHostMixin, QWidget):
+            def __init__(self) -> None:
+                super().__init__()
+                self.config = {
+                    "bubble_duration_ms": {"default": 5000},
+                    "display": {"scale": 1.0, "size_factor": factor},
+                }
+                self.bubble = None
+                self._use_live2d = False
+                self._scale = 1.0
+                self._size_factor = factor
+                self.renderer = _RendererStub()
+                self.sprite_label = QLabel(self)
+                self.saved = 0
+
+            def _save_config(self):
+                self.saved += 1
+
+            def _apply_hit_region(self):
+                pass
+
+        return self._track(SizeHost())
+
+    def test_size_presets_resize_the_window_and_persist_the_percentage(self) -> None:
+        host = self._make_size_host()
+        host._size_factor_preview(1.0)
+        base = QSize(host.width(), host.height())
+
+        host._set_size_factor(1.5)
+
+        self.assertAlmostEqual(host._size_factor, 1.5)
+        self.assertEqual(host.config["display"]["size_factor"], 1.5)
+        self.assertEqual(host.saved, 1)
+        self.assertGreater(host.width(), base.width())
+        self.assertGreater(host.height(), base.height())
+
+        # 超出支持范围的值被收敛到 30%–300%。
+        host._set_size_factor(9.0)
+        self.assertEqual(host.config["display"]["size_factor"], 3.0)
+        host._set_size_factor(0.01)
+        self.assertEqual(host.config["display"]["size_factor"], 0.3)
+
+    def test_saved_config_applies_the_new_window_size_without_restart(self) -> None:
+        host = self._make_size_host()
+        host._size_factor_preview(1.0)
+        before = QSize(host.width(), host.height())
+
+        host.config["display"]["size_factor"] = 2.0
+        host._apply_display_preference()
+
+        self.assertAlmostEqual(host._size_factor, 2.0)
+        self.assertGreater(host.width(), before.width())
+
+        # 配置值未变化时不重复缩放。
+        size = QSize(host.width(), host.height())
+        host._apply_display_preference()
+        self.assertEqual(QSize(host.width(), host.height()), size)
+
+    def test_resizing_keeps_the_pet_anchored_and_on_screen(self) -> None:
+        available = QApplication.primaryScreen().availableGeometry()
+        host = self._make_size_host()
+        host._size_factor_preview(1.0)
+        host.move(
+            available.left() + 200,
+            available.bottom() - host.height() + 1,
+        )
+        bottom_center = QRect(host.pos(), host.size()).center().x()
+        bottom = QRect(host.pos(), host.size()).bottom()
+
+        host._size_factor_preview(1.4)
+
+        grown = QRect(host.pos(), host.size())
+        # 以脚下为锚点：底边与水平中心保持，不会往右下角长出去。
+        self.assertAlmostEqual(grown.center().x(), bottom_center, delta=2)
+        self.assertAlmostEqual(grown.bottom(), bottom, delta=2)
+        self._assert_within_screen(grown, available)
+
+        # 贴着屏幕边缘放大时仍会被夹回可见区域。
+        host.move(available.right() - host.width() + 1, available.top())
+        host._size_factor_preview(2.0)
+        self._assert_within_screen(QRect(host.pos(), host.size()), available)
+
+    def test_context_menu_offers_window_size_presets_and_custom_entry(self) -> None:
+        from meapet.ui_theme import PET_SIZE_PRESETS
+
+        host = self._make_menu_host()
+        host.config["display"] = {"size_factor": 1.25}
+        menu = self._track(host._build_context_menu())
+        display_menu = next(
+            action.menu()
+            for action in menu.actions()
+            if action.menu() is not None
+            and action.menu().title() == "显示与立绘"
+        )
+        size_menu = next(
+            action.menu()
+            for action in display_menu.actions()
+            if action.menu() is not None
+        )
+        self.assertEqual(size_menu.title(), "窗口大小 · 125%")
+        labels = [
+            action.text()
+            for action in size_menu.actions()
+            if not action.isSeparator()
+        ]
+        self.assertEqual(
+            labels,
+            [f"{percent}%" for percent in PET_SIZE_PRESETS] + ["自定义…"],
+        )
+        checked = [
+            action.text()
+            for action in size_menu.actions()
+            if action.isCheckable() and action.isChecked()
+        ]
+        self.assertEqual(checked, ["125%"])
+
     def _make_menu_host(self):
         from meapet.desktop.window_chrome import PetWindowChromeMixin
 
@@ -1224,10 +1648,16 @@ class UiRefactorTests(unittest.TestCase):
         self.assertTrue(flags & int(Qt.FramelessWindowHint))
         self.assertTrue(flags & int(Qt.WindowStaysOnTopHint))
 
-        # 根层动作与分组与 QMenu 结构一致。
+        # 分组与 QMenu 结构一致；嵌套分组（窗口大小）就地展开在父组之前登记。
         self.assertEqual(
             [title for _button, _body, title in window._groups],
-            ["切换表情", "识图与观察", "显示与立绘", "设置与数据"],
+            [
+                "切换表情",
+                "识图与观察",
+                "窗口大小 · 100%",
+                "显示与立绘",
+                "设置与数据",
+            ],
         )
         self.assertIn("退出", [b.text() for b, _a in window._action_buttons])
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from PyQt5.QtCore import QPoint, QSize, Qt, QTimer
 from PyQt5.QtWidgets import (
-    QApplication,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
@@ -24,6 +23,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
 from meapet.desktop.icons import standard_icon
+from meapet.desktop.screen_geometry import available_geometry_for, clamp_position
 from meapet.desktop.theme import COLOR_ACCENT, PET_MENU_WINDOW_STYLE
 from meapet.ui_theme import ensure_application_fonts, set_scaled_stylesheet
 
@@ -251,12 +251,9 @@ class PetMenuWindow(QWidget):
         width = max(MIN_CARD_WIDTH, body.sizeHint().width()) + SHADOW_MARGIN * 2 + 20
 
         max_height = 720
-        try:
-            screen = QApplication.desktop().availableGeometry(self)
-            if screen.height() > 0:
-                max_height = int(screen.height() * 0.85)
-        except Exception:
-            pass
+        area = available_geometry_for(self)
+        if area is not None and area.height() > 0:
+            max_height = int(area.height() * 0.85)
         height = min(content_height + header_height + chrome, max_height)
         self.setFixedWidth(width)
         self.setFixedHeight(height)
@@ -266,14 +263,12 @@ class PetMenuWindow(QWidget):
 
     def _clamped_pos(self, global_pos: QPoint) -> QPoint:
         """把目标坐标夹到当前屏幕可用区域内。"""
-        x, y = global_pos.x(), global_pos.y()
-        try:
-            screen = QApplication.desktop().availableGeometry(global_pos)
-            x = min(max(x, screen.left()), max(screen.left(), screen.right() - self.width()))
-            y = min(max(y, screen.top()), max(screen.top(), screen.bottom() - self.height()))
-        except Exception:
-            pass
-        return QPoint(x, y)
+        size = QSize(self.width(), self.height())
+        area = available_geometry_for(global_pos)
+        if area is None:
+            return QPoint(global_pos)
+        # 菜单自带阴影留白，无需再额外空出屏幕边距。
+        return clamp_position(global_pos, size, area, margin=0)
 
     def show_at(self, global_pos: QPoint) -> None:
         """在指定全局坐标显示，并保证完整落在屏幕可用区域内。"""

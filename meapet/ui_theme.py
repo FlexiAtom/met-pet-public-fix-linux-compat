@@ -68,6 +68,14 @@ UI_FONT_SCALE_MIN = 0.8
 UI_FONT_SCALE_MAX = 1.5
 UI_FONT_SCALE_DEFAULT = 1.0
 _UI_FONT_SCALE = UI_FONT_SCALE_DEFAULT
+
+# 桌宠窗口缩放（display.size_factor）：桌宠窗口与立绘一起按百分比缩放。
+PET_SIZE_FACTOR_MIN = 0.3
+PET_SIZE_FACTOR_MAX = 3.0
+PET_SIZE_FACTOR_DEFAULT = 1.0
+PET_SIZE_FACTOR_STEP = 0.05
+# 右键菜单里的快捷百分比档位。
+PET_SIZE_PRESETS = (50, 75, 100, 125, 150, 200)
 _BASE_STYLESHEET_PROPERTY = "_meapetBaseStylesheet"
 _SCALED_STYLESHEET_PROPERTY = "_meapetScaledStylesheet"
 _FONT_SIZE_PATTERN = re.compile(
@@ -149,6 +157,18 @@ def normalize_ui_font_scale(value: object) -> float:
     if not math.isfinite(scale):
         return UI_FONT_SCALE_DEFAULT
     return min(max(scale, UI_FONT_SCALE_MIN), UI_FONT_SCALE_MAX)
+
+
+def normalize_pet_size_factor(value: object) -> float:
+    """把任意配置值规范到受支持的桌宠窗口缩放范围（30%–300%）。"""
+    try:
+        factor = float(value)
+    except (TypeError, ValueError):
+        return PET_SIZE_FACTOR_DEFAULT
+    if not math.isfinite(factor):
+        return PET_SIZE_FACTOR_DEFAULT
+    factor = min(max(factor, PET_SIZE_FACTOR_MIN), PET_SIZE_FACTOR_MAX)
+    return round(factor, 2)
 
 
 def get_ui_font_scale() -> float:
