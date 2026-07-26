@@ -588,6 +588,41 @@ def _normalize_llm_contract(value: object) -> dict:
             direct.pop("headers", None)
     else:
         direct.pop("headers", None)
+    # 高级配置：超时（秒）、按供应商生效的代理、Anthropic 扩展思考。
+    try:
+        timeout_value = float(direct.get("timeout_seconds") or 0)
+    except (TypeError, ValueError):
+        timeout_value = 0.0
+    if timeout_value > 0:
+        direct["timeout_seconds"] = timeout_value
+    else:
+        direct.pop("timeout_seconds", None)
+    proxy_value = str(direct.get("proxy") or "").strip()
+    if proxy_value:
+        direct["proxy"] = proxy_value
+    else:
+        direct.pop("proxy", None)
+    raw_thinking = direct.get("thinking")
+    if isinstance(raw_thinking, dict):
+        thinking_type = str(raw_thinking.get("type") or "").strip().lower()
+        effort = str(raw_thinking.get("effort") or "").strip().lower()
+        try:
+            budget = int(raw_thinking.get("budget") or 0)
+        except (TypeError, ValueError):
+            budget = 0
+        if thinking_type == "adaptive" or budget > 0:
+            cleaned_thinking: Dict[str, object] = {}
+            if thinking_type:
+                cleaned_thinking["type"] = thinking_type
+            if budget > 0:
+                cleaned_thinking["budget"] = budget
+            if effort:
+                cleaned_thinking["effort"] = effort
+            direct["thinking"] = cleaned_thinking
+        else:
+            direct.pop("thinking", None)
+    else:
+        direct.pop("thinking", None)
     # 显式 protocol 优先；缺省时按端点地址（再回落旧 provider 标签）推断。
     if not str(direct.get("protocol") or "").strip():
         direct["protocol"] = infer_direct_protocol(

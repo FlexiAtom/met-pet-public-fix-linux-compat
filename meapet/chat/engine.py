@@ -89,6 +89,9 @@ class ChatEngine:
         max_tokens: int = 4096,
         direct_client=None,
         extra_headers: dict | None = None,
+        timeout_seconds: float = 0.0,
+        proxy: str = "",
+        thinking: dict | None = None,
     ):
         # 身份标签一律 custom；真正分流看 protocol / api_base。
         self.backend = "custom"
@@ -101,6 +104,12 @@ class ChatEngine:
         self.extra_headers = {
             str(k): str(v) for k, v in (extra_headers or {}).items()
         }
+        self.proxy = str(proxy or "").strip()
+        self.thinking = dict(thinking or {})
+        try:
+            self.timeout_seconds = float(timeout_seconds or 0)
+        except (TypeError, ValueError):
+            self.timeout_seconds = 0.0
         if not protocol:
             from meapet.config.store import infer_direct_protocol
             protocol = infer_direct_protocol(
@@ -194,8 +203,15 @@ class ChatEngine:
                     protocol=self.protocol or "openai_chat",   # 尊重 llm.direct.protocol
                     base_url=self._direct_base_url(),
                     api_key=self.api_key,
-                    timeout_seconds=max(300.0, (self.max_tokens / 1000) * 60.0),
+                    # 用户显式配置的超时优先；未配置时按 max_tokens 估算下限。
+                    timeout_seconds=(
+                        self.timeout_seconds
+                        if self.timeout_seconds > 0
+                        else max(300.0, (self.max_tokens / 1000) * 60.0)
+                    ),
                     extra_headers=self.extra_headers,
+                    proxy=self.proxy,
+                    thinking=self.thinking,
                 )
             )
             self._direct_client = client
@@ -1040,6 +1056,11 @@ def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatE
         max_tokens=direct.get("max_tokens", llm_cfg.get("max_tokens", 4096)),
         extra_headers=(
             direct.get("headers") if isinstance(direct.get("headers"), dict) else {}
+        ),
+        timeout_seconds=direct.get("timeout_seconds", 0),
+        proxy=direct.get("proxy", ""),
+        thinking=(
+            direct.get("thinking") if isinstance(direct.get("thinking"), dict) else {}
         ),
     )
 

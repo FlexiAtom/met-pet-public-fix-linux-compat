@@ -268,6 +268,139 @@ class ModelFetchRequestTests(unittest.TestCase):
         self.assertEqual(seen["headers"].get("x-title"), "MeaPet")
 
 
+class AdvancedSectionTests(unittest.TestCase):
+    """向导「高级配置」折叠区：超时 / 代理 / 自定义头 / Anthropic 扩展思考。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt5.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from wizard.page_llm import LLMPage
+        from PyQt5.QtWidgets import QApplication
+        self.page = LLMPage()
+        self.page.show()
+        self.addCleanup(QApplication.processEvents)
+        self.addCleanup(self.page.deleteLater)
+
+    def _select(self, preset_id: str):
+        idx = next(
+            i for i in range(self.page.provider_combo.count())
+            if self.page.provider_combo.itemData(i) == preset_id
+        )
+        self.page.provider_combo.setCurrentIndex(idx)
+
+    def test_collapsed_by_default_and_toggles(self):
+        self.assertFalse(self.page.advanced_box.isVisible())
+        self.page.advanced_toggle.setChecked(True)
+        self.assertTrue(self.page.advanced_box.isVisible())
+        self.page.advanced_toggle.setChecked(False)
+        self.assertFalse(self.page.advanced_box.isVisible())
+
+    def test_thinking_group_only_for_anthropic(self):
+        self.page.advanced_toggle.setChecked(True)
+        self._select("anthropic")
+        self.assertTrue(self.page.thinking_group.isVisible())
+        self._select("openai")
+        self.assertFalse(self.page.thinking_group.isVisible())
+
+    def test_adaptive_thinking_payload(self):
+        self._select("anthropic")
+        self.page.thinking_mode.setCurrentIndex(
+            self.page.thinking_mode.findData("adaptive")
+        )
+        self.page.thinking_effort.setCurrentIndex(
+            self.page.thinking_effort.findData("high")
+        )
+        profile = self.page.collect_direct_profile()
+        self.assertEqual(profile["thinking"], {"type": "adaptive", "effort": "high"})
+
+    def test_thinking_not_saved_for_non_anthropic(self):
+        self._select("anthropic")
+        self.page.thinking_mode.setCurrentIndex(
+            self.page.thinking_mode.findData("adaptive")
+        )
+        self._select("openai")
+        self.assertNotIn("thinking", self.page.collect_direct_profile())
+
+    def test_timeout_proxy_headers_roundtrip(self):
+        self.page.headers_input.setText("X-Title: MeaPet; HTTP-Referer: https://x.dev")
+        self.page.timeout_input.setValue(90)
+        self.page.proxy_input.setText("http://127.0.0.1:7890")
+        profile = self.page.collect_direct_profile()
+        self.assertEqual(
+            profile["headers"],
+            {"X-Title": "MeaPet", "HTTP-Referer": "https://x.dev"},
+        )
+        self.assertEqual(profile["timeout_seconds"], 90.0)
+        self.assertEqual(profile["proxy"], "http://127.0.0.1:7890")
+
+        from wizard.page_llm import LLMPage
+        from PyQt5.QtWidgets import QApplication
+        restored = LLMPage()
+        self.addCleanup(QApplication.processEvents)
+        self.addCleanup(restored.deleteLater)
+        restored.show()
+        restored.apply_direct_profile(profile)
+        # 有高级配置时应自动展开，避免用户以为配置丢了
+        self.assertTrue(restored.advanced_box.isVisible())
+        self.assertEqual(restored.timeout_input.value(), 90)
+        self.assertEqual(restored.proxy_input.text(), "http://127.0.0.1:7890")
+        self.assertEqual(restored.collect_direct_profile()["headers"], profile["headers"])
+
+    def test_zero_timeout_means_auto_and_is_not_saved(self):
+        self.page.timeout_input.setValue(0)
+        self.assertNotIn("timeout_seconds", self.page.collect_direct_profile())
+
+
+class AnthropicThinkingPayloadTests(unittest.TestCase):
+    """thinking 配置 → Anthropic 请求体的翻译规则。"""
+
+    def _body(self, thinking):
+        from meapet.direct.client import (
+            DirectProtocolConfig,
+            _SPEC_BUILDERS,
+        )
+        from meapet.direct.types import CanonicalChatRequest
+        cfg = DirectProtocolConfig(
+            protocol="anthropic_messages",
+            base_url="https://api.anthropic.com/v1",
+            api_key="sk-ant",
+            thinking=thinking,
+        )
+        req = CanonicalChatRequest(
+            model="claude-3-5-sonnet-latest",
+            messages=({"role": "user", "content": "hi"},),
+        )
+        return _SPEC_BUILDERS[cfg.protocol](cfg, req).body
+
+    def test_adaptive_with_effort(self):
+        body = self._body({"type": "adaptive", "effort": "high"})
+        self.assertEqual(body["thinking"], {"type": "adaptive", "effort": "high"})
+        # 开启思考时不得发送 temperature（接口要求）
+        self.assertNotIn("temperature", body)
+
+    def test_manual_budget_requires_minimum(self):
+        self.assertEqual(
+            self._body({"type": "enabled", "budget": 2048})["thinking"],
+            {"type": "enabled", "budget_tokens": 2048},
+        )
+        # 低于 1024 视为无效，不发送 thinking
+        self.assertNotIn("thinking", self._body({"type": "enabled", "budget": 512}))
+
+    def test_disabled_by_default(self):
+        body = self._body({})
+        self.assertNotIn("thinking", body)
+        self.assertIn("temperature", body)
+
+    def test_invalid_effort_is_dropped(self):
+        body = self._body({"type": "adaptive", "effort": "bogus"})
+        self.assertEqual(body["thinking"], {"type": "adaptive"})
+
+
 class ExtraHeaderMergeTests(unittest.TestCase):
     """direct 客户端的自定义请求头合并规则。"""
 
