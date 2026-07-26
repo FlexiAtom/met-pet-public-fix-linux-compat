@@ -308,6 +308,87 @@ class OpenAIAdapterTests(unittest.IsolatedAsyncioTestCase):
         await adapter.close()
         adapter._client.aclose.assert_awaited_once()
 
+    # ---------- stream_turn 分段事件契约（回归守卫：Agent 模式对话链路） ----------
+
+    _SEGMENT_OUTPUT = (
+        "<MEAPET_SEGMENT>\n"
+        "<DISPLAY>你好呀</DISPLAY>\n"
+        '<META>{"voice_text":"你好呀","voice_language":"zh-CN",'
+        '"mood":"happy","tts_style":""}</META>\n'
+        "</MEAPET_SEGMENT>\n"
+        "<MEAPET_DONE />"
+    )
+
+    async def test_stream_turn_emits_segment_and_completed(self):
+        """stream_turn 必须产出 SegmentCompleted + TurnCompleted，
+        否则 AgentTurnPresentation 不显示气泡、TTS 死锁。"""
+        adapter, _ = self._make_adapter()
+
+        async def _lines():
+            for piece in (self._SEGMENT_OUTPUT[:20], self._SEGMENT_OUTPUT[20:]):
+                yield 'data: {"choices":[{"delta":{"content":%s}}]}' % _json_str(piece)
+            yield "data: [DONE]"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.aiter_lines = _lines
+        adapter._client.stream = MagicMock(return_value=AsyncContextManager(mock_response))
+
+        req = self._make_request()
+        names = []
+        completed = None
+        async for event in adapter.stream_turn(req):
+            names.append(type(event).__name__)
+            if type(event).__name__ == "TurnCompleted":
+                completed = event
+
+        self.assertNotIn("TurnFailed", names)
+        self.assertIn("SegmentCompleted", names)
+        self.assertEqual(names[-1], "TurnCompleted")
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.result.segments[0].display_text.strip(), "你好呀")
+
+    async def test_stream_turn_cancel_before_start(self):
+        adapter, _ = self._make_adapter()
+        await adapter.cancel_turn("test-turn")
+        req = self._make_request()
+        events = [e async for e in adapter.stream_turn(req)]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(type(events[0]).__name__, "TurnCancelled")
+
+    async def test_stream_turn_api_error_is_reported(self):
+        adapter, _ = self._make_adapter()
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.aread = AsyncMock(return_value=b'{"error":"unauthorized"}')
+        adapter._client.stream = MagicMock(return_value=AsyncContextManager(mock_response))
+
+        req = self._make_request()
+        events = [e async for e in adapter.stream_turn(req)]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(type(events[0]).__name__, "TurnFailed")
+        self.assertEqual(events[0].category, "api_error")
+
+    async def test_probe_returns_true_on_models_ok(self):
+        adapter, _ = self._make_adapter()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        adapter._client.get = AsyncMock(return_value=mock_response)
+        self.assertTrue(await adapter.probe())
+
+    async def test_probe_raises_on_auth_failure(self):
+        adapter, _ = self._make_adapter()
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        adapter._client.get = AsyncMock(return_value=mock_response)
+        with self.assertRaises(RuntimeError):
+            await adapter.probe()
+
+
+def _json_str(text: str) -> str:
+    import json
+    return json.dumps(text, ensure_ascii=False)
+
 
 if __name__ == "__main__":
     unittest.main()
