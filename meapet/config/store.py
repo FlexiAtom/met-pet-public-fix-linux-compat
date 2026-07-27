@@ -25,6 +25,8 @@ from meapet.config.normalizers import (
     canonical_tts_language,
     normalize_gsv_ref_language,
 )
+from meapet.config import providers as _providers
+from meapet.ui_theme import normalize_ui_font_scale
 from meapet.ui_theme import normalize_pet_size_factor, normalize_ui_font_scale
 from meapet.utils import mask_secret, normalize_watcher
 from meapet.vision.policy import normalize_vision_mode
@@ -57,6 +59,14 @@ PROTOCOL_BY_ENDPOINT_FAMILY = {
 }
 # 旧名：历史代码/测试可能仍 import。
 PROTOCOL_BY_PROVIDER = PROTOCOL_BY_ENDPOINT_FAMILY
+
+# 从 providers 预设注册表补齐新供应商的协议与密钥环境变量映射（单一数据源）。
+# 用 setdefault：不覆盖上面已有的 5 个内置 family（保持既有行为）。
+for _preset in _providers.all_presets():
+    PROTOCOL_BY_ENDPOINT_FAMILY.setdefault(_preset.id, _preset.protocol)
+    if _preset.env_keys:
+        ENV_LLM_KEY_BY_FAMILY.setdefault(_preset.id, _preset.family_env_keys)
+
 _DIRECT_PROVIDERS = frozenset({"custom"})
 # 旧顶层 backend 属于 Agent 类时，无 mode 配置迁去 agent。
 _AGENT_KINDS = frozenset({"hermes", "openclaw"})
@@ -84,6 +94,12 @@ def _endpoint_family_from_text(text: object) -> str:
         return "anthropic"
     if "deepseek" in value:
         return "deepseek"
+    # 预设注册表里的其余供应商（moonshot / zhipu / qwen / groq / lmstudio 等）。
+    # 放在 loopback 判定之前：LM Studio 这类本地 OpenAI 兼容服务的地址签名更具体，
+    # 不应被下面宽泛的 localhost→ollama 规则吞掉。ollama 仍走既有弱信号逻辑。
+    _preset_hit = _providers.detect_preset_by_url(value)
+    if _preset_hit is not None and _preset_hit.id != "ollama":
+        return _preset_hit.id
     if "11434" in value or "localhost" in value or "127.0.0.1" in value:
         return "ollama"
     if "openai.com" in value:
@@ -559,6 +575,55 @@ def _normalize_llm_contract(value: object) -> dict:
     direct.setdefault("api_key", str(llm.get("api_key") or "").strip())
     direct.setdefault("temperature", llm.get("temperature", 0.7))
     direct.setdefault("max_tokens", llm.get("max_tokens", 4096))
+    # 供应商自定义请求头：只保留字符串键值，非法结构直接丢弃。
+    raw_headers = direct.get("headers")
+    if isinstance(raw_headers, dict):
+        cleaned_headers = {
+            str(k).strip(): str(v)
+            for k, v in raw_headers.items()
+            if str(k or "").strip()
+        }
+        if cleaned_headers:
+            direct["headers"] = cleaned_headers
+        else:
+            direct.pop("headers", None)
+    else:
+        direct.pop("headers", None)
+    # 高级配置：超时（秒）、按供应商生效的代理、Anthropic 扩展思考。
+    try:
+        timeout_value = float(direct.get("timeout_seconds") or 0)
+    except (TypeError, ValueError):
+        timeout_value = 0.0
+    if timeout_value > 0:
+        direct["timeout_seconds"] = timeout_value
+    else:
+        direct.pop("timeout_seconds", None)
+    proxy_value = str(direct.get("proxy") or "").strip()
+    if proxy_value:
+        direct["proxy"] = proxy_value
+    else:
+        direct.pop("proxy", None)
+    raw_thinking = direct.get("thinking")
+    if isinstance(raw_thinking, dict):
+        thinking_type = str(raw_thinking.get("type") or "").strip().lower()
+        effort = str(raw_thinking.get("effort") or "").strip().lower()
+        try:
+            budget = int(raw_thinking.get("budget") or 0)
+        except (TypeError, ValueError):
+            budget = 0
+        if thinking_type == "adaptive" or budget > 0:
+            cleaned_thinking: Dict[str, object] = {}
+            if thinking_type:
+                cleaned_thinking["type"] = thinking_type
+            if budget > 0:
+                cleaned_thinking["budget"] = budget
+            if effort:
+                cleaned_thinking["effort"] = effort
+            direct["thinking"] = cleaned_thinking
+        else:
+            direct.pop("thinking", None)
+    else:
+        direct.pop("thinking", None)
     # 显式 protocol 优先；缺省时按端点地址（再回落旧 provider 标签）推断。
     if not str(direct.get("protocol") or "").strip():
         direct["protocol"] = infer_direct_protocol(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Mapping, Optional
 from urllib.parse import urlsplit, urlunsplit
@@ -70,6 +70,13 @@ class DirectProtocolConfig:
     timeout_seconds: float = 300.0
     verify_tls: bool = True
     ca_file: str = ""
+    # 供应商自定义请求头（如 OpenRouter 的 HTTP-Referer / 网关要求的额外头）。
+    # 与协议自带的鉴权头合并，但不允许覆盖鉴权与 Content-Type（见 _with_extra_headers）。
+    extra_headers: Mapping[str, str] = field(default_factory=dict)
+    # 仅对该供应商生效的 HTTP(S) 代理，如 http://127.0.0.1:7890。
+    proxy: str = ""
+    # Anthropic 扩展思考配置：{"type": "adaptive"|"enabled"|"", "budget": int, "effort": str}
+    thinking: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         protocol = str(self.protocol or "").strip().lower()
@@ -412,6 +419,38 @@ def _responses_spec(
     )
 
 
+# Anthropic 扩展思考的最小预算（接口要求 >= 1024）。
+_ANTHROPIC_MIN_THINKING_BUDGET = 1024
+_ANTHROPIC_EFFORTS = frozenset({"low", "medium", "high", "max"})
+
+
+def _anthropic_thinking_payload(
+    thinking: Mapping[str, object],
+) -> Optional[dict[str, object]]:
+    """把配置里的思考设置翻译成 Anthropic 请求体的 thinking 字段。
+
+    - type=adaptive：自适应思考，可带 effort（low/medium/high/max）。
+    - 未指定 type 但给了 budget：按手动预算模式，budget_tokens 须 >= 1024。
+    - 其余情况返回 None（不发送 thinking 字段）。
+    """
+    if not thinking:
+        return None
+    kind = str(thinking.get("type") or "").strip().lower()
+    if kind == "adaptive":
+        payload: dict[str, object] = {"type": "adaptive"}
+        effort = str(thinking.get("effort") or "").strip().lower()
+        if effort in _ANTHROPIC_EFFORTS:
+            payload["effort"] = effort
+        return payload
+    try:
+        budget = int(thinking.get("budget") or 0)
+    except (TypeError, ValueError):
+        return None
+    if kind in ("", "enabled") and budget >= _ANTHROPIC_MIN_THINKING_BUDGET:
+        return {"type": "enabled", "budget_tokens": budget}
+    return None
+
+
 def _anthropic_spec(
     config: DirectProtocolConfig,
     request: CanonicalChatRequest,
@@ -437,6 +476,11 @@ def _anthropic_spec(
         "max_tokens": request.max_tokens,
         "stream": request.stream,
     }
+    thinking = _anthropic_thinking_payload(config.thinking)
+    if thinking is not None:
+        body["thinking"] = thinking
+        # 开启扩展思考时 temperature 必须为默认值，否则接口报 400。
+        body.pop("temperature", None)
     body.update(request.extra)
     headers = {
         "Accept": "text/event-stream",
@@ -460,6 +504,27 @@ _SPEC_BUILDERS = {
     "anthropic_messages": _anthropic_spec,
 }
 
+# 自定义头不得篡改鉴权与协议语义（否则一个配置错误就会把密钥发错地方，
+# 或让 SSE 解析失败）。这些头只能由协议自身决定。
+_PROTECTED_HEADERS = frozenset(
+    {"authorization", "x-api-key", "anthropic-version", "content-type", "accept"}
+)
+
+
+def _with_extra_headers(
+    spec: _RequestSpec, extra: Mapping[str, str]
+) -> _RequestSpec:
+    """把供应商自定义头合并进请求；受保护的鉴权/协议头不可被覆盖。"""
+    if not extra:
+        return spec
+    merged = dict(spec.headers)
+    for key, value in extra.items():
+        name = str(key or "").strip()
+        if not name or name.lower() in _PROTECTED_HEADERS:
+            continue
+        merged[name] = str(value)
+    return _RequestSpec(spec.url, merged, spec.body, spec.stream_kind)
+
 
 class DirectProtocolClient:
     def __init__(
@@ -475,7 +540,8 @@ class DirectProtocolClient:
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is not None:
             return self._client
-        if self.config.ca_file or not self.config.verify_tls:
+        # 代理是按供应商配置的，不能用进程级共享客户端，必须自持。
+        if self.config.ca_file or not self.config.verify_tls or self.config.proxy:
             if self._owned_client is None or self._owned_client.is_closed:
                 verify: object = self.config.verify_tls
                 if self.config.ca_file:
@@ -486,11 +552,15 @@ class DirectProtocolClient:
                             "模型接口 CA 证书文件不存在。",
                         )
                     verify = str(ca_path)
+                kwargs: dict[str, object] = {}
+                if self.config.proxy:
+                    kwargs["proxy"] = self.config.proxy
                 self._owned_client = httpx.AsyncClient(
                     timeout=httpx.Timeout(self.config.timeout_seconds, connect=10.0),
                     follow_redirects=True,
                     verify=verify,
                     headers={"User-Agent": "MeaPet/1.0"},
+                    **kwargs,
                 )
             return self._owned_client
         from meapet.http_async import get_client
@@ -567,7 +637,10 @@ class DirectProtocolClient:
         *,
         attempt: int = 1,
     ) -> AsyncIterator[object]:
-        spec = _SPEC_BUILDERS[self.config.protocol](self.config, request)
+        spec = _with_extra_headers(
+            _SPEC_BUILDERS[self.config.protocol](self.config, request),
+            self.config.extra_headers,
+        )
         client = await self._get_client()
         log.info(
             f"[direct] HTTP 发起 attempt={attempt}/{_NETWORK_RETRY_ATTEMPTS} "
