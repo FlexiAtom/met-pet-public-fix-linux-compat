@@ -61,6 +61,7 @@ Do not commit: `config.json`, secrets, `*.db`, `logs/`, `audio_cache/`, `voice_c
 - `WA_QuitOnClose = False`; exit only through tray menu.
 - `app.setQuitOnLastWindowClosed(False)` + offscreen keepalive `QWidget` prevent early exit.
 - `socket` must be imported **before** any PyQt path (QtNetwork hook conflict) — enforced in `app.py` and `chat/engine.py`.
+- Screen geometry (`meapet/desktop/screen_geometry.py`): every pet-anchored popup is placed through it (never hardcode `primaryScreen()`). `_init_screen_guard()` in `render_host.py` watches `screenAdded/screenRemoved/primaryScreenChanged` + per-screen `geometryChanged/availableGeometryChanged/logicalDotsPerInchChanged`, debounces `SCREEN_GUARD_DEBOUNCE_MS`, then `_ensure_on_screen()` pulls the pet (and open overlays) back into the visible area.
 
 **Config** (`meapet/config/store.py`): Single `config.json`. Env var > config.json priority. `$ENV_VAR` / `${ENV_VAR}` placeholders. `resolve_secret()` handles credential resolution. Key env vars: `DEEPSEEK_API_KEY`, `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY`, `MEAPET_API_KEY`, `HERMES_API_SERVER_KEY` / `MEAPET_AGENT_TOKEN`, `MEAPET_CONTROL_TOKEN`, `GSV_PYTHON`, `MEAPET_FORCE_PNG`, `MEAPET_DEBUG`, `MEAPET_ALLOW_DOWNLOAD`, `MEAPET_REDUCED_MOTION`.
 
@@ -97,6 +98,7 @@ Do not commit: `config.json`, secrets, `*.db`, `logs/`, `audio_cache/`, `voice_c
 - **Bubble + TTS timing**: with TTS on, wait for audio then show bubble + play together; duration is `max(configured min, audio_ms + 500)`. TTS failure falls back to text-only immediately. `tts.sync_with_audio` is legacy and forced to `true` in `normalize_config`. Config keys: `bubble_duration_ms` → `default/reply/watch/interaction/thinking`.
 - **Screen watcher**: random interval from `watcher.interval.min_ms/max_ms`. Off by default. Cloud vision requires `watcher.allow_cloud=true` + per-run confirmation with timeout → cancel.
 - **Config application**: save cancels inflight generation and rebuilds backend. `ConversationOrchestrator.invalidate()` increments `generation_id` — late replies/TTS/screenshots from old sessions are discarded via `accepts()` (checked in `chat_flow.py` and `workers.py`).
+- **Pet window size**: `display.size_factor` (30%–300%, `normalize_pet_size_factor` in `ui_theme.py`) is the single source — right-click menu presets/`SizeScaleDialog` and the wizard's 桌宠窗口大小 slider both write it; `_apply_display_preference()` re-applies it on config save (no restart). Resize anchors on bottom-center and clamps back onto the screen.
 - **Ollama protocol**: uses `/api/chat` NDJSON streaming. Other protocols use SSE.
 - **`ensure_utf8_stdout()`** called once at boot in `app.py` before any other imports. Other modules must not re-initialize it.
 - **Boot logs**: `meapet_boot.log` (startup), `meapet_fault.log` (fatal errors). Runtime logs in `logs/` with daily rotation.

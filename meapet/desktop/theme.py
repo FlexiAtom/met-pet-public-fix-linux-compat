@@ -70,6 +70,103 @@ MENU_STYLE = f"""
 """
 
 
+PET_MENU_WINDOW_STYLE = f"""
+    QWidget#PetMenuWindowRoot {{
+        background: transparent;
+        font-family: {FONT_FAMILY};
+    }}
+    QFrame#PetMenuCard {{
+        background: {rgba(COLOR_CARD, 252)};
+        border: 1px solid {COLOR_BORDER_STRONG};
+        border-radius: {RADIUS_MEDIUM}px;
+    }}
+    QLabel#PetMenuTitle {{
+        background: transparent;
+        color: {COLOR_SECONDARY};
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    QLabel#PetMenuHint {{
+        background: transparent;
+        color: {rgba(COLOR_MUTED, 170)};
+        font-size: 11px;
+    }}
+    QWidget#PetMenuHeader {{
+        background: transparent;
+    }}
+    QPushButton#PetMenuCloseButton {{
+        background: transparent;
+        color: {COLOR_SECONDARY};
+        border: 1px solid transparent;
+        border-radius: 6px;
+        min-width: 28px;
+        min-height: 28px;
+        font-size: 14px;
+        font-weight: 700;
+    }}
+    QPushButton#PetMenuCloseButton:hover {{
+        background: {rgba(COLOR_ERR, 45)};
+        border-color: {rgba(COLOR_ERR, 120)};
+        color: {COLOR_ERR};
+    }}
+    QPushButton#PetMenuItem, QPushButton#PetMenuGroup {{
+        background: transparent;
+        color: {COLOR_TEXT};
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 6px 12px;
+        min-height: 32px;
+        font-family: {FONT_FAMILY};
+        font-size: 14px;
+        text-align: left;
+    }}
+    QPushButton#PetMenuGroup {{
+        color: {COLOR_SECONDARY};
+        font-weight: 600;
+    }}
+    QPushButton#PetMenuItem:hover, QPushButton#PetMenuGroup:hover {{
+        background: {rgba(COLOR_FOCUS, 35)};
+        border-color: {rgba(COLOR_FOCUS, 90)};
+        color: {COLOR_TEXT};
+    }}
+    QPushButton#PetMenuItem:disabled {{
+        color: {rgba(COLOR_MUTED, 135)};
+        background: transparent;
+    }}
+    QPushButton#PetMenuItem[danger="true"]:hover {{
+        background: {rgba(COLOR_ERR, 40)};
+        border-color: {rgba(COLOR_ERR, 120)};
+        color: {COLOR_ERR};
+    }}
+    QFrame#PetMenuSeparator {{
+        background: {COLOR_BORDER};
+        border: none;
+        max-height: 1px;
+        min-height: 1px;
+    }}
+    QScrollArea#PetMenuScroll {{
+        background: transparent;
+        border: none;
+    }}
+    QScrollArea#PetMenuScroll > QWidget > QWidget {{
+        background: transparent;
+    }}
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 8px;
+        margin: 2px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {rgba(COLOR_MUTED, 110)};
+        border-radius: 4px;
+        min-height: 24px;
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        height: 0px;
+    }}
+"""
+
+
 DIALOG_STYLE = f"""
     QDialog {{
         background: {COLOR_BG};

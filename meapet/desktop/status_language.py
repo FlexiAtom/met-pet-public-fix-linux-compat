@@ -111,6 +111,15 @@ def menu_render_to_png() -> str:
     return "切回 PNG 立绘（当前 Live2D）"
 
 
+def menu_window_size(factor: float) -> str:
+    """窗口大小分组标题，带当前百分比。"""
+    return f"窗口大小 · {round(float(factor) * 100)}%"
+
+
+def window_size_applied(factor: float) -> str:
+    return f"窗口大小已调到 {round(float(factor) * 100)}%"
+
+
 def first_run_hint() -> str:
     """仅首次启动展示的一次性引导。"""
     return "双击说话 · 右键打开菜单 · 托盘可找回"
