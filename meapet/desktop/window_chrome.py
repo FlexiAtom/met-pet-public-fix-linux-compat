@@ -507,7 +507,7 @@ class PetWindowChromeMixin:
             from meapet.desktop.menu_window import PetMenuWindow
 
             menu = self._build_context_menu()
-            window = PetMenuWindow(menu, self)
+            window = PetMenuWindow(menu, None)
             self._menu_window = window
             window.show_at(self.mapToGlobal(pos))
         except Exception as exc:
