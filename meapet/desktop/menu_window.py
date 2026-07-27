@@ -31,25 +31,6 @@ from meapet.ui_theme import ensure_application_fonts, set_scaled_stylesheet
 SHADOW_MARGIN = 10
 MIN_CARD_WIDTH = 248
 INDENT_STEP = 14
-CHECK_ICON_SIZE = 16
-
-
-def _check_icon(checked: bool) -> QIcon:
-    """勾选标记图标；未选中时返回等宽透明图标，保证各行文字对齐。"""
-    pixmap = QPixmap(CHECK_ICON_SIZE, CHECK_ICON_SIZE)
-    pixmap.fill(QColor(0, 0, 0, 0))
-    if checked:
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor(COLOR_ACCENT))
-        pen.setWidth(2)
-        pen.setCapStyle(Qt.RoundCap)
-        pen.setJoinStyle(Qt.RoundJoin)
-        painter.setPen(pen)
-        painter.drawLine(3, 8, 6, 12)
-        painter.drawLine(6, 12, 13, 4)
-        painter.end()
-    return QIcon(pixmap)
 
 
 class PetMenuWindow(QWidget):
@@ -172,8 +153,7 @@ class PetMenuWindow(QWidget):
         toggle = QPushButton(f"▸  {title}")
         toggle.setObjectName("PetMenuGroup")
         toggle.setCursor(Qt.PointingHandCursor)
-        toggle.setIcon(action.icon() if not action.icon().isNull() else _check_icon(False))
-        toggle.setIconSize(QSize(CHECK_ICON_SIZE, CHECK_ICON_SIZE))
+        # 移除图标
         toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         toggle.setAccessibleName(f"{title} 分组")
         toggle.setStyleSheet(f"padding-left: {12 + depth * INDENT_STEP}px;")
@@ -197,14 +177,7 @@ class PetMenuWindow(QWidget):
     def _make_action_button(self, action, depth: int) -> QPushButton:
         button = QPushButton(action.text())
         button.setObjectName("PetMenuItem")
-        if action.isCheckable():
-            button.setIcon(_check_icon(action.isChecked()))
-        elif not action.icon().isNull():
-            button.setIcon(action.icon())
-        else:
-            # 占位透明图标：保证有无图标的行文字左边缘一致。
-            button.setIcon(_check_icon(False))
-        button.setIconSize(QSize(CHECK_ICON_SIZE, CHECK_ICON_SIZE))
+        # 移除图标设置
         button.setCursor(Qt.PointingHandCursor)
         button.setEnabled(action.isEnabled())
         button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -301,3 +274,4 @@ class PetMenuWindow(QWidget):
             self.close()
             return
         super().keyPressEvent(event)
+
