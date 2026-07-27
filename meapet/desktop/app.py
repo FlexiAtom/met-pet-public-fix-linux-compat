@@ -173,6 +173,7 @@ class MeaPet(
         _safe("tray", self._setup_tray)
         _safe("interaction", self._init_interaction)
         _safe("timers", self._init_timers)
+        _safe("screen", self._init_screen_guard)
 
         try:
             self._place_bottom_right()

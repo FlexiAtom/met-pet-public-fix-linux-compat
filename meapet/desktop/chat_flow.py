@@ -6,7 +6,7 @@ import shutil
 import threading
 import uuid
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QPoint, QRect, QSize, QTimer
 
 from meapet.utils import log_error, redact_text
 from meapet.agent.base import (
@@ -48,12 +48,47 @@ from meapet.desktop import status_language
 from meapet.desktop.audio import bubble_duration_for_audio
 from meapet.desktop.workers import AgentChatWorker, ChatWorker, TTSWorker
 from meapet.desktop.chat_input import ChatInputBox, set_awaiting_reply_state
+from meapet.desktop.screen_geometry import (
+    available_geometry_for,
+    calculate_popup_position,
+)
 from meapet.log import get_color_logger
 
 log = get_color_logger("chat_flow")
 
+# 消息编辑器与桌宠之间的间距。
+CHAT_INPUT_GAP = 20
+
 # 串行队列：确保记忆操作（摘要、提取等）不会并发执行
 _memory_op_lock = threading.Lock()
+
+
+def place_chat_input(host, composer) -> None:
+    """把消息编辑器贴到桌宠旁边，并保证完整落在屏幕可用区域内。
+
+    以编辑器实际尺寸居中，避免 UI 调整后仍依赖旧的硬编码宽度；桌宠贴边时优先
+    放上方，放不下再依次退让，最后夹进屏幕可用区域。
+    """
+    pet_rect = QRect(
+        QPoint(host.pos().x(), host.pos().y()),
+        QSize(host.width(), host.height()),
+    )
+    input_size = QSize(composer.width(), composer.height())
+    area = available_geometry_for(pet_rect)
+    if area is None:
+        position = QPoint(
+            pet_rect.x() + (pet_rect.width() - input_size.width()) // 2,
+            pet_rect.y() - input_size.height() - CHAT_INPUT_GAP,
+        )
+    else:
+        position = calculate_popup_position(
+            pet_rect,
+            input_size,
+            area,
+            placement="above",
+            gap=CHAT_INPUT_GAP,
+        )
+    composer.move(position)
 
 
 def _log_private_text(label: str, text: str, *, suffix: str = "") -> None:
@@ -229,15 +264,15 @@ class PetChatFlowMixin:
         if getattr(self, "_awaiting_reply", False):
             self._chat_input.set_busy(True, status_language.thinking_busy())
 
-        # 以编辑器实际尺寸居中，避免 UI 调整后仍依赖旧的硬编码宽度。
-        input_x = self.pos().x() + (self.width() - self._chat_input.width()) // 2
-        input_y = self.pos().y() - self._chat_input.height() - 20
-        if input_y < 30:
-            input_y = self.pos().y() + self.height() + 20
-
-        self._chat_input.move(max(0, input_x), max(0, input_y))
+        place_chat_input(self, self._chat_input)
         self._chat_input.text_submitted.connect(self._on_input_submit)
         self._chat_input.show()
+
+    def _place_chat_input(self) -> None:
+        """屏幕分辨率变化、桌宠被拉回可视范围后重新贴靠编辑器。"""
+        composer = getattr(self, "_chat_input", None)
+        if composer is not None:
+            place_chat_input(self, composer)
 
     def _on_input_submit(self, text: str):
         """用户提交了输入"""

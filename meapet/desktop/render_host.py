@@ -18,6 +18,15 @@ from meapet.desktop.widgets import (
     calculate_bubble_stack_opacities,
 )
 from meapet.desktop import status_language
+from meapet.desktop.screen_geometry import (
+    available_geometry_for,
+    calculate_centered_position,
+    clamp_position,
+    is_sufficiently_visible,
+    move_within_screen,
+    screen_bounds_for_rect,
+    widget_size,
+)
 from meapet.desktop.click_through import (
     ClickThroughState,
     RightClickEdgeDetector,
@@ -29,6 +38,7 @@ from meapet.desktop.window_shape import (
     apply_ellipse_window_shape,
     clear_window_shape,
 )
+from meapet.ui_theme import normalize_pet_size_factor
 from meapet.utils import safe_print
 
 
@@ -38,6 +48,10 @@ BUBBLE_STACK_GAP = 8
 BUBBLE_HEAD_ANCHOR_RATIO = 0.16
 BUBBLE_TAIL_CORNER_INSET = 36
 LIVE2D_STARTUP_TIMEOUT_MS = 5000
+# 一次分辨率变更会连发多个屏幕信号，合并后再校正位置。
+SCREEN_GUARD_DEBOUNCE_MS = 400
+# 桌宠宽高各至少露出这么多比例才算「还看得见」，否则拉回可用区域。
+PET_MIN_VISIBLE_RATIO = 0.5
 
 
 def calculate_drag_position(
@@ -609,7 +623,27 @@ class PetRenderHostMixin:
     def _on_sprite_changed(self, code: str):
         self._update_sprite()
 
+    def _set_size_factor(self, factor: float):
+        """按百分比档位直接应用窗口大小并写回配置（右键菜单快捷项）。"""
+        new_factor = normalize_pet_size_factor(factor)
+        self._size_factor_preview(new_factor)
+        self.config.setdefault("display", {})["size_factor"] = new_factor
+        self._save_config()
+        show = getattr(self, "_show_bubble", None)
+        if callable(show):
+            show(status_language.window_size_applied(new_factor), 2500, mood=None)
+
+    def _apply_display_preference(self):
+        """把 `display.size_factor` 应用到当前窗口（配置页保存后立即生效）。"""
+        display = (getattr(self, "config", {}) or {}).get("display") or {}
+        factor = normalize_pet_size_factor(display.get("size_factor", 1.0))
+        if abs(factor - float(getattr(self, "_size_factor", 1.0))) < 1e-3:
+            return
+        self._size_factor_preview(factor)
+
     def _size_factor_preview(self, factor: float):
+        factor = normalize_pet_size_factor(factor)
+        before = QRect(self.x(), self.y(), self.width(), self.height())
         self._size_factor = factor
         if self._use_live2d and self.sprite_label:
             self._clear_window_region()
@@ -629,21 +663,42 @@ class PetRenderHostMixin:
             self._update_sprite()
             self._apply_hit_region()
             QApplication.processEvents()
+        self._reanchor_after_resize(before)
         self._position_bubble()
+
+    def _reanchor_after_resize(self, before: QRect):
+        """缩放以「底部中心」为锚点，并保证新尺寸仍落在屏幕可用区域内。
+
+        直接 resize 会固定左上角，桌宠放大时会往右下角长出去（贴边时直接出屏）；
+        以脚下为锚点更符合「桌宠站在桌面上」的直觉。
+        """
+        width = self.width()
+        height = self.height()
+        if before.width() == width and before.height() == height:
+            return
+        target = QPoint(
+            before.center().x() - width // 2,
+            before.bottom() + 1 - height,
+        )
+        area = available_geometry_for(before)
+        if area is not None:
+            target = clamp_position(target, QSize(width, height), area, margin=0)
+        if target != QPoint(self.x(), self.y()):
+            self.move(target)
 
     def _open_size_dialog(self):
         dialog = SizeScaleDialog(self._size_factor, self)
-        screen = QApplication.primaryScreen().availableGeometry()
-        dlg_w, dlg_h = 280, 130
-        x = self.x() + (self.width() - dlg_w) // 2
-        y = self.y() + (self.height() - dlg_h) // 2
-        x = max(screen.x(), min(x, screen.x() + screen.width() - dlg_w))
-        y = max(screen.y(), min(y, screen.y() + screen.height() - dlg_h))
-        dialog.move(x, y)
+        # 以桌宠所在屏幕（而非主屏）为准，多显示器下才不会弹到另一块屏外面。
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        area = available_geometry_for(pet_rect)
+        if area is not None:
+            dialog.move(
+                calculate_centered_position(pet_rect, widget_size(dialog), area)
+            )
         if dialog.exec_() == QDialog.Accepted:
-            new_factor = dialog.get_value()
+            new_factor = normalize_pet_size_factor(dialog.get_value())
             self._size_factor = new_factor
-            self.config.setdefault("display", {})["size_factor"] = round(new_factor, 2)
+            self.config.setdefault("display", {})["size_factor"] = new_factor
             self._save_config()
 
     def _apply_hit_region(self):
@@ -745,6 +800,122 @@ class PetRenderHostMixin:
                 animate_to(position, opacity, animate=animate)
             else:
                 bubble.move(position)
+
+    # ------------------------------------------------------------ 屏幕变化
+    def _init_screen_guard(self):
+        """监听分辨率 / 显示器变化，变化后把桌宠拉回可视范围。
+
+        改分辨率（尤其是调小）后，桌宠原来的坐标可能整块落在新桌面之外；
+        窗口是无边框置顶的 Tool 窗，没有任务栏入口，用户会以为它「消失」了。
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._ensure_on_screen)
+        self._screen_guard_timer = timer
+
+        for signal_name in ("screenAdded", "screenRemoved", "primaryScreenChanged"):
+            signal = getattr(app, signal_name, None)
+            if signal is None:
+                continue
+            handler = (
+                self._on_screen_added
+                if signal_name == "screenAdded"
+                else self._on_screen_layout_changed
+            )
+            try:
+                signal.connect(handler)
+            except (AttributeError, TypeError):
+                pass
+        for screen in app.screens():
+            self._watch_screen(screen)
+
+    def _watch_screen(self, screen):
+        if screen is None:
+            return
+        for signal_name in (
+            "geometryChanged",
+            "availableGeometryChanged",
+            "logicalDotsPerInchChanged",
+        ):
+            signal = getattr(screen, signal_name, None)
+            if signal is None:
+                continue
+            try:
+                signal.connect(self._on_screen_layout_changed)
+            except (AttributeError, TypeError, RuntimeError):
+                pass
+
+    def _on_screen_added(self, screen):
+        self._watch_screen(screen)
+        self._on_screen_layout_changed()
+
+    def _on_screen_layout_changed(self, *_args):
+        """一次分辨率变更会连发多个信号，且窗口管理器还在重排，去抖后再处理。"""
+        timer = getattr(self, "_screen_guard_timer", None)
+        if timer is None:
+            self._ensure_on_screen()
+            return
+        try:
+            timer.start(SCREEN_GUARD_DEBOUNCE_MS)
+        except RuntimeError:
+            self._ensure_on_screen()
+
+    def _ensure_on_screen(self):
+        """桌宠露出得太少时拉回屏幕可用区域，并同步浮层位置。"""
+        if getattr(self, "_dragging", False):
+            # 拖动中不抢用户的手，松手后的下一次屏幕事件再处理。
+            return
+        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        bounds = screen_bounds_for_rect(pet_rect)
+        if bounds is None:
+            return
+        geometry, available = bounds
+        if not is_sufficiently_visible(
+            pet_rect, geometry, ratio=PET_MIN_VISIBLE_RATIO
+        ):
+            position = clamp_position(
+                pet_rect.topLeft(), pet_rect.size(), available, margin=0
+            )
+            if position != pet_rect.topLeft():
+                self.move(position)
+                safe_print(
+                    f"[screen] 屏幕变化后回到可视范围: "
+                    f"({pet_rect.x()},{pet_rect.y()}) -> "
+                    f"({position.x()},{position.y()}) "
+                    f"available=({available.x()},{available.y()},"
+                    f"{available.width()}x{available.height()})"
+                )
+        self._ensure_overlays_on_screen()
+        self._position_bubble()
+
+    def _ensure_overlays_on_screen(self):
+        """把仍然打开的浮层拉回屏幕：输入面板重新贴着桌宠，其余就地钳制。"""
+        composer = getattr(self, "_chat_input", None)
+        place_chat_input = getattr(self, "_place_chat_input", None)
+        if composer is not None and callable(place_chat_input):
+            try:
+                if composer.isVisible():
+                    place_chat_input()
+            except RuntimeError:
+                self._chat_input = None
+        for name in (
+            "_status_panel",
+            "_menu_window",
+            "_timeline_dialog",
+            "_timeline_turn_dialog",
+        ):
+            window = getattr(self, name, None)
+            if window is None:
+                continue
+            try:
+                if window.isVisible():
+                    move_within_screen(window, window.pos())
+            except RuntimeError:
+                # 窗口已被销毁，清掉悬空引用。
+                setattr(self, name, None)
 
     def _place_bottom_right(self):
         """放到主屏右下角，并钳制在可见区域内（防止多屏/DPI 导致“消失”）。"""
@@ -917,7 +1088,7 @@ class PetRenderHostMixin:
         detector = getattr(self, "_standby_rc_detector", None)
         if detector is not None:
             detector.was_down = True
-        # Temporarily disable native pass-through so the menu is clickable.
+        # Temporarily disable native pass-through so the menu can take the click.
         self._set_standby_click_through(False)
         try:
             show_menu = getattr(self, "_show_context_menu", None)
@@ -925,6 +1096,8 @@ class PetRenderHostMixin:
                 show_menu(local_pos)
         finally:
             self._standby_menu_open = False
+            # 菜单现在是独立顶层窗口（非阻塞 popup），本体可以立即恢复穿透，
+            # 菜单窗口自身不穿透，依然可以点击和拖动。
             # Only re-enable if still in standby (user may have left via menu).
             if getattr(self, "_standby", False):
                 self._set_standby_click_through(True)

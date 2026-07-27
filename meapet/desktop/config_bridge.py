@@ -88,6 +88,10 @@ class PetConfigBridgeMixin:
             apply_motion = getattr(self, "_apply_motion_preference", None)
             if callable(apply_motion):
                 apply_motion()
+            apply_display = getattr(self, "_apply_display_preference", None)
+            if callable(apply_display):
+                # 窗口大小（display.size_factor）保存后立即生效，不必重启桌宠。
+                apply_display()
             self._init_tts()
             self._init_chat()
             self._init_watcher()

@@ -41,9 +41,14 @@ from wizard.styles import (
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
     PALETTE,
+    PET_SIZE_FACTOR_DEFAULT,
+    PET_SIZE_FACTOR_MAX,
+    PET_SIZE_FACTOR_MIN,
+    PET_SIZE_FACTOR_STEP,
     UI_FONT_SCALE_DEFAULT,
     apply_ui_font_scale,
     ensure_application_fonts,
+    normalize_pet_size_factor,
     normalize_ui_font_scale,
     set_ui_font_scale,
 )
@@ -357,6 +362,45 @@ class SetupWizard(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
+        pet_row = QHBoxLayout()
+        pet_row.setSpacing(12)
+        pet_label = QLabel("桌宠窗口大小")
+        pet_label.setObjectName("FieldLabel")
+        pet_label.setMinimumWidth(112)
+        pet_row.addWidget(pet_label)
+
+        self.pet_size_slider = QSlider(Qt.Horizontal)
+        self.pet_size_slider.setObjectName("PetSizeSlider")
+        self.pet_size_slider.setRange(
+            round(PET_SIZE_FACTOR_MIN * 100),
+            round(PET_SIZE_FACTOR_MAX * 100),
+        )
+        self.pet_size_slider.setSingleStep(round(PET_SIZE_FACTOR_STEP * 100))
+        self.pet_size_slider.setPageStep(10)
+        self.pet_size_slider.setTracking(True)
+        self.pet_size_slider.setValue(round(PET_SIZE_FACTOR_DEFAULT * 100))
+        self.pet_size_slider.setAccessibleName("桌宠窗口大小")
+        self.pet_size_slider.setAccessibleDescription(
+            "可在百分之三十到百分之三百之间调整桌宠窗口与立绘的大小"
+        )
+        pet_row.addWidget(self.pet_size_slider, 1)
+
+        self.pet_size_value = QLabel(f"{self.pet_size_slider.value()}%")
+        self.pet_size_value.setObjectName("PetSizeValue")
+        self.pet_size_value.setMinimumWidth(52)
+        self.pet_size_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.pet_size_value.setAccessibleName("当前桌宠窗口大小")
+        pet_row.addWidget(self.pet_size_value)
+        layout.addLayout(pet_row)
+
+        pet_hint = QLabel(
+            "100% 为立绘原始大小；保存后桌宠立即按新比例缩放，"
+            "也可在桌宠右键菜单「显示与立绘 · 调整窗口大小…」里实时预览。"
+        )
+        pet_hint.setObjectName("HelperText")
+        pet_hint.setWordWrap(True)
+        layout.addWidget(pet_hint)
+
         self.reduced_motion_cb = QCheckBox("减少动画（气泡与输入框淡入淡出）")
         self.reduced_motion_cb.setObjectName("ReducedMotionToggle")
         self.reduced_motion_cb.setAccessibleName("减少动画")
@@ -376,12 +420,18 @@ class SetupWizard(QWidget):
         self.font_scale_slider.valueChanged.connect(
             self._on_font_scale_changed
         )
+        self.pet_size_slider.valueChanged.connect(
+            self._on_pet_size_changed
+        )
         return card
 
     def _on_font_scale_changed(self, value: int) -> None:
         value = int(value)
         self.font_scale_value.setText(f"{value}%")
         apply_ui_font_scale(self, value / 100.0)
+
+    def _on_pet_size_changed(self, value: int) -> None:
+        self.pet_size_value.setText(f"{int(value)}%")
 
     def _fade_in(self) -> None:
         """Gradually restore opacity so the window doesn't flash from transparent."""
@@ -824,6 +874,12 @@ class SetupWizard(QWidget):
                     * 100
                 )
             )
+            self.pet_size_slider.setValue(
+                round(
+                    normalize_pet_size_factor(display.get("size_factor", 1.0))
+                    * 100
+                )
+            )
             self.reduced_motion_cb.setChecked(
                 bool(display.get("reduced_motion", False))
             )
@@ -919,9 +975,12 @@ class SetupWizard(QWidget):
         return self._deep_merge(self._template_config(), existing)
 
     def _collect_display_fields(self, config: dict) -> None:
-        """显示页只负责它实际展示的两个选项。"""
+        """显示页只负责它实际展示的几个选项，其余 display 字段原样保留。"""
         display = config.setdefault("display", {})
         display["font_scale"] = self.font_scale_slider.value() / 100.0
+        display["size_factor"] = normalize_pet_size_factor(
+            self.pet_size_slider.value() / 100.0
+        )
         display["reduced_motion"] = self.reduced_motion_cb.isChecked()
 
     def _collect_reference_audios(

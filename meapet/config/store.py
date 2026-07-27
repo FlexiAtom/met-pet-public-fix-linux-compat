@@ -27,6 +27,7 @@ from meapet.config.normalizers import (
 )
 from meapet.config import providers as _providers
 from meapet.ui_theme import normalize_ui_font_scale
+from meapet.ui_theme import normalize_pet_size_factor, normalize_ui_font_scale
 from meapet.utils import mask_secret, normalize_watcher
 from meapet.vision.policy import normalize_vision_mode
 
@@ -807,7 +808,9 @@ def normalize_config(config: dict) -> dict:
     disp = cfg.get("display") if isinstance(cfg.get("display"), dict) else {}
     disp.setdefault("scale", 0.5)
     disp.setdefault("fps", 30)
-    disp.setdefault("size_factor", 1.0)
+    disp["size_factor"] = normalize_pet_size_factor(
+        disp.get("size_factor", 1.0)
+    )
     disp["font_scale"] = normalize_ui_font_scale(
         disp.get("font_scale", 1.0)
     )

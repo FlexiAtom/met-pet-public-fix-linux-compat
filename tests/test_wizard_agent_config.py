@@ -121,6 +121,8 @@ class TestWizardConversationConfig(unittest.TestCase):
             },
         }
         self.wizard.font_scale_slider.setValue(125)
+        # 窗口大小同字体缩放，由配置页控件决定，不再从旧配置透传。
+        self.wizard.pet_size_slider.setValue(140)
         self.wizard.reduced_motion_cb.setChecked(True)
 
         config = self.wizard.collect_config()
