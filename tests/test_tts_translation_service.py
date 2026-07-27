@@ -179,12 +179,18 @@ class TestTranslationService(unittest.TestCase):
 
 class TestTranslationDependencyPackaging(unittest.TestCase):
     def test_default_launcher_installs_and_checks_translation_component(self):
+        from meapet.bootstrap import all_runtime_dependencies
+
         requirements = (ROOT / "linux_requirements.txt").read_text(encoding="utf-8")
         launcher = (ROOT / "启动桌宠.bat").read_text(encoding="utf-8")
+        checked_modules = {
+            dependency.module
+            for dependency in all_runtime_dependencies()
+        }
 
         self.assertIn("translators>=6.0.4,<7", requirements)
-        self.assertIn("find_spec('translators')", launcher)
-        self.assertNotIn("; import translators", launcher)
+        self.assertIn("translators", checked_modules)
+        self.assertIn("-m meapet.bootstrap --check all", launcher)
 
 
 if __name__ == "__main__":

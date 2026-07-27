@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
@@ -97,6 +99,224 @@ class WizardConfigurationExperienceTests(unittest.TestCase):
         self.assertIn("最大回复长度", copy)
 
     # ------------------------------------------------------------------
+    # Agent 配置内提供跟随类型切换的接入步骤窗口
+    # ------------------------------------------------------------------
+    def test_agent_setup_help_is_discoverable_modeless_and_tracks_kind(
+        self,
+    ) -> None:
+        from meapet.ui_theme import MIN_TARGET_SIZE
+        from wizard.page_backend import BackendPage
+        from wizard.styles import set_status
+
+        page = self._track(BackendPage())
+        button = page.agent_setup_help_btn
+
+        self.assertIn("Hermes", button.text())
+        self.assertGreaterEqual(button.minimumHeight(), MIN_TARGET_SIZE)
+        self.assertTrue(button.accessibleName())
+        self.assertTrue(button.accessibleDescription())
+        self.assertTrue(button.property("doesNotModifyConfig"))
+
+        button.click()
+        QApplication.processEvents()
+        dialog = self._track(page._agent_help_dialog)
+        self.assertIsNotNone(dialog)
+        self.assertTrue(dialog.isVisible())
+        self.assertFalse(dialog.isModal())
+        self.assertEqual(dialog.windowModality(), Qt.NonModal)
+        self.assertTrue(dialog.windowFlags() & Qt.FramelessWindowHint)
+        self.assertEqual(dialog.agent_kind, "hermes")
+        self.assertIn("hermes serve", dialog.body.toPlainText())
+        self.assertIn(
+            "ws://127.0.0.1:9119/api/ws",
+            dialog.body.toPlainText(),
+        )
+        help_html = dialog.body.toHtml().lower()
+        self.assertNotIn('bgcolor="#100c18"', help_html)
+        self.assertNotIn("background-color:#100c18", help_html)
+        self.assertGreaterEqual(dialog.width(), 640)
+        self.assertIn("websockets", dialog.dependency_detail.text().lower())
+        self.assertEqual(
+            dialog.dependency_status.property("status"),
+            "success",
+        )
+        self.assertEqual(
+            dialog.connection_status.text(),
+            page.agent_connection_status.text(),
+        )
+        self.assertNotEqual(
+            dialog.button(QMessageBox.Close).objectName(),
+            "MessagePrimaryButton",
+        )
+        for action in (
+            dialog.dependency_refresh_button,
+            dialog.connection_test_button,
+            dialog.button(QMessageBox.Close),
+        ):
+            self.assertEqual(action.height(), MIN_TARGET_SIZE)
+        self.assertGreaterEqual(dialog.body.height(), 140)
+
+        triggered = []
+        page.test_agent_connection_btn.clicked.connect(
+            lambda _checked=False: triggered.append(True)
+        )
+        dialog.connection_test_button.click()
+        self.assertTrue(triggered)
+
+        set_status(
+            page.agent_connection_status,
+            "error",
+            "连接失败：测试端口未监听。",
+        )
+        dialog._sync_connection_status()
+        self.assertEqual(
+            dialog.connection_status.text(),
+            "连接失败：测试端口未监听。",
+        )
+        self.assertEqual(
+            dialog.connection_status.property("status"),
+            "error",
+        )
+
+        page.set_agent_kind("openclaw")
+        QApplication.processEvents()
+        self.assertIn("OpenClaw", button.text())
+        self.assertEqual(dialog.agent_kind, "openclaw")
+        self.assertIn("openclaw devices approve", dialog.body.toPlainText())
+        self.assertIn(
+            "ws://127.0.0.1:18789",
+            dialog.body.toPlainText(),
+        )
+        self.assertIn("cryptography", dialog.dependency_detail.text().lower())
+
+        QApplication.processEvents()
+        self.assertLess(
+            dialog.body.geometry().bottom(),
+            dialog.button(QMessageBox.Close).geometry().top(),
+        )
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+        QApplication.processEvents()
+        self.assertFalse(dialog.isVisible())
+        self.assertIsNone(page._agent_help_dialog)
+
+    def test_agent_dependency_diagnostic_reports_missing_and_versions(
+        self,
+    ) -> None:
+        from wizard.agent_setup_help import inspect_agent_dependencies
+
+        missing = inspect_agent_dependencies(
+            "hermes",
+            find_spec=lambda _name: None,
+            get_version=lambda _name: (_ for _ in ()).throw(
+                LookupError("missing")
+            ),
+            executable=Path("C:/MeaPet/.venv/Scripts/python.exe"),
+        )
+        self.assertFalse(missing.ready)
+        self.assertIn("websockets", missing.summary)
+        self.assertIn("pip install", missing.install_command)
+        self.assertIn("websockets>=13,<16", missing.install_command)
+
+        versions = {
+            "websockets": "15.0.1",
+            "cryptography": "49.0.0",
+        }
+        ready = inspect_agent_dependencies(
+            "openclaw",
+            find_spec=lambda _name: object(),
+            get_version=versions.__getitem__,
+            executable=Path("C:/MeaPet/.venv/Scripts/python.exe"),
+        )
+        self.assertTrue(ready.ready)
+        self.assertIn("websockets 15.0.1", ready.detail)
+        self.assertIn("cryptography 49.0.0", ready.detail)
+
+    def test_agent_help_shows_async_connection_progress_and_failure(
+        self,
+    ) -> None:
+        from wizard.app import SetupWizard
+        from wizard.connection_test import ConnectionResult
+
+        wizard = self._track(SetupWizard())
+        self._stop_startup_work(wizard)
+        wizard.backend_page.agent_radio.setChecked(True)
+        wizard.backend_page.agent_setup_help_btn.click()
+        QApplication.processEvents()
+        dialog = wizard.backend_page._agent_help_dialog
+        future = Future()
+
+        def submit(coro):
+            coro.close()
+            return future
+
+        with patch("meapet.async_runtime.submit", side_effect=submit):
+            dialog.connection_test_button.click()
+
+        dialog._sync_connection_status()
+        self.assertFalse(dialog.connection_test_button.isEnabled())
+        self.assertIn("正在测试", dialog.connection_status.text())
+        self.assertEqual(
+            dialog.connection_status.property("status"),
+            "warning",
+        )
+
+        future.set_result(
+            ConnectionResult(False, "连接失败：目标 WebSocket 端口未监听。")
+        )
+        wizard._poll_connection_test("agent")
+        dialog._sync_connection_status()
+
+        self.assertTrue(dialog.connection_test_button.isEnabled())
+        self.assertEqual(
+            dialog.connection_status.text(),
+            "连接失败：目标 WebSocket 端口未监听。",
+        )
+        self.assertEqual(
+            dialog.connection_status.property("status"),
+            "error",
+        )
+
+    def test_agent_help_keeps_footer_clear_at_max_font_scale(self) -> None:
+        from meapet.ui_theme import (
+            get_ui_font_scale,
+            set_ui_font_scale,
+        )
+        from wizard.page_backend import BackendPage
+
+        previous_scale = get_ui_font_scale()
+        self.addCleanup(set_ui_font_scale, previous_scale)
+        set_ui_font_scale(1.5)
+
+        page = self._track(BackendPage())
+        page.agent_radio.setChecked(True)
+        page.agent_setup_help_btn.click()
+        QApplication.processEvents()
+        dialog = page._agent_help_dialog
+        close_button = dialog.button(QMessageBox.Close)
+
+        from wizard.styles import set_status
+
+        set_status(
+            page.agent_connection_status,
+            "error",
+            "连接失败：" + "目标 WebSocket 端口未监听，请检查服务和令牌。" * 6,
+        )
+        dialog._sync_connection_status()
+        QApplication.processEvents()
+
+        self.assertLess(
+            dialog.body.geometry().bottom(),
+            close_button.geometry().top(),
+        )
+        self.assertEqual(close_button.height(), 44)
+        self.assertEqual(dialog.connection_test_button.height(), 44)
+        self.assertEqual(
+            dialog.body.horizontalScrollBarPolicy(),
+            Qt.ScrollBarAlwaysOff,
+        )
+
+    # ------------------------------------------------------------------
     # 现有配置在构造函数返回前已加载
     # ------------------------------------------------------------------
     def test_existing_config_is_loaded_before_constructor_returns(self) -> None:
@@ -147,6 +367,38 @@ class WizardConfigurationExperienceTests(unittest.TestCase):
             reopened = self._track(SetupWizard(config_path=path))
             self._stop_startup_work(reopened)
             self.assertEqual(reopened.font_scale_slider.value(), 125)
+
+    def test_saved_font_scale_is_painted_on_first_show(self) -> None:
+        """恢复值必须在首次绘制生效，不能依赖再次移动滑块。"""
+        from meapet.ui_theme import get_ui_font_scale, set_ui_font_scale
+        from wizard.app import SetupWizard
+
+        previous_scale = get_ui_font_scale()
+        self.addCleanup(set_ui_font_scale, previous_scale)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "profile.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "display": {"font_scale": 1.3},
+                        "tts": {"enabled": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            wizard = self._track(SetupWizard(config_path=path))
+            self._stop_startup_work(wizard)
+            wizard._fade_timer.stop()
+            wizard.setWindowOpacity(1.0)
+            wizard.show()
+            QApplication.processEvents()
+
+            title = wizard.display_page.findChild(QLabel, "PageTitle")
+            self.assertIsNotNone(title)
+            self.assertEqual(wizard.font_scale_slider.value(), 130)
+            self.assertEqual(title.font().pixelSize(), 29)
+            self.assertEqual(wizard.font_scale_value.font().pixelSize(), 18)
+            self.assertEqual(wizard.save_btn.font().pixelSize(), 20)
 
     # ------------------------------------------------------------------
     # 环境检测在 UI 线程外派发
@@ -389,27 +641,22 @@ class ConnectionProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(image["media_type"], "image/png")
         self.assertGreater(len(image["data"]), 20)
 
-    async def test_agent_probe_uses_openai_compatible_adapter(self) -> None:
-        """Agent 探测通过 OpenAI 兼容适配器的 chat_stream 完成。"""
+    async def test_agent_probe_uses_native_websocket_capability_handshake(self) -> None:
+        """Agent 探测调用原生 Gateway 的握手能力检查。"""
         from wizard.connection_test import probe_connection
 
-        # 构造一个正确的异步迭代器，让 chat_stream 正常完成
-        async def _fake_stream_gen():
-            # 模拟一次空响应（无内容），让 probe 判定为失败或成功
-            # probe_connection 通常检查是否有任何响应
-            yield  # 不发任何 segment，模拟空响应
-
         adapter = Mock()
-        adapter.chat_stream = AsyncMock(return_value=_fake_stream_gen())
+        adapter.probe = AsyncMock(return_value=object())
         adapter.close = AsyncMock()
 
         config = {
             "llm": {
                 "mode": "agent",
                 "agent": {
-                    "base_url": "https://api.openai.com/v1",
-                    "api_key": "secret",
-                    "model": "gpt-4o-mini",
+                    "kind": "openclaw",
+                    "base_url": "ws://127.0.0.1:18789",
+                    "auth_token": "secret",
+                    "session_key": "agent:main:meapet:test",
                     "timeout_seconds": 30,
                 },
             }
@@ -420,8 +667,8 @@ class ConnectionProbeTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await probe_connection("agent", config)
 
-        # 连接应该成功建立（即使返回空内容，也不应抛异常）
-        self.assertIsNotNone(result)
+        self.assertTrue(result.ok)
+        adapter.probe.assert_awaited_once_with()
         adapter.close.assert_awaited_once_with()
 
     async def test_tts_probe_synthesizes_a_short_sample(self) -> None:
@@ -448,4 +695,3 @@ class ConnectionProbeTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

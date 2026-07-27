@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 
 from meapet.ui_theme import MIN_TARGET_SIZE
 from wizard.styles import STYLE_INPUT, STYLE_PAGE_CARD, field_label
+from wizard.agent_setup_help import AgentSetupHelpDialog
 from wizard.widgets import WheelSafeComboBox
 
 
@@ -36,6 +37,7 @@ class BackendPage(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._agent_help_dialog: AgentSetupHelpDialog | None = None
         self.setObjectName("PageCard")
         self.setStyleSheet(STYLE_PAGE_CARD)
         layout = QVBoxLayout(self)
@@ -99,18 +101,52 @@ class BackendPage(QFrame):
         self.agent_kind.addItem("OpenClaw Gateway", "openclaw")
         _field(agent_layout, "Agent 类型：", self.agent_kind, "Agent 类型")
 
-        self.agent_base_url = QLineEdit("http://127.0.0.1:8642")
+        help_row = QHBoxLayout()
+        help_row.setSpacing(10)
+        self.agent_setup_help_btn = QPushButton("Hermes 接入检查…")
+        self.agent_setup_help_btn.setMinimumHeight(MIN_TARGET_SIZE)
+        self.agent_setup_help_btn.setAccessibleName("检查 Hermes 接入状态")
+        self.agent_setup_help_btn.setAccessibleDescription(
+            "检查依赖和连接状态，并查看可复制的启动、令牌与配对步骤"
+        )
+        self.agent_setup_help_btn.setProperty("doesNotModifyConfig", True)
+        self.agent_setup_help_btn.clicked.connect(self._show_agent_setup_help)
+        help_row.addWidget(self.agent_setup_help_btn)
+        self.agent_setup_help_hint = QLabel(
+            "先检查依赖和连接，再查看服务启动与首次配对步骤。"
+        )
+        self.agent_setup_help_hint.setObjectName("HelperText")
+        self.agent_setup_help_hint.setWordWrap(True)
+        help_row.addWidget(self.agent_setup_help_hint, 1)
+        agent_layout.addLayout(help_row)
+
+        self.agent_base_url = QLineEdit("ws://127.0.0.1:9119/api/ws")
         self.agent_base_url.setStyleSheet(STYLE_INPUT)
-        self.agent_base_url.setPlaceholderText("http://127.0.0.1:8642")
-        _field(agent_layout, "Agent 地址：", self.agent_base_url, "Agent 地址")
+        self.agent_base_url.setPlaceholderText("ws://127.0.0.1:9119/api/ws")
+        _field(
+            agent_layout,
+            "Agent WebSocket 地址：",
+            self.agent_base_url,
+            "Agent WebSocket 地址",
+        )
+        self.agent_transport_hint = QLabel(
+            "Hermes：启动 hermes serve，并连接 /api/ws；"
+            "跨机器 Hermes 请使用 SSH 回环隧道。OpenClaw：连接 Gateway"
+            "（默认 18789）。Agent 模式不使用 HTTP 模型接口。"
+        )
+        self.agent_transport_hint.setObjectName("HelperText")
+        self.agent_transport_hint.setWordWrap(True)
+        agent_layout.addWidget(self.agent_transport_hint)
 
         self.agent_auth_token = QLineEdit()
         self.agent_auth_token.setStyleSheet(STYLE_INPUT)
         self.agent_auth_token.setEchoMode(QLineEdit.Password)
-        self.agent_auth_token.setPlaceholderText("可填 $HERMES_API_SERVER_KEY")
+        self.agent_auth_token.setPlaceholderText(
+            "可填 $HERMES_DASHBOARD_SESSION_TOKEN"
+        )
         _field(
             agent_layout,
-            "Agent Bearer Token：",
+            "Agent WebSocket 访问令牌：",
             self.agent_auth_token,
             "Agent 访问令牌",
         )
@@ -136,7 +172,7 @@ class BackendPage(QFrame):
         history_row = QHBoxLayout()
         history_row.addWidget(field_label("发送最近对话轮数：", inline=True))
         self.agent_history_turns = QSpinBox()
-        self.agent_history_turns.setRange(0, 50)
+        self.agent_history_turns.setRange(0, 100)
         self.agent_history_turns.setValue(5)
         self.agent_history_turns.setAccessibleName("Agent 最近对话轮数")
         self.agent_history_turns.setMinimumHeight(MIN_TARGET_SIZE)
@@ -156,7 +192,7 @@ class BackendPage(QFrame):
         self.insecure_ws_warning.setWordWrap(True)
         agent_layout.addWidget(self.insecure_ws_warning)
 
-        self.agent_tls_verify = QCheckBox("校验 Agent HTTPS / WSS 证书")
+        self.agent_tls_verify = QCheckBox("校验 Agent WSS 证书")
         self.agent_tls_verify.setChecked(True)
         agent_layout.addWidget(self.agent_tls_verify)
         self.agent_ca_file = QLineEdit()
@@ -313,25 +349,75 @@ class BackendPage(QFrame):
         index = self.agent_kind.findData(str(kind or "hermes").lower())
         self.agent_kind.setCurrentIndex(index if index >= 0 else 0)
 
+    def _show_agent_setup_help(self) -> None:
+        kind = self.agent_kind.currentData() or "hermes"
+        dialog = self._agent_help_dialog
+        if dialog is not None:
+            try:
+                dialog.set_agent_kind(kind)
+                dialog.show()
+                dialog.raise_()
+                dialog.activateWindow()
+                return
+            except RuntimeError:
+                self._agent_help_dialog = None
+
+        dialog = AgentSetupHelpDialog(
+            self.window(),
+            agent_kind=kind,
+            connection_button=self.test_agent_connection_btn,
+            connection_status=self.agent_connection_status,
+        )
+        dialog.finished.connect(self._clear_agent_setup_help)
+        self._agent_help_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _clear_agent_setup_help(self, *_args) -> None:
+        self._agent_help_dialog = None
+
     def _on_agent_kind_changed(self, *_args) -> None:
         kind = self.agent_kind.currentData() or "hermes"
+        display_name = "OpenClaw" if kind == "openclaw" else "Hermes"
+        self.agent_setup_help_btn.setText(f"{display_name} 接入检查…")
+        self.agent_setup_help_btn.setAccessibleName(
+            f"检查 {display_name} 接入状态"
+        )
         current = self.agent_base_url.text().strip()
         defaults = {
-            "hermes": "http://127.0.0.1:8642",
+            "hermes": "ws://127.0.0.1:9119/api/ws",
             "openclaw": "ws://127.0.0.1:18789",
         }
-        if not current or current in defaults.values():
+        legacy_defaults = {
+            "http://127.0.0.1:8642",
+            "https://api.openai.com/v1",
+        }
+        if not current or current in defaults.values() or current in legacy_defaults:
             self.agent_base_url.setText(defaults[kind])
+        if kind == "hermes":
+            self.agent_base_url.setPlaceholderText(defaults["hermes"])
+            self.agent_auth_token.setPlaceholderText(
+                "可填 $HERMES_DASHBOARD_SESSION_TOKEN"
+            )
+        else:
+            self.agent_base_url.setPlaceholderText(defaults["openclaw"])
+            self.agent_auth_token.setPlaceholderText(
+                "可填 $OPENCLAW_GATEWAY_TOKEN 或 $MEAPET_AGENT_TOKEN"
+            )
+        if self._agent_help_dialog is not None:
+            try:
+                self._agent_help_dialog.set_agent_kind(kind)
+            except RuntimeError:
+                self._agent_help_dialog = None
         self._sync_visibility()
 
     def _sync_visibility(self, *_args) -> None:
         agent_mode = self.agent_radio.isChecked()
-        openclaw_mode = (self.agent_kind.currentData() or "hermes") == "openclaw"
         self.agent_frame.setVisible(agent_mode)
-        self.agent_allow_insecure_ws.setVisible(agent_mode and openclaw_mode)
+        self.agent_allow_insecure_ws.setVisible(agent_mode)
         self.insecure_ws_warning.setVisible(
             agent_mode
-            and openclaw_mode
             and self.agent_allow_insecure_ws.isChecked()
         )
         self.control_frame.setVisible(
@@ -350,7 +436,13 @@ class BackendPage(QFrame):
         self.agent_radio.setChecked(mode == "agent")
         self.direct_radio.setChecked(mode != "agent")
         self.set_agent_kind(agent.get("kind", "hermes"))
-        self.agent_base_url.setText(str(agent.get("base_url") or ""))
+        default_url = {
+            "hermes": "ws://127.0.0.1:9119/api/ws",
+            "openclaw": "ws://127.0.0.1:18789",
+        }[self.agent_kind.currentData() or "hermes"]
+        self.agent_base_url.setText(
+            str(agent.get("base_url") or default_url)
+        )
         self.agent_auth_token.setText(str(agent.get("auth_token") or ""))
         self.agent_session_id.setText(str(agent.get("session_id") or ""))
         self.agent_session_key.setText(str(agent.get("session_key") or ""))

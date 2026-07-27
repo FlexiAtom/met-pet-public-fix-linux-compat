@@ -93,7 +93,8 @@ MENU_STYLE = f"""
 
 
 PET_MENU_WINDOW_STYLE = f"""
-    QWidget#PetMenuWindowRoot {{
+    QWidget#PetMenuWindowRoot,
+    QWidget#PetMenuSubmenuRoot {{
         background: transparent;
         font-family: {FONT_FAMILY};
     }}
@@ -113,8 +114,24 @@ PET_MENU_WINDOW_STYLE = f"""
         color: {rgba(COLOR_MUTED, 170)};
         font-size: 11px;
     }}
+    QLabel#PetMenuSubmenuTitle {{
+        background: transparent;
+        color: {COLOR_SECONDARY};
+        font-size: 13px;
+        font-weight: 700;
+    }}
+    QLabel#PetMenuSubmenuHint {{
+        background: transparent;
+        color: {rgba(COLOR_MUTED, 165)};
+        font-size: 10px;
+    }}
     QWidget#PetMenuHeader {{
         background: transparent;
+    }}
+    QWidget#PetMenuSubmenuHeader {{
+        background: {rgba(COLOR_FOCUS, 18)};
+        border: 1px solid {rgba(COLOR_FOCUS, 55)};
+        border-radius: 6px;
     }}
     QPushButton#PetMenuCloseButton {{
         background: transparent;
@@ -145,6 +162,11 @@ PET_MENU_WINDOW_STYLE = f"""
     QPushButton#PetMenuGroup {{
         color: {COLOR_SECONDARY};
         font-weight: 600;
+    }}
+    QPushButton#PetMenuGroup[expanded="true"] {{
+        background: {rgba(COLOR_FOCUS, 42)};
+        border-color: {rgba(COLOR_FOCUS, 115)};
+        color: {COLOR_TEXT};
     }}
     QPushButton#PetMenuItem:hover, QPushButton#PetMenuGroup:hover {{
         background: {rgba(COLOR_FOCUS, 35)};

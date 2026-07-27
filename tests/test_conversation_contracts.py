@@ -317,7 +317,7 @@ class TestConversationConfigMigration(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=False):
             self.assertEqual(resolve_direct_api_key(llm), "ds-from-env")
 
-    def test_legacy_openclaw_config_migrates_to_agent_with_openai_compatible_fields(self):
+    def test_legacy_openclaw_config_migrates_to_native_websocket_fields(self):
         from meapet.config.store import normalize_config
 
         cfg = normalize_config(
@@ -334,16 +334,76 @@ class TestConversationConfigMigration(unittest.TestCase):
         # 配置应该迁移为 agent 模式
         self.assertEqual(cfg["llm"]["mode"], "agent")
         agent = cfg["llm"]["agent"]
-        # kind 字段已被清理（不再有 hermes/openclaw 分支）
-        self.assertNotIn("kind", agent)
+        self.assertEqual(agent["kind"], "openclaw")
         # bridge_url 是旧字段，应被清除
         self.assertNotIn("bridge_url", agent)
-        # 其他旧字段也不存在
-        self.assertNotIn("auth_token", agent)
-        self.assertNotIn("session_id", agent)
-        self.assertNotIn("session_key", agent)
-        # base_url 应有默认值（bridge_url 不被自动转换）
-        self.assertEqual(agent["base_url"], "https://api.openai.com/v1")
+        self.assertIn("auth_token", agent)
+        self.assertIn("session_id", agent)
+        self.assertIn("session_key", agent)
+        self.assertEqual(
+            agent["base_url"],
+            "ws://192.168.1.8:18789",
+        )
+
+    def test_legacy_http_model_agent_migrates_to_direct_instead_of_fake_ws(self):
+        from meapet.config.store import normalize_config
+
+        cfg = normalize_config(
+            {
+                "llm": {
+                    "mode": "agent",
+                    "backend": "openai_compatible",
+                    "api_base": "https://models.example.test/v1",
+                    "model": "stale-top-level-mirror",
+                    "agent": {
+                        "api_key": "$MODEL_API_KEY",
+                        "model": "example-model",
+                        "temperature": 0.25,
+                        "max_tokens": 2048,
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(cfg["llm"]["mode"], "direct")
+        direct = cfg["llm"]["direct"]
+        self.assertEqual(
+            direct["api_base"],
+            "https://models.example.test/v1",
+        )
+        self.assertEqual(direct["api_key"], "$MODEL_API_KEY")
+        self.assertEqual(direct["model"], "example-model")
+        self.assertEqual(direct["temperature"], 0.25)
+        self.assertEqual(direct["max_tokens"], 2048)
+        agent = cfg["llm"]["agent"]
+        self.assertEqual(agent["kind"], "hermes")
+        self.assertEqual(
+            agent["base_url"],
+            "ws://127.0.0.1:9119/api/ws",
+        )
+        self.assertEqual(agent["auth_token"], "")
+
+    def test_legacy_hermes_top_level_token_and_model_are_preserved(self):
+        from meapet.config.store import normalize_config
+
+        cfg = normalize_config(
+            {
+                "llm": {
+                    "backend": "hermes",
+                    "api_key": "$HERMES_API_SERVER_KEY",
+                    "model": "hermes-model-override",
+                }
+            }
+        )
+
+        self.assertEqual(cfg["llm"]["mode"], "agent")
+        agent = cfg["llm"]["agent"]
+        self.assertEqual(agent["auth_token"], "$HERMES_API_SERVER_KEY")
+        self.assertEqual(agent["model"], "hermes-model-override")
+        self.assertEqual(
+            agent["base_url"],
+            "ws://127.0.0.1:9119/api/ws",
+        )
 
     def test_agent_control_defaults_are_closed_and_local(self):
         from meapet.config.store import normalize_config
@@ -393,4 +453,3 @@ class TestConversationConfigMigration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

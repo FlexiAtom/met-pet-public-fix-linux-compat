@@ -205,7 +205,7 @@ def select_screen_region(
     parent=None,
     initial_region: dict | None = None,
 ) -> dict[str, int] | None:
-    """运行一次拖选；确认框由调用方暂时隐藏，倒计时也由调用方暂停。"""
+    """运行一次拖选；确认框由调用方暂时淡出，倒计时也由调用方暂停。"""
     del parent
     selector = ScreenRegionSelector(initial_region=initial_region)
     if selector.exec_() != QDialog.Accepted:

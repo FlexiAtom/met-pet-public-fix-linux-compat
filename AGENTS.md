@@ -39,7 +39,7 @@ python -m compileall -q meapet wizard
 |------|------|
 | `desktop/app.py` | 主窗口 + 启动生命周期 |
 | `desktop/` | 聊天流、气泡、输入、渲染、托盘、窗口控制、桥接 |
-| `agent/` | Hermes / OpenClaw 适配器、呈现状态机、设备身份 (`openclaw_identity.py`)、Agent提示词 (`prompts.py`) |
+| `agent/` | Hermes JSON-RPC / OpenClaw v4 原生 WebSocket 适配器、持久连接、呈现状态机、设备身份与 Agent 提示词 |
 | `direct/` | 四种直连协议 (ollama_chat NDJSON / openai_chat / openai_responses / anthropic_messages SSE)，统一 `DirectProtocolClient` + 规范事件类型；流前错误最多重试 3 次 (0.4/0.8s) |
 | `conversation/` | 分段输出协议 (`output_protocol.py`)、`ConversationOrchestrator` (generation_id 隔离迟到事件)、会话时间线 (`timeline.py`)、前端能力 (`capabilities.py`) |
 | `control/` | Companion MCP 服务 + 安全中间件 (速率/Origin/mTLS)；工具：`say` / `express` / `get_state` / `capture_screen` |
@@ -67,7 +67,7 @@ python -m compileall -q meapet wizard
 ## Threading — DO NOT CHANGE
 
 - `ChatWorker` / `TTSWorker` → `async_runtime.submit(coro)` → singleton asyncio daemon thread
-- Net I/O uses shared `httpx.AsyncClient` from `http_async.py` (跑在 async_runtime 的 loop 上)；`ssl.create_default_context()` 确保 PyInstaller 打包下证书路径正确
+- HTTP Net I/O uses shared `httpx.AsyncClient` from `http_async.py`；Agent 使用持久 `websockets` 连接；两者都跑在 async_runtime 的 loop 上
 - Blocking work (local TTS / in-process VITS) → `asyncio.to_thread`
 - `ScreenWatcher` is a `QThread`
 - Main thread polls workers via `QTimer` (~100ms)
@@ -84,7 +84,7 @@ python -m compileall -q meapet wizard
 ## Config & secrets
 
 - **Env var > config.json** (`store.py:resolve_secret`); supports `"$ENV_VAR"` / `${ENV_VAR}` placeholders
-- Key env vars: `DEEPSEEK_API_KEY`, `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY`, `MEAPET_API_KEY` (fallback), `HERMES_API_SERVER_KEY` / `MEAPET_AGENT_TOKEN`, `MEAPET_CONTROL_TOKEN`, `GSV_PYTHON`, `MEAPET_FORCE_PNG`, `MEAPET_DEBUG`, `MEAPET_ALLOW_DOWNLOAD`, `MEAPET_REDUCED_MOTION`
+- Key env vars: `DEEPSEEK_API_KEY`, `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY`, `MEAPET_API_KEY` (fallback), `HERMES_DASHBOARD_SESSION_TOKEN`, `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN`, `MEAPET_CONTROL_TOKEN`, `GSV_PYTHON`, `MEAPET_FORCE_PNG`, `MEAPET_DEBUG`, `MEAPET_ALLOW_DOWNLOAD`, `MEAPET_REDUCED_MOTION`
 
 ## Key behaviors
 

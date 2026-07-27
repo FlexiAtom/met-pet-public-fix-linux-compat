@@ -552,11 +552,11 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
 
 
 def _normalize_llm_contract(value: object) -> dict:
-    """补齐 direct/agent 显式结构，统一使用 OpenAI 标准协议。
+    """补齐 direct/agent 显式结构并隔离两类传输协议。
 
-    移除旧的 hermes/openclaw kind 分支，agent 段现在只包含
-    OpenAI 兼容字段：base_url / api_key / model / temperature /
-    max_tokens / timeout_seconds / history_turns / tls。
+    ``direct`` 保存 HTTP 模型协议；``agent`` 只保存 Hermes/OpenClaw
+    WebSocket Gateway 配置。旧 Hermes API Server 与曾经的
+    ``openai_compatible`` Agent 配置不会继续把 HTTP 端点混入 Agent。
     """
     llm = copy.deepcopy(value) if isinstance(value, dict) else {}
     backend = str(llm.get("backend") or "").strip().lower()
@@ -565,8 +565,60 @@ def _normalize_llm_contract(value: object) -> dict:
         # 旧配置无 mode：Agent 类 backend 迁去 agent，其余默认 direct
         requested_mode = "agent" if backend in _AGENT_KINDS else "direct"
 
+    legacy_agent = (
+        copy.deepcopy(llm.get("agent"))
+        if isinstance(llm.get("agent"), dict)
+        else {}
+    )
+    legacy_agent_kind = str(
+        legacy_agent.get("kind") or backend or ""
+    ).strip().lower()
+    legacy_agent_base = str(
+        legacy_agent.get("base_url")
+        or legacy_agent.get("bridge_url")
+        or ""
+    ).strip()
+    if not legacy_agent_base and legacy_agent_kind not in _AGENT_KINDS:
+        legacy_agent_base = str(
+            llm.get("api_base") or llm.get("host") or ""
+        ).strip()
+    legacy_local_hermes_http = legacy_agent_base.lower().rstrip("/") in {
+        "http://127.0.0.1:8642",
+        "http://localhost:8642",
+    }
+    legacy_http_model_agent = bool(
+        requested_mode == "agent"
+        and legacy_agent_kind not in _AGENT_KINDS
+        and legacy_agent_base.lower().startswith(("http://", "https://"))
+        and not legacy_local_hermes_http
+    )
+    if legacy_http_model_agent:
+        # 旧版曾把 OpenAI-compatible 模型端点放进 agent。它不是 Agent
+        # Gateway，迁入 direct 才能保留可用性且不虚构一个 /api/ws 地址。
+        requested_mode = "direct"
+
     # ---- direct 段 ----
     direct = copy.deepcopy(llm.get("direct")) if isinstance(llm.get("direct"), dict) else {}
+    if legacy_http_model_agent:
+        if not str(direct.get("api_base") or "").strip():
+            direct["api_base"] = legacy_agent_base
+        if not str(direct.get("host") or "").strip():
+            direct["host"] = legacy_agent_base
+        if not str(direct.get("api_key") or "").strip():
+            direct["api_key"] = str(
+                legacy_agent.get("api_key")
+                or legacy_agent.get("auth_token")
+                or ""
+            ).strip()
+        for key in (
+            "model",
+            "protocol",
+            "temperature",
+            "max_tokens",
+            "timeout_seconds",
+        ):
+            if key in legacy_agent and key not in direct:
+                direct[key] = copy.deepcopy(legacy_agent[key])
     # 身份标签一律 custom；协议/密钥/联动改由 api_base/host 推断。
     legacy_provider = str(direct.get("provider") or backend or "").strip().lower()
     direct["provider"] = "custom"
@@ -634,7 +686,10 @@ def _normalize_llm_contract(value: object) -> dict:
     else:
         direct["protocol"] = str(direct.get("protocol") or "").strip().lower()
     llm_model = str(llm.get("model") or "").strip()
-    if llm_model:
+    if llm_model and not (
+        legacy_http_model_agent
+        and str(direct.get("model") or "").strip()
+    ):
         direct["model"] = llm_model
     else:
         direct.setdefault("model", "")
@@ -647,44 +702,89 @@ def _normalize_llm_contract(value: object) -> dict:
         direct["max_tokens"] = 4096
         llm["max_tokens"] = 4096
 
-    # ---- agent 段（OpenAI 兼容） ----
-    agent = copy.deepcopy(llm.get("agent")) if isinstance(llm.get("agent"), dict) else {}
+    # ---- agent 段（原生 WebSocket Gateway） ----
+    agent = {} if legacy_http_model_agent else legacy_agent
 
-    # base_url 解析优先级：llm.api_base > llm.host > agent.base_url > default
-    # 注意：旧配置中 agent.base_url 指向 Hermes Gateway（:8642）而非 LLM，
-    # 因此 llm 顶层地址必须优先，避免迁移后仍指向旧 Gateway 端口。
-    default_url = "https://api.openai.com/v1"
-    agent_base = str(llm.get("api_base") or "").strip()
-    if not agent_base:
-        agent_base = str(llm.get("host") or "").strip()
-    if not agent_base:
-        agent_base = str(agent.get("base_url") or "").strip()
-    if not agent_base:
-        agent_base = default_url
-    agent["base_url"] = agent_base
+    raw_kind = str(agent.get("kind") or backend or "").strip().lower()
+    raw_base = str(
+        agent.get("base_url") or agent.get("bridge_url") or ""
+    ).strip()
+    if raw_kind not in _AGENT_KINDS:
+        raw_kind = "openclaw" if "18789" in raw_base else "hermes"
+    agent["kind"] = raw_kind
 
-    # api_key：agent.api_key > agent.auth_token（旧向导 Bearer Token 迁移）> llm.api_key
-    # 重构后 OpenAIAdapter 只用 agent.api_key 鉴权，而向导后端页仍在收集 auth_token；
-    # 若不迁移，用户填的 Bearer Token 会在下面的 legacy 清理中被静默丢弃。
-    if not str(agent.get("api_key") or "").strip():
-        agent["api_key"] = (
-            str(agent.get("auth_token") or "").strip()
-            or str(llm.get("api_key") or "").strip()
-        )
+    # 8642 是 Hermes HTTP API Server，原生 WS 由 ``hermes serve`` 默认在
+    # 9119 的 /api/ws 提供。精确识别旧本机默认，避免生成不存在的 :8642/ws。
+    if raw_kind == "hermes":
+        default_url = "ws://127.0.0.1:9119/api/ws"
+        lowered = raw_base.lower().rstrip("/")
+        if lowered in {
+            "http://127.0.0.1:8642",
+            "http://localhost:8642",
+            "https://api.openai.com/v1",
+        }:
+            raw_base = default_url
+        elif lowered.startswith(("http://", "https://")):
+            from urllib.parse import urlsplit, urlunsplit
 
-    # model：agent.model > llm.model > direct.model > fallback
-    agent_model = str(agent.get("model") or "").strip()
-    if not agent_model:
-        agent_model = llm_model or str(direct.get("model") or "").strip()
-    if not agent_model:
-        agent_model = "gpt-4o-mini"
-    agent["model"] = agent_model
+            parsed = urlsplit(raw_base)
+            scheme = "wss" if parsed.scheme.lower() == "https" else "ws"
+            path = parsed.path.rstrip("/")
+            if not path:
+                path = "/api/ws"
+            elif not path.endswith("/api/ws"):
+                path = f"{path}/api/ws"
+            raw_base = urlunsplit((scheme, parsed.netloc, path, "", ""))
+        elif not lowered.startswith(("ws://", "wss://")):
+            raw_base = default_url
+    else:
+        default_url = "ws://127.0.0.1:18789"
+        if not raw_base.lower().startswith(("ws://", "wss://")):
+            raw_base = default_url
+    agent["base_url"] = raw_base or default_url
 
-    # 通用参数
-    agent.setdefault("temperature", llm.get("temperature", 0.7))
-    agent.setdefault("max_tokens", llm.get("max_tokens", 4096))
-    agent.setdefault("timeout_seconds", 120.0)
-    agent.setdefault("history_turns", 5)
+    auth_token = str(
+        agent.get("auth_token")
+        or agent.get("api_key")
+        or (llm.get("api_key") if requested_mode == "agent" else "")
+        or ""
+    ).strip()
+    agent["auth_token"] = auth_token
+    agent["session_id"] = str(agent.get("session_id") or "").strip()
+    agent["session_key"] = str(agent.get("session_key") or "").strip()
+    remote_session_id = str(
+        agent.get("remote_session_id") or ""
+    ).strip()
+    if remote_session_id:
+        agent["remote_session_id"] = remote_session_id
+    else:
+        agent.pop("remote_session_id", None)
+    agent["model"] = str(
+        agent.get("model")
+        or (llm.get("model") if requested_mode == "agent" else "")
+        or ""
+    ).strip()
+    try:
+        timeout_seconds = float(agent.get("timeout_seconds", 120.0))
+    except (TypeError, ValueError):
+        timeout_seconds = 120.0
+    agent["timeout_seconds"] = (
+        timeout_seconds if timeout_seconds > 0 else 120.0
+    )
+    try:
+        history_turns = int(agent.get("history_turns", 5))
+    except (TypeError, ValueError):
+        history_turns = 5
+    agent["history_turns"] = max(0, min(history_turns, 100))
+    agent["allow_insecure_ws"] = bool(
+        agent.get("allow_insecure_ws", False)
+        or agent.get("allow_insecure_http", False)
+    )
+    identity_path = str(agent.get("identity_path") or "").strip()
+    if identity_path:
+        agent["identity_path"] = identity_path
+    else:
+        agent.pop("identity_path", None)
 
     # TLS
     tls = copy.deepcopy(agent.get("tls")) if isinstance(agent.get("tls"), dict) else {}
@@ -692,24 +792,24 @@ def _normalize_llm_contract(value: object) -> dict:
     tls.setdefault("ca_file", "")
     agent["tls"] = tls
 
-    # 清理旧字段（不再需要）
+    # HTTP LLM 参数只属于 direct；这里仅迁移旧 api_key 到 auth_token。
     for legacy_key in (
-        "kind", "auth_token", "session_id", "session_key",
-        "allow_insecure_ws", "identity_path", "bridge_url",
+        "api_key",
+        "temperature",
+        "max_tokens",
+        "allow_insecure_http",
+        "bridge_url",
     ):
         agent.pop(legacy_key, None)
 
     llm["mode"] = requested_mode
     llm["direct"] = direct
     llm["agent"] = agent
-    # direct 模式下顶层 backend 与 direct.provider 对齐（恒为 custom）；
-    # agent 模式保留 hermes/openclaw kind，其它旧厂商标签收成 custom。
+    # 顶层 backend 只作兼容标签；实际选择以 mode + 子段为准。
     if requested_mode == "direct":
         llm["backend"] = "custom"
-    elif backend in _AGENT_KINDS:
-        llm["backend"] = backend
     else:
-        llm["backend"] = "custom"
+        llm["backend"] = raw_kind
     return llm
 
 
@@ -953,8 +1053,11 @@ def scrub_secrets(config: dict) -> dict:
             direct["api_key"] = ""
         agent = out["llm"].get("agent")
         if isinstance(agent, dict):
-            agent["api_key"] = ""
-            agent["auth_token"] = ""  # 兼容旧字段
+            # 旧导出结构仍可能包含 agent.api_key；保留字段形状但清空，
+            # 避免兼容读取方因键缺失失败，同时不会泄露已迁移的凭据。
+            if "api_key" in agent:
+                agent["api_key"] = ""
+            agent["auth_token"] = ""
     if "tts" in out and isinstance(out["tts"], dict):
         out["tts"]["api_key"] = ""
         out["tts"]["translate_api_key"] = ""

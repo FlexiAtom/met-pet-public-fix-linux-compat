@@ -1350,6 +1350,12 @@ QToolTip {
     padding: 6px 10px;
 }
 
+> **运行时覆盖（2026-07）：** 原生 `QMessageBox` 的 QSS 无法控制 Windows
+> 标题栏，会形成白色标题栏与深色客户区拼接。以下规则仅作为第三方/遗留调用
+> 的兼容兜底；MeaPet 自身的信息、警告、错误和确认必须通过
+> `meapet/message_dialog.py::MeaMessageDialog` 完整自绘。该窗口继续返回
+> `QMessageBox.StandardButton` 值，因此不改变业务判断。
+
 QMessageBox { background: #16111F; color: #FAF6FB;
               font-family: "LXGW WenKai"; font-size: 14px; }
 QMessageBox QLabel { background: transparent; color: #FAF6FB; }
@@ -1504,8 +1510,8 @@ self.card.setGraphicsEffect(shadow)
 | 进度/滑块（L456–495） | chunk 与 sub-page 换 G2；groove/add-page 换 `#100C18`；handle 边框色跟随 |
 | 标签段（L496–539） | 按 §4.2 替换：pane 加月光缝、radius 14；tab hover 换扫光；**tab:selected 换"2px 顶部樱色点亮边"**；新增 `QTabBar { qproperty-drawBase: 0; }` |
 | 滚动条 / ToolTip（L540–575） | 把手 `rgba(124,105,160,170)`；ToolTip 加 `border-radius: 8px` + 内距 6/10 |
-| QMessageBox / QFileDialog（L576–660） | 按 §4.6 替换。**`QMessageBox QLabel#qt_msgbox_label { min-width: 280px; }` 必须原样保留**（单测断言该字符串存在于 `WIZARD_STYLESHEET`） |
-| 函数区（L664 起） | `set_status` / `apply_wizard_dialog_style` / `field_label` / `styled_*` / `prepare_accessible_page` **一行不改** |
+| QMessageBox / QFileDialog（L576–660） | 原生 QMessageBox 规则仅保留为兼容兜底；产品内调用统一转到 `meapet/message_dialog.py`。**`QMessageBox QLabel#qt_msgbox_label { min-width: 280px; }` 仍原样保留**（兼容旧主题断言） |
+| 函数区（L664 起） | `styled_message_box()` 只负责转发到共享 `MeaMessageDialog`；其余 `set_status` / `apply_wizard_dialog_style` / `field_label` / `styled_*` / `prepare_accessible_page` 保持既有职责 |
 
 ### 5.9 `wizard/app.py`
 

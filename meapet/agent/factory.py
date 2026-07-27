@@ -1,27 +1,31 @@
-"""从统一配置构造 OpenAI 兼容 Agent 适配器。"""
+"""从统一配置构造原生 WebSocket Agent 适配器。"""
 
 from __future__ import annotations
 
 import os
+import uuid
 
-from meapet.agent.openai_adapter import (
-    OpenAIAdapter,
-    OpenAIConfig,
-    DEFAULT_OPENAI_BASE_URL,
-)
+from meapet.agent.hermes import HermesAdapter, HermesConfig
+from meapet.agent.openclaw import OpenClawAdapter, OpenClawConfig
 
 
 def _resolve_secret(value: str, env_keys: tuple[str, ...]) -> str:
-    """解析密钥：如果是 $VAR 格式则从环境变量读取，否则直接返回。"""
-    if not value:
-        for key in env_keys:
-            val = os.environ.get(key)
-            if val:
-                return val
+    raw = str(value or "").strip()
+    if raw.startswith("${") and raw.endswith("}") and len(raw) > 3:
+        targeted = os.environ.get(raw[2:-1], "").strip()
+        if targeted:
+            return targeted
+    if raw.startswith("$") and len(raw) > 1:
+        targeted = os.environ.get(raw[1:], "").strip()
+        if targeted:
+            return targeted
+    for key in env_keys:
+        resolved = os.environ.get(key, "").strip()
+        if resolved:
+            return resolved
+    if raw.startswith("$"):
         return ""
-    if value.startswith("$"):
-        return os.environ.get(value[1:], "")
-    return value
+    return raw
 
 
 def _positive_float(value: object, default: float) -> float:
@@ -32,58 +36,115 @@ def _positive_float(value: object, default: float) -> float:
     return result if result > 0 else default
 
 
-def _positive_int(value: object, default: int) -> int:
+def _bounded_int(
+    value: object,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
     try:
         result = int(value)
     except (TypeError, ValueError):
-        return default
-    return result if result > 0 else default
+        result = default
+    return min(max(result, minimum), maximum)
 
 
-def create_agent_adapter_from_config(config: dict) -> OpenAIAdapter:
-    """根据 llm.agent 配置构造一个 OpenAI 兼容适配器。"""
+def _ensure_local_session(agent_cfg: dict) -> str:
+    session_id = str(agent_cfg.get("session_id") or "").strip()
+    if not session_id:
+        session_id = f"meapet-{uuid.uuid4().hex}"
+        agent_cfg["session_id"] = session_id
+    return session_id
+
+
+def create_agent_adapter_from_config(
+    config: dict,
+) -> HermesAdapter | OpenClawAdapter:
+    """构造 Hermes TUI Gateway 或 OpenClaw Gateway 的 WS 适配器。
+
+    OpenAI/Ollama/Anthropic 等 HTTP 接口属于 ``llm.direct``，不会从本工厂
+    创建，也不会在 Agent 连接失败时作为隐式回落。
+    """
     llm = config.setdefault("llm", {})
     agent_cfg = llm.setdefault("agent", {})
+    kind = str(agent_cfg.get("kind") or "hermes").strip().lower()
+    if kind not in {"hermes", "openclaw"}:
+        raise ValueError(
+            "llm.agent.kind must be 'hermes' or 'openclaw'; "
+            "HTTP model endpoints belong under llm.direct"
+        )
 
-    base_url = (
-        str(agent_cfg.get("base_url") or "").strip()
-        or str(llm.get("api_base") or "").strip()
-        or str(llm.get("host") or "").strip()
-        or DEFAULT_OPENAI_BASE_URL
-    )
-
-    raw_key = str(agent_cfg.get("api_key") or llm.get("api_key") or "").strip()
-    api_key = _resolve_secret(raw_key, ("OPENAI_API_KEY", "MEAPET_API_KEY"))
-
-    model = (
-        str(agent_cfg.get("model") or "").strip()
-        or str(llm.get("model") or "").strip()
-        or str(llm.get("direct", {}).get("model") or "").strip()
-        or "gpt-4o-mini"
-    )
-
-    temperature = _positive_float(
-        agent_cfg.get("temperature") or llm.get("temperature"), 0.7
-    )
-    max_tokens = _positive_int(
-        agent_cfg.get("max_tokens") or llm.get("max_tokens"), 4096
-    )
-    timeout = _positive_float(
-        agent_cfg.get("timeout_seconds"), 120.0
-    )
-
-    tls = agent_cfg.get("tls") if isinstance(agent_cfg.get("tls"), dict) else {}
+    _ensure_local_session(agent_cfg)
+    timeout = _positive_float(agent_cfg.get("timeout_seconds"), 120.0)
+    tls = agent_cfg.get("tls")
+    tls = tls if isinstance(tls, dict) else {}
     verify_tls = bool(tls.get("verify", True))
+    ca_file = str(tls.get("ca_file") or "").strip()
+    allow_insecure_ws = bool(agent_cfg.get("allow_insecure_ws", False))
+    raw_token = str(
+        agent_cfg.get("auth_token") or agent_cfg.get("api_key") or ""
+    ).strip()
 
-    return OpenAIAdapter(
-        OpenAIConfig(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
+    if kind == "openclaw":
+        token = _resolve_secret(
+            raw_token,
+            ("OPENCLAW_GATEWAY_TOKEN", "MEAPET_AGENT_TOKEN"),
+        )
+        session_key = str(agent_cfg.get("session_key") or "").strip()
+        if not session_key:
+            session_key = f"agent:main:meapet:{uuid.uuid4().hex}"
+            agent_cfg["session_key"] = session_key
+        return OpenClawAdapter(
+            OpenClawConfig(
+                base_url=(
+                    str(agent_cfg.get("base_url") or "").strip()
+                    or "ws://127.0.0.1:18789"
+                ),
+                auth_token=token,
+                session_key=session_key,
+                session_id=str(agent_cfg.get("upstream_session_id") or "").strip(),
+                timeout_seconds=timeout,
+                verify_tls=verify_tls,
+                ca_file=ca_file,
+                allow_insecure_ws=allow_insecure_ws,
+                identity_path=str(
+                    agent_cfg.get("identity_path") or ""
+                ).strip(),
+            )
+        )
+
+    token = _resolve_secret(
+        raw_token,
+        (
+            "HERMES_DASHBOARD_SESSION_TOKEN",
+            "HERMES_API_SERVER_KEY",
+            "MEAPET_AGENT_TOKEN",
+        ),
+    )
+    return HermesAdapter(
+        HermesConfig(
+            base_url=(
+                str(agent_cfg.get("base_url") or "").strip()
+                or "ws://127.0.0.1:9119/api/ws"
+            ),
+            auth_token=token,
+            model=str(agent_cfg.get("model") or "").strip(),
+            session_id=str(agent_cfg.get("session_id") or "").strip(),
+            session_key=str(agent_cfg.get("session_key") or "").strip(),
+            remote_session_id=str(
+                agent_cfg.get("remote_session_id") or ""
+            ).strip(),
+            history_turns=_bounded_int(
+                agent_cfg.get("history_turns"),
+                5,
+                minimum=0,
+                maximum=100,
+            ),
             timeout_seconds=timeout,
             verify_tls=verify_tls,
-        )
+            ca_file=ca_file,
+            allow_insecure_ws=allow_insecure_ws,
+        ),
+        config_sink=agent_cfg,
     )
-

@@ -63,6 +63,27 @@ def calculate_drag_position(
     return window_origin + current_pointer - pointer_origin
 
 
+def calculate_bubble_anchor_rect(
+    pet_window_rect: QRect,
+    visible_local_rect: QRect | None = None,
+) -> QRect:
+    """把桌宠窗口内的可见区域转换成用于气泡定位的全局矩形。
+
+    Live2D 宿主窗口通常包含大块透明留白；若仍以完整窗口为锚点，代码
+    计算出的 12px 间距会变成“透明留白 + 12px”。Qt mask 与实际窗口
+    命中区域共用，因此它的包围盒是最稳定的视觉锚点。
+    """
+    window = QRect(pet_window_rect)
+    if visible_local_rect is None or visible_local_rect.isEmpty():
+        return window
+    local_window = QRect(QPoint(0, 0), window.size())
+    visible = QRect(visible_local_rect).intersected(local_window)
+    if visible.isEmpty():
+        return window
+    visible.translate(window.topLeft())
+    return visible
+
+
 def calculate_bubble_position(
     pet_rect: QRect,
     bubble_size: QSize,
@@ -768,7 +789,23 @@ class PetRenderHostMixin:
         if not bubbles:
             return
 
-        pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
+        pet_window_rect = QRect(
+            self.x(),
+            self.y(),
+            self.width(),
+            self.height(),
+        )
+        visible_local_rect = None
+        try:
+            visible_region = self.mask()
+            if not visible_region.isEmpty():
+                visible_local_rect = visible_region.boundingRect()
+        except RuntimeError:
+            pass
+        pet_rect = calculate_bubble_anchor_rect(
+            pet_window_rect,
+            visible_local_rect,
+        )
         screen = QApplication.screenAt(pet_rect.center())
         if screen is None:
             screen = QApplication.primaryScreen()

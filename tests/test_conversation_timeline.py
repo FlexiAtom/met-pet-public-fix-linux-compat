@@ -379,7 +379,7 @@ class TestAgentSessionReset(unittest.TestCase):
         host = Host()
         with (
             mock.patch(
-                "meapet.desktop.window_chrome.QMessageBox.question",
+                "meapet.desktop.window_chrome.show_message_dialog",
                 return_value=QMessageBox.Yes,
             ) as question,
             mock.patch("meapet.agent.factory.create_agent_adapter_from_config", return_value="new-adapter"),
@@ -393,7 +393,7 @@ class TestAgentSessionReset(unittest.TestCase):
         self.assertEqual(host.agent_adapter, "new-adapter")
         self.assertEqual(host.memory.reset_calls, 0)
         self.assertEqual(host.saved, 1)
-        self.assertIn("不会删除", question.call_args.args[2])
+        self.assertIn("不会删除", question.call_args.kwargs["text"])
 
     def test_direct_reset_also_clears_the_in_memory_timeline(self):
         from PyQt5.QtWidgets import QMessageBox
@@ -433,7 +433,7 @@ class TestAgentSessionReset(unittest.TestCase):
 
         host = Host()
         with mock.patch(
-            "meapet.desktop.window_chrome.QMessageBox.question",
+            "meapet.desktop.window_chrome.show_message_dialog",
             return_value=QMessageBox.Yes,
         ):
             host._reset_memory()

@@ -11,8 +11,8 @@ MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screen
 | Capability | Description |
 |------------|-------------|
 | Reply backends | Direct model API or Agent — one active at a time, no automatic fallback |
-| Direct protocol | OpenAI Chat Completions (always used) — unified across all providers |
-| Agent | Hermes API Server, OpenClaw Gateway WebSocket v4 |
+| Direct protocol | Ollama Chat, OpenAI Chat/Responses, Anthropic Messages over HTTP streaming |
+| Agent | Hermes TUI Gateway JSON-RPC WebSocket, OpenClaw Gateway WebSocket v4 |
 | Display | Streaming text bubble without TTS; waits for audio then shows bubble + plays in sync |
 | Multi-segment replies | Each segment has its own bubble, mood, voice text, language, and TTS style |
 | Speech | MiMo cloud TTS, local GPT-SoVITS, local VITS; GPT-SoVITS supports per-language reference audio |
@@ -79,7 +79,7 @@ Do not ship a developer `config.json` that contains API keys. Only `config.examp
 
 ### Direct Model API
 
-Direct mode lets MeaPet manage character prompts, recent context, SQLite memory, and output constraints. All providers connect via the unified OpenAI-compatible interface.
+Direct mode lets MeaPet manage character prompts, recent context, SQLite memory, and output constraints. It is the only mode that connects directly to an LLM HTTP API.
 
 You configure three things in the wizard: the API base URL, the model name (with optional auto-discovery via "Fetch Models"), and your API key. The saved `provider` is always `custom`. Transport is decided by `protocol` + `api_base` (Ollama local URLs auto-select `ollama_chat`; everything else defaults to OpenAI-compatible chat). URL hints only affect which environment variable is probed for the key, and MiMo/Ollama linkage for TTS/vision.
 
@@ -97,10 +97,11 @@ Agent mode treats MeaPet as a pure desktop frontend:
 - MeaPet calls the Agent to generate replies, providing mood, action, TTS language, and character state as context.
 - The Agent uses its own model, memory, and internal tools; MeaPet does not require the Agent to implement additional "memory query" capabilities.
 - Internal tool names and raw parameters are not displayed in character bubbles. Safe status (start, complete, failure) enters the timeline; diagnostic details go to logs only.
-- Hermes connects via OpenAI Chat Completions + SSE; OpenClaw connects via Gateway WebSocket v4.
-- Agent responses must follow the MeaPet segmented output format. Severely malformed fields trigger a single isolated format-repair request; unparseable responses are treated as safe errors.
+- Agent mode uses WebSocket only. Hermes connects to the native TUI Gateway exposed by `hermes serve`; OpenClaw connects to Gateway v4. HTTP/SSE model endpoints belong exclusively to direct mode.
+- Connections are reused across turns and carry bidirectional streaming, cancellation, ping/pong, and protocol-specific reconnect recovery. OpenClaw retries with the same idempotency key; Hermes resumes the stored session and reconciles history instead of blindly resubmitting a possibly executed tool turn.
+- Agent responses must follow the MeaPet segmented output format. Malformed output raises an explicit format-repair state; no Agent path silently falls back to an HTTP model endpoint.
 
-The current session's `session_id` and long-term scope `session_key` are saved in the local config. Restart defaults to restoring the current session. "Clear memory" in Agent mode explicitly ends the current Agent session and creates a new identity. Old timelines remain readable.
+The local `session_id` identifies MeaPet's timeline scope. OpenClaw additionally persists its Gateway `session_key`; Hermes persists the server-returned `remote_session_id` and uses `session.resume` after restart or reconnect. "Clear memory" in Agent mode explicitly starts a new upstream Agent session. Old timelines remain readable.
 
 ## Reply, Bubble, and TTS Timing
 
@@ -226,7 +227,8 @@ Secret priority: environment variable > `config.json` plaintext. Config values a
 | `DEEPSEEK_API_KEY` | DeepSeek direct connection |
 | `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY` | MiMo conversation, vision, or TTS |
 | `MEAPET_API_KEY` | Custom direct connection fallback |
-| `HERMES_API_SERVER_KEY` / `MEAPET_AGENT_TOKEN` | Hermes / OpenClaw Agent auth |
+| `HERMES_DASHBOARD_SESSION_TOKEN` | Hermes `hermes serve` WebSocket token |
+| `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway token |
 | `MEAPET_CONTROL_TOKEN` | Companion MCP Bearer Token |
 | `GSV_PYTHON` | GPT-SoVITS environment `python.exe` |
 | `MEAPET_FORCE_PNG` | Force PNG rendering when set to a non-empty value |
@@ -311,9 +313,9 @@ Check whether TTS is enabled, the engine health check passes, the reply's `voice
 </details>
 
 <details>
-<summary>OpenClaw or remote MCP cannot connect</summary>
+<summary>Hermes, OpenClaw, or remote MCP cannot connect</summary>
 
-Remote OpenClaw should use WSS; plain WS requires explicit opt-in. The Companion MCP listen IP must be a concrete local interface IP, and the allowed IP must match the Agent host. LAN HTTP also requires explicit opt-in; check Windows Firewall for the port.
+For Hermes, start `hermes serve --host 127.0.0.1 --port 9119` with a fixed `HERMES_DASHBOARD_SESSION_TOKEN`, then configure `ws://127.0.0.1:9119/api/ws`; port 8642 is the separate HTTP API Server and is not the Agent WebSocket endpoint. Current Hermes public binds use short-lived login tickets rather than the static loopback token, so connect a remote Hermes through an SSH tunnel to its loopback port. Remote OpenClaw should use WSS; plain remote WS requires explicit opt-in. The Companion MCP listen IP must be a concrete local interface IP, and the allowed IP must match the Agent host. LAN HTTP also requires explicit opt-in; check Windows Firewall for the port.
 </details>
 
 <details>

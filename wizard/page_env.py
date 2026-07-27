@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
 )
@@ -58,6 +59,7 @@ class EnvCheckPage(QFrame):
         # 自动检测并展示当前平台
         self.platform_label = QLabel(f"当前平台 · {PLATFORM['display']}")
         self.platform_label.setObjectName("PageEyebrow")
+        self.platform_label.setWordWrap(True)
         self.platform_label.setAccessibleName("当前运行平台")
         self.layout.addWidget(self.platform_label)
         self.log_platform_once = True
@@ -71,21 +73,34 @@ class EnvCheckPage(QFrame):
         self._check_results = {}
         for name, hint, _required in self._checklist:
             row = QHBoxLayout()
+            row.setSpacing(12)
             name_label = QLabel(name)
             name_label.setObjectName("FieldLabel")
             name_label.setMinimumWidth(132)
+            name_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
             row.addWidget(name_label)
 
             hint_label = QLabel(hint)
             hint_label.setObjectName("HelperText")
-            row.addWidget(hint_label)
-
-            row.addStretch()
+            hint_label.setWordWrap(True)
+            hint_label.setSizePolicy(
+                QSizePolicy.Ignored,
+                QSizePolicy.Preferred,
+            )
+            hint_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            hint_label.setAccessibleName(f"{name} 环境说明")
+            row.addWidget(hint_label, 3)
 
             status = QLabel("检测中…")
             status.setProperty("status", "muted")
+            status.setWordWrap(True)
+            status.setSizePolicy(
+                QSizePolicy.Ignored,
+                QSizePolicy.Preferred,
+            )
+            status.setAlignment(Qt.AlignRight | Qt.AlignTop)
             status.setAccessibleName(f"{name} 检测状态")
-            row.addWidget(status)
+            row.addWidget(status, 2)
 
             btn = QPushButton("安装")
             btn.setMinimumSize(76, MIN_TARGET_SIZE)
@@ -109,6 +124,7 @@ class EnvCheckPage(QFrame):
 
         self.total_status = QLabel("正在检测…")
         self.total_status.setProperty("status", "muted")
+        self.total_status.setWordWrap(True)
         self.total_status.setAccessibleName("环境检测汇总")
         self.layout.addWidget(self.total_status)
 
@@ -265,10 +281,15 @@ class EnvCheckPage(QFrame):
             pct = int(step / total_steps * 90)
 
             if name == PYTHON_CHECK_NAME:
-                ok, version_status = python_runtime_compatibility()
+                ok, _version_status = python_runtime_compatibility()
+                version_text = sys.version.split()[0]
                 self._set_item_status(
                     name, ok,
-                    f"{'✅' if ok else '⚠️'} {version_status}",
+                    (
+                        f"就绪 · {version_text}"
+                        if ok
+                        else f"需升级 · {version_text}"
+                    ),
                 )
                 self.log(
                     f"Python: {sys.version.split()[0]} "
@@ -332,18 +353,32 @@ class EnvCheckPage(QFrame):
     def _add_row(self, name: str, hint: str) -> tuple:
         """动态添加一行检测项"""
         row = QHBoxLayout()
+        row.setSpacing(12)
         name_label = QLabel(name)
         name_label.setObjectName("FieldLabel")
         name_label.setMinimumWidth(132)
+        name_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         row.addWidget(name_label)
         hint_label = QLabel(hint)
         hint_label.setObjectName("HelperText")
-        row.addWidget(hint_label)
-        row.addStretch()
+        hint_label.setWordWrap(True)
+        hint_label.setSizePolicy(
+            QSizePolicy.Ignored,
+            QSizePolicy.Preferred,
+        )
+        hint_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        hint_label.setAccessibleName(f"{name} 环境说明")
+        row.addWidget(hint_label, 3)
         status = QLabel("检测中…")
         status.setProperty("status", "muted")
+        status.setWordWrap(True)
+        status.setSizePolicy(
+            QSizePolicy.Ignored,
+            QSizePolicy.Preferred,
+        )
+        status.setAlignment(Qt.AlignRight | Qt.AlignTop)
         status.setAccessibleName(f"{name} 检测状态")
-        row.addWidget(status)
+        row.addWidget(status, 2)
         btn = QPushButton("拉取")
         btn.setMinimumSize(76, MIN_TARGET_SIZE)
         btn.setAccessibleName(f"拉取 {name}")

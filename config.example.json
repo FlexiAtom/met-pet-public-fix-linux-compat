@@ -1,7 +1,7 @@
 {
   "llm": {
     "mode": "agent",
-    "backend": "openai_compatible",
+    "backend": "hermes",
     "host": "https://api.openai.com/v1",
     "model": "gpt-4o-mini",
     "api_key": "",
@@ -19,13 +19,15 @@
       "max_tokens": 4096
     },
     "agent": {
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "",
-      "model": "gpt-4o-mini",
-      "temperature": 0.7,
-      "max_tokens": 4096,
+      "kind": "hermes",
+      "base_url": "ws://127.0.0.1:9119/api/ws",
+      "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
+      "model": "",
+      "session_id": "",
+      "session_key": "",
       "timeout_seconds": 120,
       "history_turns": 5,
+      "allow_insecure_ws": false,
       "tls": {
         "verify": true,
         "ca_file": ""

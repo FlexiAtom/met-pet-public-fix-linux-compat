@@ -263,12 +263,12 @@ WIZARD_STYLESHEET = f"""
         font-size: 13px;
         font-weight: 600;
     }}
-    QLabel#FontScaleValue {{
+    QLabel#FontScaleValue,
+    QLabel#PetSizeValue {{
         color: {COLOR_ACCENT};
-        background: {COLOR_INPUT};
-        border: 1px solid {COLOR_BORDER};
-        border-radius: {RADIUS_SMALL}px;
-        padding: 5px 10px;
+        background: transparent;
+        border: none;
+        padding: 0;
         font-size: 14px;
         font-weight: 700;
     }}
@@ -745,7 +745,7 @@ def set_status(widget, status: str, text: str | None = None) -> None:
 
 
 def apply_wizard_dialog_style(dialog) -> None:
-    """给 QMessageBox / QFileDialog / 临时说明窗统一套配置中心主题。"""
+    """给 QFileDialog / 临时说明窗统一套配置中心主题。"""
     from meapet.ui_theme import set_scaled_stylesheet
 
     if dialog is None:
@@ -777,35 +777,17 @@ def styled_message_box(
     buttons=None,
     default_button=None,
 ) -> int:
-    """创建并执行带配置中心主题的 QMessageBox，返回标准按钮结果。"""
-    from PyQt5.QtWidgets import QMessageBox
+    """显示无原生标题栏的主题消息框，返回 QMessageBox 标准按钮结果。"""
+    from meapet.message_dialog import show_message_dialog
 
-    box = QMessageBox(parent)
-    box.setWindowTitle(title)
-    box.setText(text)
-    if icon is not None:
-        box.setIcon(icon)
-    if buttons is not None:
-        box.setStandardButtons(buttons)
-    if default_button is not None:
-        box.setDefaultButton(default_button)
-    localized_buttons = (
-        (QMessageBox.Ok, "确定"),
-        (QMessageBox.Save, "保存"),
-        (QMessageBox.Cancel, "取消"),
-        (QMessageBox.Discard, "放弃更改"),
-        (QMessageBox.Yes, "继续"),
-        (QMessageBox.No, "取消"),
-        (QMessageBox.Retry, "重试"),
-        (QMessageBox.Close, "关闭"),
+    return show_message_dialog(
+        parent,
+        title=title,
+        text=text,
+        icon=icon,
+        buttons=buttons,
+        default_button=default_button,
     )
-    for standard_button, localized_text in localized_buttons:
-        button = box.button(standard_button)
-        if button is not None:
-            button.setText(localized_text)
-            button.setAccessibleName(localized_text)
-    apply_wizard_dialog_style(box)
-    return box.exec_()
 
 
 def styled_open_file(
