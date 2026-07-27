@@ -138,13 +138,8 @@ class PetMenuWindow(QWidget):
 
         close_button = QPushButton(header)
         close_button.setObjectName("PetMenuCloseButton")
-        close_icon = standard_icon("close")
-        if close_icon.isNull() or close_icon.availableSizes() == []:
-            # 无图标主题（部分 Linux 桌面）时退回到文字标记，按钮不能是空白。
-            close_button.setText("✕")
-        else:
-            close_button.setIcon(close_icon)
-            close_button.setIconSize(QSize(CHECK_ICON_SIZE, CHECK_ICON_SIZE))
+        close_button.setText("✕")
+        close_button.setStyleSheet("color: white; font-weight: bold; font-size: 18px;")
         close_button.setCursor(Qt.PointingHandCursor)
         close_button.setToolTip("关闭菜单（Esc）")
         close_button.setAccessibleName("关闭菜单")
