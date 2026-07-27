@@ -40,11 +40,7 @@ class StatusPanel(QWidget):
         self.setWindowTitle("梅尔酱 - 养成状态")
         self.setObjectName("StatusPanelRoot")
         self.setFixedSize(440, 620)
-        self.setWindowFlags(
-            Qt.Window |
-            Qt.WindowStaysOnTopHint |
-            Qt.FramelessWindowHint
-        )
+        self.setWindowFlags(Qt.Tool)#Qt.Window
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAccessibleName("梅尔养成状态")
         self.setAccessibleDescription("查看好感度、心情、对话统计和重要记忆")
