@@ -77,7 +77,7 @@ class TurnDetailDialog(QDialog):
         self.turn = turn
         self.setObjectName("TimelineDetailDialog")
         self.setWindowTitle("本轮完整回复")
-        self.setWindowFlags(Qt.Tool)
+        self.setWindowFlags(Qt.Window)
         self.setMinimumSize(560, 460)
         self.resize(660, 560)
         set_scaled_stylesheet(self, DIALOG_STYLE)
@@ -139,7 +139,7 @@ class TimelineDialog(QDialog):
         self._detail = None
         self.setObjectName("TimelineDialog")
         self.setWindowTitle("对话时间线")
-        self.setWindowFlags(Qt.Tool)
+        self.setWindowFlags(Qt.Window)
         self.setMinimumSize(600, 500)
         self.resize(720, 640)
         set_scaled_stylesheet(self, DIALOG_STYLE)
