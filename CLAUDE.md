@@ -41,7 +41,7 @@ Do not commit: `config.json`, secrets, `*.db`, `logs/`, `audio_cache/`, `voice_c
 
 **Dual reply backends** (one at a time, no automatic failover; full contract in `docs/backend-and-control.md`):
 1. **Direct** (`meapet/direct/`): 4 protocols — `ollama_chat` (NDJSON `/api/chat`), `openai_chat`, `openai_responses`, `anthropic_messages` (SSE). Unified via `DirectProtocolClient` + canonical events (`TextDelta`, `ReasoningDelta`, `StreamDone`, `UsageEvent`). Pre-stream connect/timeout/5xx retries up to 3 times with 0.4/0.8s backoff; no retry after first event. MeaPet manages prompts, context, memory.
-2. **Agent** (`meapet/agent/`): `HermesAdapter` (OpenAI Chat + SSE) or `OpenClawAdapter` (Gateway WebSocket v4). `AgentTurnPresentation` manages display state. `openclaw_identity.py` handles device identity and v3 challenge signatures. `prompts.py` holds agent system prompts. Agent manages its own model, memory, tools.
+2. **Agent** (`meapet/agent/`): WebSocket only — `HermesAdapter` speaks the `hermes serve` TUI Gateway JSON-RPC protocol; `OpenClawAdapter` speaks Gateway WebSocket v4. `ws_transport.py` owns persistent connection reuse, ping/pong, TLS, and connection generations. `AgentTurnPresentation` manages display state. `openclaw_identity.py` handles device identity and v3 challenge signatures. `prompts.py` holds Agent output constraints. Agent manages its own model, memory, and tools. HTTP/SSE model endpoints belong under `llm.direct`; there is no implicit fallback between modes.
 
 **Conversation protocol** (`meapet/conversation/`): Multi-segment reply format with `<MEAPET_SEGMENT>`, `<DISPLAY>`, `<META>` tags. Parser (`output_protocol.py`) produces stream events (`SegmentStarted`, `SegmentTextDelta`, `SegmentCompleted`) for incremental bubble display. Falls back from meapet format → legacy → plain → ollama-lax as needed.
 - `orchestrator.py`: `ConversationOrchestrator` tracks active generation via `generation_id`. Config save calls `invalidate()` — late replies/TTS/screenshots from old sessions are discarded via `accepts()`.
@@ -52,7 +52,7 @@ Do not commit: `config.json`, secrets, `*.db`, `logs/`, `audio_cache/`, `voice_c
 - Pet runs on Qt main thread (blocked only by event loop).
 - Async runtime (`meapet/async_runtime.py`): singleton daemon thread running an asyncio loop. `submit(coro)` dispatches to it.
 - `ChatWorker` / `TTSWorker` (`meapet/desktop/workers.py`): `async_runtime.submit(coro)` → Future → polled by `QTimer` (~100ms).
-- Net I/O uses shared `httpx.AsyncClient` from `meapet/http_async.py` on the daemon loop (`ssl.create_default_context()` for PyInstaller cert compat). Blocking work (local TTS subprocess) → `asyncio.to_thread`.
+- HTTP net I/O uses the shared `httpx.AsyncClient` from `meapet/http_async.py`; Agent mode uses persistent `websockets` connections. Both run on the same daemon asyncio loop. Blocking work (local TTS subprocess) → `asyncio.to_thread`.
 - `ScreenWatcher` runs in its own `QThread`.
 - **Never** block the GUI thread with network I/O or TTS.
 
@@ -63,7 +63,7 @@ Do not commit: `config.json`, secrets, `*.db`, `logs/`, `audio_cache/`, `voice_c
 - `socket` must be imported **before** any PyQt path (QtNetwork hook conflict) — enforced in `app.py` and `chat/engine.py`.
 - Screen geometry (`meapet/desktop/screen_geometry.py`): every pet-anchored popup is placed through it (never hardcode `primaryScreen()`). `_init_screen_guard()` in `render_host.py` watches `screenAdded/screenRemoved/primaryScreenChanged` + per-screen `geometryChanged/availableGeometryChanged/logicalDotsPerInchChanged`, debounces `SCREEN_GUARD_DEBOUNCE_MS`, then `_ensure_on_screen()` pulls the pet (and open overlays) back into the visible area.
 
-**Config** (`meapet/config/store.py`): Single `config.json`. Env var > config.json priority. `$ENV_VAR` / `${ENV_VAR}` placeholders. `resolve_secret()` handles credential resolution. Key env vars: `DEEPSEEK_API_KEY`, `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY`, `MEAPET_API_KEY`, `HERMES_API_SERVER_KEY` / `MEAPET_AGENT_TOKEN`, `MEAPET_CONTROL_TOKEN`, `GSV_PYTHON`, `MEAPET_FORCE_PNG`, `MEAPET_DEBUG`, `MEAPET_ALLOW_DOWNLOAD`, `MEAPET_REDUCED_MOTION`.
+**Config** (`meapet/config/store.py`): Single `config.json`. Env var > config.json priority. `$ENV_VAR` / `${ENV_VAR}` placeholders. `resolve_secret()` handles credential resolution. Key env vars: `DEEPSEEK_API_KEY`, `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY`, `MEAPET_API_KEY`, `HERMES_DASHBOARD_SESSION_TOKEN`, `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN`, `MEAPET_CONTROL_TOKEN`, `GSV_PYTHON`, `MEAPET_FORCE_PNG`, `MEAPET_DEBUG`, `MEAPET_ALLOW_DOWNLOAD`, `MEAPET_REDUCED_MOTION`.
 
 **Paths** (`meapet/paths.py`): `PROJECT_ROOT` / `PACKAGE_DIR` resolution. Frozen portable mode: `get_data_dir()` → `sys._MEIPASS` (`dist/MeaPet/_internal`); source mode uses `PROJECT_ROOT`. Legacy `~/.meapet` files are migrated once into `_internal` when missing.
 

@@ -12,26 +12,28 @@ from types import MappingProxyType
 from typing import Mapping
 
 
+# 墨樱夜（Ink-Sakura Night）：暖墨紫底衬粉白角色；surface_input 比 canvas 更深，
+# 输入区读作“凹陷井”；border 承担静态分隔、border_strong 承担交互控件边（≥3:1）。
 _PALETTE = {
-    "canvas": "#0E1020",
-    "surface": "#17192D",
-    "surface_elevated": "#20233D",
-    "surface_input": "#111326",
-    "primary": "#FF91B4",
-    "primary_hover": "#FFA8C4",
-    "on_primary": "#26131B",
-    "secondary": "#FFB36B",
-    "accent": "#A69BFF",
-    "text_primary": "#F8F8FC",
-    "text_secondary": "#CACCE0",
-    "text_muted": "#9FA3BC",
-    "border": "#3B3E5B",
-    "border_strong": "#555A7B",
-    "focus": "#C0B9FF",
-    "success": "#70DDB0",
-    "warning": "#F4CC75",
-    "danger": "#FF8892",
-    "on_danger": "#2A1014",
+    "canvas": "#16111F",
+    "surface": "#221A2E",
+    "surface_elevated": "#2E2440",
+    "surface_input": "#100C18",
+    "primary": "#FF9DBE",
+    "primary_hover": "#FFB6CE",
+    "on_primary": "#2B0F1C",
+    "secondary": "#FFC48F",
+    "accent": "#B7A6FF",
+    "text_primary": "#FAF6FB",
+    "text_secondary": "#D6CBE0",
+    "text_muted": "#A79BB8",
+    "border": "#46385C",
+    "border_strong": "#7C69A0",
+    "focus": "#CDB8FF",
+    "success": "#6FE0B4",
+    "warning": "#FFD37A",
+    "danger": "#FF8FA0",
+    "on_danger": "#2C0E15",
 }
 
 PALETTE: Mapping[str, str] = MappingProxyType(_PALETTE)
@@ -93,9 +95,51 @@ SPACE_5 = 20
 SPACE_6 = 24
 SPACE_8 = 32
 
-RADIUS_SMALL = 8
-RADIUS_MEDIUM = 12
-RADIUS_LARGE = 18
+RADIUS_SMALL = 10
+RADIUS_MEDIUM = 14
+RADIUS_LARGE = 20
+
+# ---- 墨樱夜共享渐变（方向约定：主行动 135°、材质 90°、进度/扫光 0°）----
+GRADIENT_PRIMARY = (
+    "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
+    f"stop:0 {_PALETTE['primary']}, stop:1 {_PALETTE['secondary']})"
+)
+GRADIENT_PRIMARY_HOVER = (
+    "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
+    f"stop:0 {_PALETTE['primary_hover']}, stop:1 #FFD3AC)"
+)
+GRADIENT_PROGRESS = (
+    "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+    f"stop:0 {_PALETTE['primary']}, stop:0.55 {_PALETTE['primary_hover']}, "
+    f"stop:1 {_PALETTE['secondary']})"
+)
+# 月光缝（装置 A）：竖向材质渐变，顶端亮一档
+GRADIENT_PAPER = (
+    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+    f"stop:0 #2A2139, stop:0.45 {_PALETTE['surface']}, stop:1 #1F1829)"
+)
+GRADIENT_RAISED = (
+    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+    f"stop:0 #3D3154, stop:0.45 {_PALETTE['surface_elevated']}, stop:1 #281F38)"
+)
+# 樱色扫光（选中态）
+GRADIENT_SELECTED_SWEEP = (
+    "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+    "stop:0 rgba(255, 157, 190, 52), stop:1 rgba(183, 166, 255, 30))"
+)
+# 次级按钮的三态底色
+BUTTON_SECONDARY_BG = (
+    "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #33284A, stop:1 #281F38)"
+)
+BUTTON_SECONDARY_BG_HOVER = (
+    "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3D3054, stop:1 #302543)"
+)
+BUTTON_SECONDARY_BG_PRESSED = "#241C32"
+
+
+def seam_highlight(alpha: int) -> str:
+    """月光缝顶边高光色（装置 A），alpha 随表面层级 75–110。"""
+    return rgba(_PALETTE["focus"], alpha)
 
 
 def ensure_application_fonts() -> tuple[str, ...]:

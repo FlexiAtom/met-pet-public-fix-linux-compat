@@ -309,6 +309,7 @@ class CaptureScopeConsentDialog(QDialog):
         self._countdown_disabled = False
         self._countdown_pause_reasons: set[str] = set()
         self._selection_in_progress = False
+        self._auto_region_prompted = False
         self._refresh_in_progress = False
         self._applications_loaded = False
         self._requested_region = _normalized_selected_region(requested_region)
@@ -371,7 +372,8 @@ class CaptureScopeConsentDialog(QDialog):
         region_layout = QVBoxLayout(self.region_frame)
         region_layout.setContentsMargins(10, 8, 10, 8)
         region_hint = QLabel(
-            "确认框会暂时隐藏。像系统截图工具一样按住鼠标拖出矩形；Esc 或右键取消。"
+            "确认框会暂时淡出。像系统截图工具一样按住鼠标拖出矩形；"
+            "Esc 或右键取消。"
         )
         region_hint.setObjectName("HelperText")
         region_hint.setWordWrap(True)
@@ -455,13 +457,9 @@ class CaptureScopeConsentDialog(QDialog):
         buttons.addWidget(self.cancel_button, 1)
         layout.addLayout(buttons)
 
-        # 先在所有可选面板隐藏时记录稳定的紧凑高度。后续显隐按该基线
-        # 显式加上面板高度，避免窗口管理器忽略同一事件循环内的 sizeHint。
         self.region_frame.hide()
         self.application_frame.hide()
-        self._compact_height = 0
         self._resize_to_content()
-        self._compact_height = self.height()
 
         requested = str(requested_scope or "full_screen").strip().lower()
         index = self.scope_combo.findData(requested)
@@ -548,11 +546,18 @@ class CaptureScopeConsentDialog(QDialog):
     def _choose_region(self) -> None:
         if self._selection_in_progress:
             return
+        self._auto_region_prompted = True
         self._selection_in_progress = True
         self._pause_countdown("region_selector")
         was_visible = self.isVisible()
+        previous_enabled = self.isEnabled()
+        previous_opacity = self.windowOpacity()
         if was_visible:
-            self.hide()
+            # QDialog.exec_() 会在对话框被 hide() 时结束，并沿用默认的
+            # Rejected 结果。这里必须只让窗口在视觉上消失，不能改变
+            # visible 状态，否则有效框选也会被上层误判为“用户拒绝”。
+            self.setEnabled(False)
+            self.setWindowOpacity(0.0)
             QApplication.processEvents()
         selected = None
         error = ""
@@ -565,12 +570,14 @@ class CaptureScopeConsentDialog(QDialog):
             )
         except Exception as exc:
             error = f"无法打开区域选择器：{type(exc).__name__}"
-        if was_visible:
-            self.show()
-            self.raise_()
-            self.activateWindow()
-        self._selection_in_progress = False
-        self._resume_countdown("region_selector")
+        finally:
+            if was_visible:
+                self.setWindowOpacity(previous_opacity)
+                self.setEnabled(previous_enabled)
+                self.raise_()
+                self.activateWindow()
+            self._selection_in_progress = False
+            self._resume_countdown("region_selector")
 
         normalized = _normalized_selected_region(selected)
         if normalized is not None:
@@ -658,45 +665,18 @@ class CaptureScopeConsentDialog(QDialog):
         self._outer_layout.invalidate()
         self._outer_layout.activate()
         self.updateGeometry()
-        target_height = self._outer_layout.totalSizeHint().height()
-        if target_height <= 0:
-            target_height = self.sizeHint().height()
-        compact_height = int(getattr(self, "_compact_height", 0) or 0)
-        if compact_height > 0:
-            target_height = compact_height
-            if self.countdown_label.isHidden():
-                target_height -= (
-                    self.countdown_label.sizeHint().height()
-                    + self._content_layout.spacing()
-                )
-            scope = self.scope_combo.currentData() or "full_screen"
-            if scope == "region":
-                target_height += (
-                    self.region_frame.sizeHint().height()
-                    + self._content_layout.spacing()
-                )
-            elif scope == "application":
-                target_height += (
-                    self.application_frame.sizeHint().height()
-                    + self._content_layout.spacing()
-                )
-            if not self.validation_label.isHidden():
-                target_height += (
-                    self.validation_label.sizeHint().height()
-                    + self._content_layout.spacing()
-                )
+        # 不能再用“紧凑高度 ± 子面板高度”推算：Windows 在字体缩放后
+        # 可能给 QDialog 一个更高的真实 sizeHint。低于该值调用 resize()
+        # 会触发 QWindowsWindow::setGeometry 警告，并被原生窗口强制改高。
+        preferred_height = self.sizeHint().height()
+        layout_height = self._outer_layout.totalSizeHint().height()
         target_height = max(
-            target_height,
+            preferred_height,
+            layout_height,
             self.minimumHeight(),
             self.minimumSizeHint().height(),
         )
         self.resize(self.width(), target_height)
-        # Windows/Qt 偶尔会在可见对话框刚切换子面板时忽略第一次
-        # resize（此时布局的 sizeHint 已更新，但原生窗口仍保留旧高度）。
-        # adjustSize 会按刚激活过的布局再次同步原生窗口；仅在实际高度
-        # 没有跟上时调用，避免无意义的几何抖动。
-        if self.isVisible() and self.height() != target_height:
-            self.adjustSize()
 
     def _update_countdown(self) -> None:
         if self._countdown_disabled:
@@ -792,7 +772,12 @@ class CaptureScopeConsentDialog(QDialog):
         if not self._countdown_disabled and not self.countdown_paused:
             self._timer.start()
         scope = self.scope_combo.currentData() or "full_screen"
-        if scope == "region" and not self._selection_in_progress:
+        if (
+            scope == "region"
+            and not self._selection_in_progress
+            and not self._auto_region_prompted
+        ):
+            self._auto_region_prompted = True
             QTimer.singleShot(0, self._choose_region)
         elif scope == "application":
             QTimer.singleShot(0, self._ensure_applications)

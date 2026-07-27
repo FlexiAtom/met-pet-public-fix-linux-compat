@@ -8,8 +8,9 @@
 
 ```text
 用户输入
-  ├─ direct → MeaPet 角色提示词 / SQLite 记忆 → 模型服务商
-  └─ agent  → Agent 自己的人设 / 记忆 / 模型 / 工具
+  ├─ direct → HTTP/NDJSON/SSE → 模型服务商
+  │              （MeaPet 角色提示词 / SQLite 记忆）
+  └─ agent  → 持久 WebSocket → Agent 自己的人设 / 记忆 / 模型 / 工具
                     ↓
              统一分段输出协议
                     ↓
@@ -81,11 +82,13 @@ HTTP 认证、权限、限流、服务不可用和协议错误会转换成中性
     "mode": "agent",
     "agent": {
       "kind": "hermes",
-      "base_url": "http://127.0.0.1:8642",
-      "auth_token": "$HERMES_API_SERVER_KEY",
+      "base_url": "ws://127.0.0.1:9119/api/ws",
+      "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
       "session_id": "",
       "session_key": "",
+      "remote_session_id": "",
       "history_turns": 5,
+      "timeout_seconds": 120,
       "allow_insecure_ws": false,
       "identity_path": "",
       "tls": {
@@ -100,24 +103,46 @@ HTTP 认证、权限、限流、服务不可用和协议错误会转换成中性
 }
 ```
 
-首次构造 Agent 时，空的 `session_id` 和 `session_key` 会使用随机值补齐，并随配置保存。两者用途不同：
+Agent 段只接受 `ws://` 或 `wss://`。OpenAI、Ollama、Anthropic 等 HTTP 模型地址必须放在 `llm.direct`；Agent 握手失败时也不会自动回落到 direct。
 
-- `session_id`：当前可恢复的对话会话。
-- `session_key`：长期记忆或 Agent 会话路由作用域；不得作为 UI 文案公开。
-- `history_turns`：MeaPet 随请求附带的最近对话轮数，范围 0–50。它不替代 Agent 自己的记忆。
+配置加载时会迁移旧结构：本机 Hermes `http://127.0.0.1:8642` 改为原生 `ws://127.0.0.1:9119/api/ws`；旧 OpenClaw bridge 改为 Gateway WS；曾放在 `llm.agent` 的普通 OpenAI-compatible HTTP 模型地址则迁入 `llm.direct`，不会被拼成虚假的 WebSocket 路径。
+
+- `session_id`：MeaPet 本机时间线的当前会话作用域；空值首次构造时自动生成并保存。
+- `session_key`：OpenClaw 的 Gateway 会话路由键；空值首次构造 OpenClaw 时自动生成。
+- `remote_session_id`：Hermes 返回的持久 `stored_session_id`。它由适配器写回，用户通常不需要手工填写。
+- `history_turns`：创建新的 Hermes 会话时用于播种的最近本地对话轮数，范围 0–100。恢复已有 Hermes/OpenClaw 会话时由 Agent 自己维护上下文。
 - `ui.timeline_turns`：本机时间线缓存，范围 0–100，默认 5；按后端和 Agent 会话隔离。
+- `allow_insecure_ws`：只允许用户显式放行非回环明文 WS；远程连接默认要求 WSS。
+
+两个适配器复用同一条连接，并启用 WebSocket ping/pong、单写者队列、100 MiB 收帧安全上限、请求 ID 关联和连接代际隔离。OpenClaw 还会执行握手返回的 `policy.maxPayload`，在本机拒绝超过 Gateway 上限的发送帧。取消当前生成分别调用 Hermes `session.interrupt` 或 OpenClaw `chat.abort`。
 
 ### 3.2 Hermes
 
-Hermes 适配器面向 Hermes API Server：
+Hermes 适配器连接 `hermes serve` 提供的 TUI Gateway，而不是 8642 端口的 HTTP API Server。建议先固定本机 WebSocket token：
 
-- `GET /v1/capabilities` 验证端点身份和能力。
-- `POST /v1/chat/completions` 以 SSE 生成回复。
-- Bearer Token 为必需项。
-- `X-Hermes-Session-Id` 与 `X-Hermes-Session-Key` 传递会话作用域。
-- `Idempotency-Key` 使用 MeaPet 本轮 ID，避免同轮重复执行。
+```powershell
+$env:HERMES_DASHBOARD_SESSION_TOKEN = "请生成一个足够长的随机值"
+hermes serve --host 127.0.0.1 --port 9119
+```
 
-Hermes 的模型、记忆和内部工具均留在 Hermes 侧。MeaPet 只注入前端能力摘要和最终回复格式约束。
+Linux/macOS 可使用：
+
+```bash
+HERMES_DASHBOARD_SESSION_TOKEN='请生成一个足够长的随机值' \
+  hermes serve --host 127.0.0.1 --port 9119
+```
+
+MeaPet 将 token 仅在建连时编码到 `/api/ws?token=...`，配置中的 `base_url` 本身不得包含 query。这个静态 token 是 Hermes 回环地址的认证方式；当前 Hermes 的公网 bind 使用登录后签发的短时 WS ticket，MeaPet 不模拟浏览器登录。因此跨机器部署应把远端 `127.0.0.1:9119` 通过 SSH 隧道映射到本机回环地址，而不是直接暴露 Hermes 端口。线路使用原生 JSON-RPC 2.0：
+
+- 收到 `gateway.ready` 后才把连接标记为可用。
+- 新会话：`session.create`；保存其 `stored_session_id`。
+- 恢复：`session.resume`；每次连接获得新的 runtime `session_id`。
+- 发言：`prompt.submit`；流式接收 `message.delta` 和 `message.complete`。
+- 截图：先通过 `image.attach_bytes` 上传有界的 base64 图片，再提交提示词。
+- 取消：`session.interrupt`。
+- 交互式授权：当前不会自动答复 `approval/clarify/sudo/secret` 请求；MeaPet 会中断该回合并返回安全提示，避免敏感操作被默认同意或界面无限等待。
+
+Hermes 的 `prompt.submit` 没有可由外部客户端提供的幂等键。因此 MeaPet 在提交前先记录远端 assistant 历史基线；断线后不会直接重发提示词，而是先用持久 ID 执行 `session.resume`。若回合仍运行则继续等待事件；若已完成则用 `session.history` 取回基线之后的最终 assistant 消息；若服务端保留了终态错误则立即转成安全失败；只有无法证明结果时才返回可重试错误，避免把写文件、发消息等工具动作执行两次。
 
 ### 3.3 OpenClaw
 
@@ -128,7 +153,7 @@ Hermes 的模型、记忆和内部工具均留在 Hermes 侧。MeaPet 只注入�
     "agent": {
       "kind": "openclaw",
       "base_url": "ws://127.0.0.1:18789",
-      "auth_token": "$MEAPET_AGENT_TOKEN",
+      "auth_token": "$OPENCLAW_GATEWAY_TOKEN",
       "session_id": "",
       "session_key": "",
       "allow_insecure_ws": false,
@@ -142,7 +167,9 @@ Hermes 的模型、记忆和内部工具均留在 Hermes 侧。MeaPet 只注入�
 }
 ```
 
-OpenClaw 使用 Gateway WebSocket v4，连接后执行 challenge / connect 握手，并请求 `operator.read`、`operator.write`。设备身份材料保存在本机独立文件中；远程 Gateway 应使用 `wss://`。非回环 `ws://` 默认拒绝，只有显式打开 `allow_insecure_ws` 才允许在可信内网使用。
+OpenClaw 使用 Gateway WebSocket v4，连接后执行 `connect.challenge` / `connect` 握手，并请求 `operator.read`、`operator.write`。客户端身份使用官方 `gateway-client` / `backend` 标识，Ed25519 设备身份材料保存在本机独立文件中；远程 Gateway 应使用 `wss://`。非回环 `ws://` 默认拒绝，只有显式打开 `allow_insecure_ws` 才允许在可信内网使用。
+
+每轮通过 `chat.send` 发送 MeaPet 输出约束、当前请求和可选图片附件，`idempotencyKey` 固定为 MeaPet `turn_id`；流式接收 `chat` 的 `delta/final/error/aborted` 状态。连接中断时重新完成挑战握手并用相同幂等键重发，Gateway 可安全地返回正在进行或已经完成的同一回合；若终态事件恰好在断线期间丢失，则通过 `chat.history` 对账恢复。取消使用 `chat.abort`，并在已知时携带 `runId`。
 
 OpenClaw 配对、认证、权限、限流、超时和服务不可用会映射为稳定错误类别。设备配对仍需在 OpenClaw 侧批准，MeaPet 不绕过其权限模型。
 
@@ -171,8 +198,9 @@ OpenClaw 配对、认证、权限、限流、超时和服务不可用会映射�
 协议解析器允许任意网络分块，不会把半个 XML 标签泄露进流式气泡。若最终结果严重缺字段：
 
 1. 先发出格式修复状态。
-2. 使用隔离、禁用工具的请求做一次纯格式转换，输入有长度上限。
-3. 修复失败时保留可安全展示的结果；完全没有显示文本时终止本轮并报中性错误。
+2. OpenClaw 可使用独立会话做一次有长度上限的纯格式转换。
+3. Hermes 不允许为修复偷偷回落到 HTTP 模型接口；当前保留解析器能安全提取的结果。
+4. 完全没有显示文本时终止本轮并报中性错误。
 
 推理、内部工具参数和内部工具结果禁止进入最终协议。安全的工具状态采用 `started`、`succeeded`、`failed` 等状态事件进入时间线；Agent 原始工具细节只存在于受控日志。
 

@@ -113,48 +113,11 @@ class TestAgentImageAttachment(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 ImageAttachment(**values)
 
-    def test_openai_sends_images_as_content_parts(self):
-        from meapet.agent.base import AgentTurnRequest, ImageAttachment
-        from meapet.agent.openai_adapter import OpenAIAdapter, OpenAIConfig
-
-        adapter = OpenAIAdapter(
-            OpenAIConfig(base_url="http://127.0.0.1:8642")
-        )
-        messages = adapter._build_messages(
-            AgentTurnRequest(
-                turn_id="vision-turn",
-                user_text="请看截图",
-                attachments=(
-                    ImageAttachment(
-                        media_type="image/jpeg",
-                        data="YWJj",
-                        file_name="screenshot.jpg",
-                    ),
-                ),
-            )
-        )
-        self.assertEqual(
-            messages[-1],
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "请看截图"},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "data:image/jpeg;base64,YWJj"
-                        },
-                    },
-                ],
-            },
-        )
-
-
 class TestAgentFactory(unittest.TestCase):
 
-    def test_openai_factory_resolves_env_and_config(self):
+    def test_hermes_factory_resolves_env_and_websocket_config(self):
         from meapet.agent.factory import create_agent_adapter_from_config
-        from meapet.agent.openai_adapter import OpenAIAdapter
+        from meapet.agent.hermes import HermesAdapter
         from meapet.config.store import normalize_config
 
         config = normalize_config(
@@ -162,13 +125,12 @@ class TestAgentFactory(unittest.TestCase):
                 "llm": {
                     "mode": "agent",
                     "agent": {
-                        "base_url": "http://192.168.1.8:8642/v1",
-                        "api_key": "$OPENAI_API_KEY",
-                        "model": "gpt-4o-mini",
+                        "kind": "hermes",
+                        "base_url": "ws://192.168.1.8:9119/api/ws",
+                        "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
                         "history_turns": 5,
                         "timeout_seconds": 60.0,
-                        # 非回环明文 HTTP 必须显式放行，与 control 面一致
-                        "allow_insecure_http": True,
+                        "allow_insecure_ws": True,
                         "tls": {"verify": True, "ca_file": ""},
                     },
                 }
@@ -176,18 +138,21 @@ class TestAgentFactory(unittest.TestCase):
         )
         with mock.patch.dict(
             os.environ,
-            {"OPENAI_API_KEY": "env-secret"},
+            {"HERMES_DASHBOARD_SESSION_TOKEN": "env-secret"},
             clear=False,
         ):
             adapter = create_agent_adapter_from_config(config)
-        self.assertIsInstance(adapter, OpenAIAdapter)
-        self.assertEqual(adapter.config.api_key, "env-secret")
-        self.assertEqual(adapter.config.base_url, "http://192.168.1.8:8642/v1")
-        self.assertEqual(adapter.config.model, "gpt-4o-mini")
+        self.assertIsInstance(adapter, HermesAdapter)
+        self.assertEqual(adapter.config.auth_token, "env-secret")
+        self.assertEqual(
+            adapter.config.base_url,
+            "ws://192.168.1.8:9119/api/ws",
+        )
+        self.assertTrue(adapter.config.allow_insecure_ws)
 
-    def test_factory_builds_openai_adapter(self):
+    def test_factory_builds_openclaw_adapter(self):
         from meapet.agent.factory import create_agent_adapter_from_config
-        from meapet.agent.openai_adapter import OpenAIAdapter
+        from meapet.agent.openclaw import OpenClawAdapter
         from meapet.config.store import normalize_config
 
         config = normalize_config(
@@ -195,18 +160,22 @@ class TestAgentFactory(unittest.TestCase):
                 "llm": {
                     "mode": "agent",
                     "agent": {
-                        "base_url": "http://127.0.0.1:11434/v1",
-                        "api_key": "test-key",
-                        "model": "qwen2.5:7b",
+                        "kind": "openclaw",
+                        "base_url": "ws://127.0.0.1:18789",
+                        "auth_token": "test-key",
+                        "session_key": "agent:main:meapet:test",
                         "timeout_seconds": 90.0,
                     },
                 }
             }
         )
         adapter = create_agent_adapter_from_config(config)
-        self.assertIsInstance(adapter, OpenAIAdapter)
-        self.assertEqual(adapter.config.api_key, "test-key")
-        self.assertEqual(adapter.config.model, "qwen2.5:7b")
+        self.assertIsInstance(adapter, OpenClawAdapter)
+        self.assertEqual(adapter.config.auth_token, "test-key")
+        self.assertEqual(
+            adapter.config.session_key,
+            "agent:main:meapet:test",
+        )
 
 
 class TestAgentChatWorkerSelection(unittest.TestCase):
@@ -557,4 +526,3 @@ class TestAgentChatPolling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

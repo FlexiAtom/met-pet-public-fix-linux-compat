@@ -27,8 +27,17 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap
+from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import (
+    QColor,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPixmap,
+    QRegion,
+)
 from PyQt5.QtWidgets import QShortcut
 
 from wizard.platform_info import CONFIG_PATH, PLATFORM
@@ -45,11 +54,13 @@ from meapet.ui_theme import (
     PET_SIZE_FACTOR_MAX,
     PET_SIZE_FACTOR_MIN,
     PET_SIZE_FACTOR_STEP,
+    RADIUS_LARGE,
     UI_FONT_SCALE_DEFAULT,
     apply_ui_font_scale,
     ensure_application_fonts,
     normalize_pet_size_factor,
     normalize_ui_font_scale,
+    set_scaled_stylesheet,
     set_ui_font_scale,
 )
 from wizard.pages import (
@@ -127,12 +138,12 @@ class SetupWizard(QWidget):
         self.setObjectName("WizardRoot")
         self.setMinimumSize(760, 620)
         self.resize(880, 780)
-        # Use a solid dark fill instead of WA_TranslucentBackground so the
-        # wizard never shows the desktop (or the pet behind it) through any
-        # transparent region — avoids a confusing "second pet" appearance.
+        # Keep the root opaque so the desktop pet cannot show through, but use
+        # the shared canvas token instead of painting a second, off-palette
+        # frame around the rounded shell.
         self.setAutoFillBackground(True)
         palette = self.palette()
-        palette.setColor(self.backgroundRole(), QColor("#0E1020"))
+        palette.setColor(self.backgroundRole(), QColor(PALETTE["canvas"]))
         self.setPalette(palette)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         #self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -140,12 +151,21 @@ class SetupWizard(QWidget):
         # Start invisible to avoid showing a blank frame before the
         # dark-themed UI is fully painted.  Fade in once the event loop runs.
         self.setWindowOpacity(0.0)
-        self.setStyleSheet(WIZARD_STYLESHEET)
+        # 首次构造就使用持久化字号对应的 QSS。若先应用 100% 原始样式，
+        # 再在窗口显示前替换为缩放版本，Qt 5 会保留部分子控件的旧字体缓存：
+        # 滑块虽显示保存值，界面仍按 100% 绘制，直到用户再次移动滑块。
+        set_scaled_stylesheet(
+            self,
+            WIZARD_STYLESHEET,
+            initial_font_scale,
+        )
         self.setAccessibleName("MeaPet 配置")
         self.setAccessibleDescription("使用标签页配置环境、对话、语音和屏幕识图功能")
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 16)
+        # One pixel leaves room for the shell stroke without turning the
+        # frameless window background into a thick square border.
+        outer.setContentsMargins(1, 1, 1, 1)
 
         self.container = QFrame()
         self.container.setObjectName("WizardShell")
@@ -300,6 +320,7 @@ class SetupWizard(QWidget):
             self,
             self.font_scale_slider.value() / 100.0,
         )
+        self._apply_rounded_window_mask()
 
         # Use an owned QTimer to defer the fade-in until after the event
         # loop has painted the dark-themed UI once.
@@ -433,6 +454,24 @@ class SetupWizard(QWidget):
 
     def _on_pet_size_changed(self, value: int) -> None:
         self.pet_size_value.setText(f"{int(value)}%")
+
+    def _apply_rounded_window_mask(self) -> None:
+        """让顶层无边框窗口的真实区域与圆角 Shell 一致。"""
+        if self.width() <= 1 or self.height() <= 1:
+            self.clearMask()
+            return
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(self.rect()).adjusted(0.0, 0.0, -0.5, -0.5),
+            RADIUS_LARGE,
+            RADIUS_LARGE,
+        )
+        rounded = QRegion(path.toFillPolygon().toPolygon())
+        self.setMask(rounded.intersected(QRegion(self.rect())))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_rounded_window_mask()
 
     def _fade_in(self) -> None:
         """Gradually restore opacity so the window doesn't flash from transparent."""
@@ -619,14 +658,16 @@ class SetupWizard(QWidget):
 
     @staticmethod
     def _build_missing_icon() -> QIcon:
-        """绘制独立红点图标，避免用文字字符模拟状态。"""
+        """带墨环的红点：在选中/未选中标签底上都保持清晰边界。"""
         pixmap = QPixmap(12, 12)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(11, 7, 19))
+        painter.drawEllipse(QRectF(0.5, 0.5, 11.0, 11.0))
         painter.setBrush(QColor(PALETTE["danger"]))
-        painter.drawEllipse(2, 2, 8, 8)
+        painter.drawEllipse(QRectF(2.0, 2.0, 8.0, 8.0))
         painter.end()
         return QIcon(pixmap)
 
@@ -723,8 +764,28 @@ class SetupWizard(QWidget):
         llm_family = detect_endpoint_family(llm_endpoint)
         llm_key = self.llm_page.direct_api_key_input.text().strip()
         if conversation_mode == "agent":
-            if not self.backend_page.agent_base_url.text().strip():
+            agent_endpoint = self.backend_page.agent_base_url.text().strip()
+            if not agent_endpoint:
                 issues[self.TAB_CHAT].append("Agent 地址")
+            else:
+                from urllib.parse import urlsplit
+
+                parsed_agent = urlsplit(agent_endpoint)
+                if parsed_agent.scheme.lower() not in {"ws", "wss"}:
+                    issues[self.TAB_CHAT].append(
+                        "Agent 地址须使用 WS 或 WSS"
+                    )
+                elif (
+                    parsed_agent.scheme.lower() == "ws"
+                    and (parsed_agent.hostname or "").lower()
+                    not in {"127.0.0.1", "::1", "localhost"}
+                    and not self.backend_page.agent_allow_insecure_ws.isChecked()
+                ):
+                    issues[self.TAB_CHAT].append(
+                        "远程明文 WS 需明确允许，或改用 WSS"
+                    )
+            if not self.backend_page.agent_auth_token.text().strip():
+                issues[self.TAB_CHAT].append("Agent WebSocket 访问令牌")
             if self.backend_page.control_enabled.isChecked():
                 listen = self.backend_page.control_listen_host.text().strip()
                 loopback = listen in {"127.0.0.1", "::1"}
@@ -1214,7 +1275,7 @@ class SetupWizard(QWidget):
                 launch_hint = "启动：python pet.py 🐱"
             styled_message_box(
                 self,
-                title="✅ 完成",
+                title="配置已保存",
                 text=(
                     "配置已保存！\n\n"
                     f"{launch_hint}\n"
@@ -1235,7 +1296,7 @@ class SetupWizard(QWidget):
         except Exception as e:
             styled_message_box(
                 self,
-                title="❌ 保存失败",
+                title="保存失败",
                 text=str(e),
                 icon=QMessageBox.Critical,
             )

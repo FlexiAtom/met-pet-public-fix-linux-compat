@@ -161,7 +161,9 @@ class TestWizardConversationConfig(unittest.TestCase):
     def test_agent_validation_continues_through_tts_and_vision(self):
         backend = self.wizard.backend_page
         backend.agent_radio.setChecked(True)
-        backend.agent_base_url.setText("https://agent.example.test/v1")
+        backend.agent_base_url.setText(
+            "wss://agent.example.test/api/ws"
+        )
         self.wizard.tts_page.enable_cb.setChecked(True)
         self.wizard.tts_page.set_engine("mimo")
         self.wizard.tts_page.mimo_api_key_input.clear()
@@ -258,7 +260,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         self.assertEqual(profile["protocol"], "ollama_chat")
 
     # ------------------------------------------------------------------
-    # Agent 模式：保存 OpenAI 兼容配置 + 控制监听
+    # Agent 模式：保存原生 WebSocket 配置 + 控制监听
     # ------------------------------------------------------------------
     def test_agent_mode_preserves_direct_profile_and_collects_control_listener(self):
         self.wizard._existing_config = {
@@ -278,9 +280,9 @@ class TestWizardConversationConfig(unittest.TestCase):
         }
         page = self.wizard.backend_page
         page.agent_radio.setChecked(True)
-        # agent 段统一为 OpenAI 兼容
-        page.agent_base_url.setText("https://agent.example.test/v1")
-        page.agent_auth_token.setText("$OPENAI_API_KEY")
+        page.set_agent_kind("hermes")
+        page.agent_base_url.setText("wss://agent.example.test/api/ws")
+        page.agent_auth_token.setText("$HERMES_DASHBOARD_SESSION_TOKEN")
         page.agent_history_turns.setValue(5)
         page.timeline_turns.setValue(9)
         page.control_enabled.setChecked(True)
@@ -294,8 +296,12 @@ class TestWizardConversationConfig(unittest.TestCase):
 
         self.assertEqual(config["llm"]["mode"], "agent")
         agent = config["llm"]["agent"]
-        self.assertEqual(agent["base_url"], "https://agent.example.test/v1")
-        self.assertEqual(agent["auth_token"], "$OPENAI_API_KEY")
+        self.assertEqual(agent["kind"], "hermes")
+        self.assertEqual(agent["base_url"], "wss://agent.example.test/api/ws")
+        self.assertEqual(
+            agent["auth_token"],
+            "$HERMES_DASHBOARD_SESSION_TOKEN",
+        )
         self.assertEqual(agent["history_turns"], 5)
         
         self.assertEqual(config["ui"]["timeline_turns"], 9)
@@ -333,11 +339,10 @@ class TestWizardConversationConfig(unittest.TestCase):
                     "max_tokens": 700,
                 },
                 "agent": {
-                    "base_url": "https://api.openai.com/v1",
-                    "api_key": "$OPENAI_API_KEY",
-                    "model": "gpt-4o-mini",
-                    "temperature": 0.7,
-                    "max_tokens": 4096,
+                    "kind": "hermes",
+                    "base_url": "ws://127.0.0.1:9119/api/ws",
+                    "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
+                    "model": "",
                     "history_turns": 7,
                     "timeout_seconds": 120,
                     "tls": {"verify": True, "ca_file": "agent-ca.pem"},
@@ -361,7 +366,11 @@ class TestWizardConversationConfig(unittest.TestCase):
         collected = self.wizard.collect_config()
 
         self.assertTrue(self.wizard.backend_page.agent_radio.isChecked())
-        self.assertEqual(collected["llm"]["agent"]["model"], "gpt-4o-mini")
+        self.assertEqual(collected["llm"]["agent"]["kind"], "hermes")
+        self.assertEqual(
+            collected["llm"]["agent"]["base_url"],
+            "ws://127.0.0.1:9119/api/ws",
+        )
         self.assertEqual(collected["llm"]["direct"]["model"], "local-model")
         self.assertEqual(collected["agent_control"]["port"], 9000)
         self.assertEqual(self.wizard.backend_page.timeline_turns.value(), 7)
@@ -398,9 +407,9 @@ class TestWizardConversationConfig(unittest.TestCase):
             "llm": {
                 "mode": "agent",
                 "agent": {
-                    "base_url": "https://api.openai.com/v1",
-                    "api_key": "$OPENAI_API_KEY",
-                    "model": "gpt-4o-mini",
+                    "kind": "hermes",
+                    "base_url": "ws://127.0.0.1:9119/api/ws",
+                    "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
                 },
             }
         }
@@ -427,8 +436,15 @@ class TestWizardConversationConfig(unittest.TestCase):
         self.assertEqual(emitted["llm"]["mode"], "agent")
         self.assertIn("direct", emitted["llm"])
         agent = emitted["llm"]["agent"]
-        self.assertEqual(agent["base_url"], "https://api.openai.com/v1")
-        self.assertEqual(agent["model"], "gpt-4o-mini")
+        self.assertEqual(agent["kind"], "hermes")
+        self.assertEqual(
+            agent["base_url"],
+            "ws://127.0.0.1:9119/api/ws",
+        )
+        self.assertEqual(
+            agent["auth_token"],
+            "$HERMES_DASHBOARD_SESSION_TOKEN",
+        )
 
     # ------------------------------------------------------------------
     # 配置不完整时要求显式确认才能保存
@@ -699,4 +715,3 @@ class TestWizardCaptureScope(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

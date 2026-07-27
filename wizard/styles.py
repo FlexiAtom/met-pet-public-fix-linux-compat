@@ -1,4 +1,4 @@
-"""配置向导的设计令牌、QSS 与无障碍辅助函数。"""
+"""配置向导的设计令牌、QSS 与无障碍辅助函数（墨樱夜）。"""
 
 from __future__ import annotations
 
@@ -7,8 +7,15 @@ import re
 from meapet.ui_theme import (
     BUNDLED_CHEVRON_DOWN_PATH,
     BUNDLED_CHEVRON_UP_PATH,
+    BUTTON_SECONDARY_BG,
+    BUTTON_SECONDARY_BG_HOVER,
+    BUTTON_SECONDARY_BG_PRESSED,
     DISPLAY_FONT_FAMILY,
     FONT_FAMILY,
+    GRADIENT_PAPER,
+    GRADIENT_PRIMARY,
+    GRADIENT_PRIMARY_HOVER,
+    GRADIENT_PROGRESS,
     MIN_TARGET_SIZE,
     MONO_FONT_FAMILY,
     PALETTE,
@@ -16,6 +23,7 @@ from meapet.ui_theme import (
     RADIUS_MEDIUM,
     RADIUS_SMALL,
     rgba,
+    seam_highlight,
 )
 
 
@@ -38,8 +46,9 @@ COLOR_ERR = PALETTE["danger"]
 
 STYLE_PAGE_CARD = f"""
     QFrame#PageCard {{
-        background: {COLOR_CARD};
+        background: {GRADIENT_PAPER};
         border: 1px solid {COLOR_BORDER};
+        border-top-color: {seam_highlight(75)};
         border-radius: {RADIUS_MEDIUM}px;
     }}
 """
@@ -52,10 +61,11 @@ STYLE_INPUT = f"""
         border-radius: {RADIUS_SMALL}px;
         padding: 9px 12px;
         font-size: 14px;
-        selection-background-color: {rgba(COLOR_ACCENT, 105)};
+        selection-background-color: {rgba(COLOR_ACCENT, 200)};
+        selection-color: {PALETTE['on_primary']};
     }}
     QLineEdit:hover {{
-        border-color: {COLOR_MUTED};
+        border-color: {COLOR_FOCUS};
     }}
     QLineEdit:focus {{
         border: 2px solid {COLOR_FOCUS};
@@ -63,24 +73,23 @@ STYLE_INPUT = f"""
     }}
     QLineEdit:disabled {{
         background: {rgba(COLOR_INPUT, 150)};
-        color: {rgba(COLOR_MUTED, 150)};
+        color: {rgba(COLOR_MUTED, 120)};
         border-color: {rgba(COLOR_BORDER, 150)};
     }}
 """
 
 STYLE_BTN_PRIMARY = f"""
     QPushButton {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
+        background: {GRADIENT_PRIMARY};
         color: {PALETTE['on_primary']};
-        border: 1px solid {rgba(COLOR_ACCENT, 210)};
+        border: 1px solid {COLOR_ACCENT};
         border-radius: {RADIUS_SMALL}px;
         padding: 9px 22px;
         font-size: 14px;
         font-weight: 700;
     }}
     QPushButton:hover {{
-        background: {PALETTE['primary_hover']};
+        background: {GRADIENT_PRIMARY_HOVER};
         border-color: {PALETTE['primary_hover']};
     }}
     QPushButton:focus {{
@@ -91,15 +100,15 @@ STYLE_BTN_PRIMARY = f"""
         background: {COLOR_ACCENT};
     }}
     QPushButton:disabled {{
-        background: {COLOR_ELEVATED};
-        color: {rgba(COLOR_MUTED, 150)};
-        border-color: {COLOR_BORDER};
+        background: {rgba(COLOR_ELEVATED, 150)};
+        color: {rgba(COLOR_MUTED, 120)};
+        border-color: {rgba(COLOR_BORDER, 150)};
     }}
 """
 
 STYLE_BTN_SECONDARY = f"""
     QPushButton {{
-        background: {COLOR_ELEVATED};
+        background: {BUTTON_SECONDARY_BG};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
@@ -108,20 +117,20 @@ STYLE_BTN_SECONDARY = f"""
         font-weight: 600;
     }}
     QPushButton:hover {{
-        background: {rgba(COLOR_FOCUS, 28)};
-        border-color: {COLOR_MUTED};
+        background: {BUTTON_SECONDARY_BG_HOVER};
+        border-color: {COLOR_FOCUS};
     }}
     QPushButton:focus {{
         border: 2px solid {COLOR_FOCUS};
         padding: 8px 17px;
     }}
     QPushButton:pressed {{
-        background: {rgba(COLOR_FOCUS, 45)};
+        background: {BUTTON_SECONDARY_BG_PRESSED};
     }}
     QPushButton:disabled {{
-        background: {rgba(COLOR_ELEVATED, 145)};
-        color: {rgba(COLOR_MUTED, 135)};
-        border-color: {rgba(COLOR_BORDER, 145)};
+        background: {rgba(COLOR_ELEVATED, 150)};
+        color: {rgba(COLOR_MUTED, 120)};
+        border-color: {rgba(COLOR_BORDER, 150)};
     }}
 """
 
@@ -139,30 +148,45 @@ WIZARD_STYLESHEET = f"""
         font-size: 14px;
     }}
     QFrame#WizardShell {{
-        background: {COLOR_BG};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 #1D1729, stop:0.32 {COLOR_BG}, stop:1 #120E1A);
         border: 1px solid {COLOR_BORDER};
+        border-top-color: {seam_highlight(85)};
         border-radius: {RADIUS_LARGE}px;
     }}
-    QFrame#WizardHeader,
+    QFrame#WizardHeader {{
+        background: qradialgradient(cx:0.08, cy:0.0, radius:0.9, fx:0.08, fy:0.0,
+            stop:0 rgba(255, 157, 190, 30),
+            stop:0.5 rgba(183, 166, 255, 14),
+            stop:1 rgba(22, 17, 31, 0));
+        border: none;
+    }}
     QFrame#WizardFooter {{
-        background: {COLOR_BG};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 rgba(22, 17, 31, 0), stop:1 rgba(16, 12, 24, 150));
         border: none;
     }}
     QFrame#WizardDivider {{
-        background: {COLOR_BORDER};
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 {rgba(COLOR_ACCENT, 130)},
+            stop:0.26 {rgba(PALETTE['accent'], 75)},
+            stop:1 {rgba(COLOR_BORDER, 0)});
         border: none;
         min-height: 1px;
         max-height: 1px;
     }}
     QFrame#PageCard {{
-        background: {COLOR_CARD};
+        background: {GRADIENT_PAPER};
         border: 1px solid {COLOR_BORDER};
+        border-top-color: {seam_highlight(75)};
         border-radius: {RADIUS_MEDIUM}px;
     }}
     QFrame#SectionCard {{
-        background: {COLOR_ELEVATED};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 #352A4A, stop:1 #2A213A);
         border: 1px solid {COLOR_BORDER};
-        border-radius: {RADIUS_MEDIUM}px;
+        border-left: 3px solid {rgba(COLOR_ACCENT, 110)};
+        border-radius: 12px;
     }}
     QLabel {{
         background: transparent;
@@ -170,11 +194,11 @@ WIZARD_STYLESHEET = f"""
         color: {COLOR_TEXT};
     }}
     QLabel#BrandMark {{
-        background: {COLOR_ACCENT};
+        background: {GRADIENT_PRIMARY};
         color: {PALETTE['on_primary']};
         border-radius: 14px;
         font-size: 14px;
-        font-weight: 800;
+        font-weight: 700;
     }}
     QLabel#BrandName {{
         color: {COLOR_TEXT};
@@ -186,10 +210,10 @@ WIZARD_STYLESHEET = f"""
         color: {COLOR_TEXT_SECONDARY};
         font-size: 12px;
         font-weight: 600;
-        padding: 5px 10px;
-        background: {COLOR_ELEVATED};
+        padding: 5px 12px;
+        background: {rgba(COLOR_ELEVATED, 200)};
         border: 1px solid {COLOR_BORDER};
-        border-radius: 10px;
+        border-radius: 11px;
     }}
     QLabel#ConfigStatus {{
         min-height: 22px;
@@ -204,7 +228,7 @@ WIZARD_STYLESHEET = f"""
         color: {COLOR_OK};
     }}
     QLabel#PageEyebrow {{
-        color: {COLOR_ACCENT};
+        color: {PALETTE['accent']};
         font-size: 11px;
         font-weight: 700;
     }}
@@ -230,7 +254,7 @@ WIZARD_STYLESHEET = f"""
     QLabel#SectionTitle {{
         color: {COLOR_TEXT};
         font-family: {DISPLAY_FONT_FAMILY};
-        font-size: 15px;
+        font-size: 16px;
         font-weight: 700;
         padding-top: 4px;
     }}
@@ -239,12 +263,12 @@ WIZARD_STYLESHEET = f"""
         font-size: 13px;
         font-weight: 600;
     }}
-    QLabel#FontScaleValue {{
+    QLabel#FontScaleValue,
+    QLabel#PetSizeValue {{
         color: {COLOR_ACCENT};
-        background: {COLOR_ELEVATED};
-        border: 1px solid {COLOR_BORDER};
-        border-radius: {RADIUS_SMALL}px;
-        padding: 5px 8px;
+        background: transparent;
+        border: none;
+        padding: 0;
         font-size: 14px;
         font-weight: 700;
     }}
@@ -268,7 +292,8 @@ WIZARD_STYLESHEET = f"""
         border-radius: {RADIUS_MEDIUM}px;
         padding: 12px 14px;
         font-size: 13px;
-        selection-background-color: {rgba(COLOR_ACCENT, 105)};
+        selection-background-color: {rgba(COLOR_ACCENT, 200)};
+        selection-color: {PALETTE['on_primary']};
     }}
     QLineEdit,
     QTextEdit,
@@ -281,7 +306,9 @@ WIZARD_STYLESHEET = f"""
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
         padding: 9px 12px;
-        selection-background-color: {rgba(COLOR_ACCENT, 105)};
+        font-size: 14px;
+        selection-background-color: {rgba(COLOR_ACCENT, 200)};
+        selection-color: {PALETTE['on_primary']};
     }}
     QLineEdit:hover,
     QTextEdit:hover,
@@ -289,7 +316,7 @@ WIZARD_STYLESHEET = f"""
     QComboBox:hover,
     QSpinBox:hover,
     QDoubleSpinBox:hover {{
-        border-color: {COLOR_MUTED};
+        border-color: {COLOR_FOCUS};
     }}
     QLineEdit:focus,
     QTextEdit:focus,
@@ -307,7 +334,7 @@ WIZARD_STYLESHEET = f"""
     QSpinBox:disabled,
     QDoubleSpinBox:disabled {{
         background: {rgba(COLOR_INPUT, 150)};
-        color: {rgba(COLOR_MUTED, 150)};
+        color: {rgba(COLOR_MUTED, 120)};
         border-color: {rgba(COLOR_BORDER, 150)};
     }}
     QSpinBox,
@@ -339,7 +366,7 @@ WIZARD_STYLESHEET = f"""
     QDoubleSpinBox::up-button:hover,
     QSpinBox::down-button:hover,
     QDoubleSpinBox::down-button:hover {{
-        background: {rgba(COLOR_FOCUS, 40)};
+        background: {rgba(COLOR_FOCUS, 45)};
         border-left-color: {COLOR_FOCUS};
     }}
     QSpinBox::up-arrow,
@@ -362,21 +389,35 @@ WIZARD_STYLESHEET = f"""
     }}
     QComboBox::drop-down {{
         border: none;
+        border-left: 1px solid {COLOR_BORDER};
+        background: {rgba(COLOR_ELEVATED, 170)};
         width: 34px;
+        border-top-right-radius: {RADIUS_SMALL - 1}px;
+        border-bottom-right-radius: {RADIUS_SMALL - 1}px;
     }}
     QComboBox QAbstractItemView {{
         background: {COLOR_ELEVATED};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
-        selection-background-color: {rgba(COLOR_ACCENT, 80)};
+        border-radius: {RADIUS_SMALL}px;
+        selection-background-color: {rgba(COLOR_ACCENT, 70)};
         selection-color: {COLOR_TEXT};
         padding: 4px;
+        outline: 0;
     }}
     QCheckBox,
     QRadioButton {{
         color: {COLOR_TEXT};
         spacing: 10px;
         font-size: 14px;
+        border: 2px solid transparent;
+        border-radius: 8px;
+        padding: 0px 4px;
+    }}
+    QCheckBox:focus,
+    QRadioButton:focus {{
+        border: 2px solid {COLOR_FOCUS};
+        color: {COLOR_TEXT};
     }}
     QCheckBox::indicator,
     QRadioButton::indicator {{
@@ -386,22 +427,31 @@ WIZARD_STYLESHEET = f"""
         background: {COLOR_INPUT};
     }}
     QCheckBox::indicator {{
-        border-radius: 5px;
+        border-radius: 6px;
     }}
     QRadioButton::indicator {{
         border-radius: 11px;
     }}
-    QCheckBox::indicator:checked,
-    QRadioButton::indicator:checked {{
-        background: {COLOR_ACCENT};
+    QCheckBox::indicator:hover,
+    QRadioButton::indicator:hover {{
         border-color: {COLOR_FOCUS};
     }}
-    QCheckBox:focus,
-    QRadioButton:focus {{
-        color: {COLOR_FOCUS};
+    QCheckBox::indicator:checked,
+    QRadioButton::indicator:checked {{
+        background: {GRADIENT_PRIMARY};
+        border-color: {COLOR_ACCENT};
+    }}
+    QCheckBox::indicator:checked:disabled,
+    QRadioButton::indicator:checked:disabled {{
+        background: {rgba(COLOR_ACCENT, 90)};
+        border-color: {rgba(COLOR_BORDER_STRONG, 140)};
+    }}
+    QCheckBox:disabled,
+    QRadioButton:disabled {{
+        color: {rgba(COLOR_MUTED, 120)};
     }}
     QPushButton {{
-        background: {COLOR_ELEVATED};
+        background: {BUTTON_SECONDARY_BG};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
@@ -409,24 +459,23 @@ WIZARD_STYLESHEET = f"""
         font-weight: 600;
     }}
     QPushButton:hover {{
-        background: {rgba(COLOR_FOCUS, 28)};
-        border-color: {COLOR_MUTED};
+        background: {BUTTON_SECONDARY_BG_HOVER};
+        border-color: {COLOR_FOCUS};
     }}
     QPushButton:focus {{
         border: 2px solid {COLOR_FOCUS};
         padding: 8px 15px;
     }}
     QPushButton:pressed {{
-        background: {rgba(COLOR_FOCUS, 45)};
+        background: {BUTTON_SECONDARY_BG_PRESSED};
     }}
     QPushButton:disabled {{
-        color: {rgba(COLOR_MUTED, 135)};
-        background: {rgba(COLOR_ELEVATED, 145)};
-        border-color: {rgba(COLOR_BORDER, 145)};
+        color: {rgba(COLOR_MUTED, 120)};
+        background: {rgba(COLOR_ELEVATED, 150)};
+        border-color: {rgba(COLOR_BORDER, 150)};
     }}
     QPushButton#PrimaryButton {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
+        background: {GRADIENT_PRIMARY};
         font-family: {DISPLAY_FONT_FAMILY};
         font-size: 15px;
         color: {PALETTE['on_primary']};
@@ -434,49 +483,51 @@ WIZARD_STYLESHEET = f"""
         font-weight: 700;
     }}
     QPushButton#PrimaryButton:hover {{
-        background: {PALETTE['primary_hover']};
+        background: {GRADIENT_PRIMARY_HOVER};
         border-color: {PALETTE['primary_hover']};
+    }}
+    QPushButton#PrimaryButton:pressed {{
+        background: {COLOR_ACCENT};
     }}
     QPushButton#CloseButton {{
         background: transparent;
         color: {COLOR_MUTED};
         border-color: transparent;
-        border-radius: 10px;
+        border-radius: 12px;
         font-size: 17px;
         padding: 0;
     }}
     QPushButton#CloseButton:hover {{
-        background: {rgba(COLOR_ERR, 38)};
+        background: {rgba(COLOR_ERR, 40)};
         color: {COLOR_ERR};
-        border-color: {rgba(COLOR_ERR, 90)};
+        border-color: {rgba(COLOR_ERR, 110)};
     }}
     QPushButton#CloseButton:focus {{
         border: 2px solid {COLOR_FOCUS};
     }}
     QProgressBar {{
-        background: {COLOR_ELEVATED};
+        background: {COLOR_INPUT};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER};
-        border-radius: 4px;
+        border-radius: 8px;
         text-align: center;
     }}
     QProgressBar::chunk {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
-        border-radius: 3px;
+        background: {GRADIENT_PROGRESS};
+        border-radius: 7px;
     }}
     QSlider::groove:horizontal {{
         height: 6px;
-        background: {COLOR_BORDER};
+        background: {COLOR_INPUT};
+        border: 1px solid {COLOR_BORDER};
         border-radius: 3px;
     }}
     QSlider::sub-page:horizontal {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
+        background: {GRADIENT_PROGRESS};
         border-radius: 3px;
     }}
     QSlider::add-page:horizontal {{
-        background: {COLOR_BORDER};
+        background: {COLOR_INPUT};
         border-radius: 3px;
     }}
     QSlider::handle:horizontal {{
@@ -487,42 +538,50 @@ WIZARD_STYLESHEET = f"""
         border-radius: 10px;
     }}
     QSlider::handle:horizontal:hover {{
-        background: {COLOR_FOCUS};
         border-color: {COLOR_FOCUS};
     }}
     QSlider::handle:horizontal:pressed {{
-        background: {COLOR_ACCENT};
+        background: {PALETTE['primary_hover']};
     }}
     QTabWidget#ConfigurationTabs {{
         background: transparent;
         border: none;
     }}
     QTabWidget#ConfigurationTabs::pane {{
-        background: {COLOR_CARD};
+        background: {GRADIENT_PAPER};
         border: 1px solid {COLOR_BORDER};
         border-radius: {RADIUS_MEDIUM}px;
         top: -1px;
         margin: 0 18px 10px 18px;
     }}
+    QTabBar {{
+        qproperty-drawBase: 0;
+    }}
     QTabBar::tab {{
         min-width: 112px;
-        min-height: 28px;
-        padding: 8px 16px;
-        margin: 0 4px 0 0;
-        color: {COLOR_TEXT_SECONDARY};
+        min-height: 32px;
+        padding: 9px 18px;
+        margin: 0 6px 0 0;
+        color: {COLOR_MUTED};
         background: transparent;
         border: 1px solid transparent;
-        border-top-left-radius: {RADIUS_SMALL}px;
-        border-top-right-radius: {RADIUS_SMALL}px;
+        border-top-left-radius: 12px;
+        border-top-right-radius: 12px;
+        font-size: 14px;
         font-weight: 600;
     }}
     QTabBar::tab:hover {{
         color: {COLOR_TEXT};
-        background: {rgba(COLOR_FOCUS, 22)};
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 rgba(255, 157, 190, 34),
+            stop:1 rgba(183, 166, 255, 22));
+        border-color: {rgba(PALETTE['accent'], 55)};
     }}
     QTabBar::tab:selected {{
         color: {COLOR_TEXT};
-        background: {COLOR_CARD};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 {COLOR_ACCENT}, stop:0.06 {COLOR_ACCENT},
+            stop:0.061 {COLOR_CARD}, stop:1 {COLOR_CARD});
         border-color: {COLOR_BORDER};
         border-bottom-color: {COLOR_CARD};
         font-weight: 700;
@@ -550,7 +609,7 @@ WIZARD_STYLESHEET = f"""
         margin: 4px 2px;
     }}
     QScrollBar::handle:vertical {{
-        background: {COLOR_BORDER_STRONG};
+        background: {rgba(COLOR_BORDER_STRONG, 170)};
         border-radius: 4px;
         min-height: 32px;
     }}
@@ -565,7 +624,8 @@ WIZARD_STYLESHEET = f"""
         background: {COLOR_ELEVATED};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
-        padding: 6px 8px;
+        border-radius: 8px;
+        padding: 6px 10px;
     }}
     QSizeGrip {{
         background: transparent;
@@ -587,7 +647,7 @@ WIZARD_STYLESHEET = f"""
         min-width: 280px;
     }}
     QMessageBox QPushButton {{
-        background: {COLOR_ELEVATED};
+        background: {BUTTON_SECONDARY_BG};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
@@ -597,16 +657,15 @@ WIZARD_STYLESHEET = f"""
         font-weight: 600;
     }}
     QMessageBox QPushButton:hover {{
-        background: {rgba(COLOR_FOCUS, 28)};
-        border-color: {COLOR_MUTED};
+        background: {BUTTON_SECONDARY_BG_HOVER};
+        border-color: {COLOR_FOCUS};
     }}
     QMessageBox QPushButton:focus {{
         border: 2px solid {COLOR_FOCUS};
     }}
     QMessageBox QPushButton:default,
     QMessageBox QPushButton[default="true"] {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
+        background: {GRADIENT_PRIMARY};
         color: {PALETTE['on_primary']};
         border-color: {COLOR_ACCENT};
         font-weight: 700;
@@ -629,7 +688,7 @@ WIZARD_STYLESHEET = f"""
         padding: 8px 10px;
     }}
     QFileDialog QPushButton {{
-        background: {COLOR_ELEVATED};
+        background: {BUTTON_SECONDARY_BG};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
@@ -638,8 +697,8 @@ WIZARD_STYLESHEET = f"""
         font-weight: 600;
     }}
     QFileDialog QPushButton:hover {{
-        background: {rgba(COLOR_FOCUS, 28)};
-        border-color: {COLOR_MUTED};
+        background: {BUTTON_SECONDARY_BG_HOVER};
+        border-color: {COLOR_FOCUS};
     }}
     QFileDialog QTreeView,
     QFileDialog QListView {{
@@ -647,7 +706,7 @@ WIZARD_STYLESHEET = f"""
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER};
         border-radius: {RADIUS_SMALL}px;
-        selection-background-color: {rgba(COLOR_ACCENT, 80)};
+        selection-background-color: {rgba(COLOR_ACCENT, 70)};
         selection-color: {COLOR_TEXT};
     }}
     QFileDialog QHeaderView::section {{
@@ -686,7 +745,7 @@ def set_status(widget, status: str, text: str | None = None) -> None:
 
 
 def apply_wizard_dialog_style(dialog) -> None:
-    """给 QMessageBox / QFileDialog / 临时说明窗统一套配置中心主题。"""
+    """给 QFileDialog / 临时说明窗统一套配置中心主题。"""
     from meapet.ui_theme import set_scaled_stylesheet
 
     if dialog is None:
@@ -718,35 +777,17 @@ def styled_message_box(
     buttons=None,
     default_button=None,
 ) -> int:
-    """创建并执行带配置中心主题的 QMessageBox，返回标准按钮结果。"""
-    from PyQt5.QtWidgets import QMessageBox
+    """显示无原生标题栏的主题消息框，返回 QMessageBox 标准按钮结果。"""
+    from meapet.message_dialog import show_message_dialog
 
-    box = QMessageBox(parent)
-    box.setWindowTitle(title)
-    box.setText(text)
-    if icon is not None:
-        box.setIcon(icon)
-    if buttons is not None:
-        box.setStandardButtons(buttons)
-    if default_button is not None:
-        box.setDefaultButton(default_button)
-    localized_buttons = (
-        (QMessageBox.Ok, "确定"),
-        (QMessageBox.Save, "保存"),
-        (QMessageBox.Cancel, "取消"),
-        (QMessageBox.Discard, "放弃更改"),
-        (QMessageBox.Yes, "继续"),
-        (QMessageBox.No, "取消"),
-        (QMessageBox.Retry, "重试"),
-        (QMessageBox.Close, "关闭"),
+    return show_message_dialog(
+        parent,
+        title=title,
+        text=text,
+        icon=icon,
+        buttons=buttons,
+        default_button=default_button,
     )
-    for standard_button, localized_text in localized_buttons:
-        button = box.button(standard_button)
-        if button is not None:
-            button.setText(localized_text)
-            button.setAccessibleName(localized_text)
-    apply_wizard_dialog_style(box)
-    return box.exec_()
 
 
 def styled_open_file(

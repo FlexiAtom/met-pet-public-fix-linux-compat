@@ -99,11 +99,13 @@ goto end
 :dep_check
 echo [MeaPet] checking deps...
 "!PY_CMD!" --version
-"!PY_CMD!" -c "import PyQt5,PIL,requests,numpy,httpx,OpenGL,jieba; from importlib.util import find_spec; assert find_spec('translators')" >nul 2>&1
+"!PY_CMD!" -m meapet.bootstrap --check all >nul 2>&1
 if not errorlevel 1 goto ready
 echo [MeaPet] installing missing deps...
 call :ensure_uv
 call :install_deps
+if errorlevel 1 goto deps_fail
+"!PY_CMD!" -m meapet.bootstrap --check all >nul 2>&1
 if errorlevel 1 goto deps_fail
 
 :ready

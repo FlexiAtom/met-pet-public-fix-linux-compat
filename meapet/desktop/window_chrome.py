@@ -25,8 +25,10 @@ from meapet.desktop.screen_geometry import (
     widget_size,
 )
 from meapet.desktop.theme import COLOR_ACCENT, COLOR_ACCENT_2, COLOR_TEXT, MENU_STYLE
+from meapet.message_dialog import show_message_dialog
 from meapet.paths import PROJECT_ROOT
 from meapet.ui_theme import (
+    PALETTE,
     PET_SIZE_PRESETS,
     normalize_pet_size_factor,
     set_scaled_stylesheet,
@@ -65,7 +67,8 @@ class PetWindowChromeMixin:
             painter.setBrush(QColor(COLOR_ACCENT))
             painter.setPen(QColor(COLOR_ACCENT_2))
             painter.drawEllipse(2, 2, 28, 28)
-            painter.setBrush(QColor(COLOR_TEXT))
+            # 粉底墨心：与 BrandMark / SplashMark 同一品牌记号
+            painter.setBrush(QColor(PALETTE["on_primary"]))
             painter.drawEllipse(10, 10, 12, 12)
             painter.end()
             icon = QIcon(pm)
@@ -607,12 +610,13 @@ class PetWindowChromeMixin:
             self._start_new_agent_session()
             return
         import random
-        reply = QMessageBox.question(
+        reply = show_message_dialog(
             self,
-            "确认重置",
-            "确定要让梅尔忘掉一切喵？\n\n聊天记录、好感度、记忆都会清空。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            title="确认重置",
+            text="确定要让梅尔忘掉一切喵？\n\n聊天记录、好感度、记忆都会清空。",
+            icon=QMessageBox.Question,
+            buttons=QMessageBox.Yes | QMessageBox.No,
+            default_button=QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
             self.memory.reset_all()
@@ -629,14 +633,17 @@ class PetWindowChromeMixin:
             )
 
     def _start_new_agent_session(self) -> None:
-        reply = QMessageBox.question(
+        reply = show_message_dialog(
             self,
-            "新建 Agent 会话",
-            "确定要开始一个新的 Agent 会话吗？\n\n"
-            "当前会话将结束，MeaPet 中的旧时间线仍可只读查看。"
-            "此操作不会删除 Agent 服务端的数据或长期记忆，也暂不支持切回旧会话。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            title="新建 Agent 会话",
+            text=(
+                "确定要开始一个新的 Agent 会话吗？\n\n"
+                "当前会话将结束，MeaPet 中的旧时间线仍可只读查看。"
+                "此操作不会删除 Agent 服务端的数据或长期记忆，也暂不支持切回旧会话。"
+            ),
+            icon=QMessageBox.Question,
+            buttons=QMessageBox.Yes | QMessageBox.No,
+            default_button=QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
@@ -655,6 +662,18 @@ class PetWindowChromeMixin:
         llm = self.config.setdefault("llm", {})
         agent = llm.setdefault("agent", {})
         agent["session_id"] = f"meapet-{uuid.uuid4().hex}"
+        kind = str(agent.get("kind") or "hermes").strip().lower()
+        if kind == "openclaw":
+            # OpenClaw 的真正会话边界是 sessionKey；只换本地 session_id
+            # 仍会继续原 Gateway 上下文。
+            agent["session_key"] = (
+                f"agent:main:meapet:{uuid.uuid4().hex}"
+            )
+            agent.pop("upstream_session_id", None)
+        else:
+            # Hermes 下次连接必须 session.create，而不是 resume 旧的持久会话。
+            agent.pop("remote_session_id", None)
+        self._persisted_agent_remote_session_id = ""
         self._agent_history = []
         self._active_agent_turn_id = ""
         self._agent_tts_workers = {}
@@ -701,12 +720,13 @@ class PetWindowChromeMixin:
         self._show_bubble("Agent 控制令牌已复制。", 3000, mood=None)
 
     def _regenerate_agent_control_token(self) -> None:
-        reply = QMessageBox.question(
+        reply = show_message_dialog(
             self,
-            "重新生成 Agent 控制令牌",
-            "重新生成后，旧令牌会立即失效，当前 Agent 需要改用新令牌。继续吗？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            title="重新生成 Agent 控制令牌",
+            text="重新生成后，旧令牌会立即失效，当前 Agent 需要改用新令牌。继续吗？",
+            icon=QMessageBox.Question,
+            buttons=QMessageBox.Yes | QMessageBox.No,
+            default_button=QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return

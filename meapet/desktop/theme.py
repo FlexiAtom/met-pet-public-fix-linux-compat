@@ -1,17 +1,26 @@
-"""桌面浮窗、菜单与对话框的统一 MeaPet 主题。"""
+"""桌面浮窗、菜单与对话框的统一 MeaPet 主题（墨樱夜）。"""
 
 from __future__ import annotations
 
 from meapet.ui_theme import (
     BUNDLED_CHEVRON_DOWN_PATH,
+    BUTTON_SECONDARY_BG,
+    BUTTON_SECONDARY_BG_HOVER,
+    BUTTON_SECONDARY_BG_PRESSED,
     DISPLAY_FONT_FAMILY,
     FONT_FAMILY,
-    MONO_FONT_FAMILY,
+    GRADIENT_PAPER,
+    GRADIENT_PRIMARY,
+    GRADIENT_PRIMARY_HOVER,
+    GRADIENT_PROGRESS,
+    GRADIENT_RAISED,
+    GRADIENT_SELECTED_SWEEP,
     PALETTE,
     RADIUS_LARGE,
     RADIUS_MEDIUM,
     RADIUS_SMALL,
     rgba,
+    seam_highlight,
 )
 
 
@@ -34,44 +43,58 @@ COLOR_ERR = PALETTE["danger"]
 
 MENU_STYLE = f"""
     QMenu {{
-        background: {rgba(COLOR_CARD, 252)};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 rgba(61, 49, 84, 252),
+            stop:0.5 rgba(46, 36, 64, 252),
+            stop:1 rgba(34, 26, 46, 252));
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
-        border-radius: {RADIUS_SMALL}px;
-        padding: 5px;
+        border-top-color: {seam_highlight(110)};
+        border-radius: 12px;
+        padding: 6px;
         font-family: {FONT_FAMILY};
         font-size: 14px;
     }}
     QMenu::item {{
-        min-height: 32px;
-        padding: 6px 26px 6px 12px;
+        min-height: 34px;
+        padding: 8px 28px 8px 14px;
         border: 1px solid transparent;
-        border-radius: 6px;
-        margin: 1px 0;
+        border-radius: 8px;
+        margin: 2px 4px;
     }}
     QMenu::item:selected {{
-        background: {rgba(COLOR_FOCUS, 35)};
-        border-color: {rgba(COLOR_FOCUS, 90)};
+        background: {GRADIENT_SELECTED_SWEEP};
+        border-color: {rgba(COLOR_ACCENT, 120)};
         color: {COLOR_TEXT};
     }}
+    QMenu::item:pressed {{
+        background: {rgba(COLOR_ACCENT, 78)};
+    }}
     QMenu::item:disabled {{
-        color: {rgba(COLOR_MUTED, 135)};
+        color: {rgba(COLOR_MUTED, 130)};
     }}
     QMenu::separator {{
         height: 1px;
-        background: {COLOR_BORDER};
-        margin: 4px 8px;
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 {rgba(COLOR_ACCENT, 90)},
+            stop:0.35 {rgba(COLOR_BORDER_STRONG, 110)},
+            stop:1 {rgba(COLOR_BORDER_STRONG, 0)});
+        margin: 5px 12px;
     }}
     QMenu::indicator {{
         width: 14px;
         height: 14px;
-        left: 7px;
+        left: 8px;
+    }}
+    QMenu::icon {{
+        left: 10px;
     }}
 """
 
 
 PET_MENU_WINDOW_STYLE = f"""
-    QWidget#PetMenuWindowRoot {{
+    QWidget#PetMenuWindowRoot,
+    QWidget#PetMenuSubmenuRoot {{
         background: transparent;
         font-family: {FONT_FAMILY};
     }}
@@ -91,8 +114,24 @@ PET_MENU_WINDOW_STYLE = f"""
         color: {rgba(COLOR_MUTED, 170)};
         font-size: 11px;
     }}
+    QLabel#PetMenuSubmenuTitle {{
+        background: transparent;
+        color: {COLOR_SECONDARY};
+        font-size: 13px;
+        font-weight: 700;
+    }}
+    QLabel#PetMenuSubmenuHint {{
+        background: transparent;
+        color: {rgba(COLOR_MUTED, 165)};
+        font-size: 10px;
+    }}
     QWidget#PetMenuHeader {{
         background: transparent;
+    }}
+    QWidget#PetMenuSubmenuHeader {{
+        background: {rgba(COLOR_FOCUS, 18)};
+        border: 1px solid {rgba(COLOR_FOCUS, 55)};
+        border-radius: 6px;
     }}
     QPushButton#PetMenuCloseButton {{
         background: transparent;
@@ -123,6 +162,11 @@ PET_MENU_WINDOW_STYLE = f"""
     QPushButton#PetMenuGroup {{
         color: {COLOR_SECONDARY};
         font-weight: 600;
+    }}
+    QPushButton#PetMenuGroup[expanded="true"] {{
+        background: {rgba(COLOR_FOCUS, 42)};
+        border-color: {rgba(COLOR_FOCUS, 115)};
+        color: {COLOR_TEXT};
     }}
     QPushButton#PetMenuItem:hover, QPushButton#PetMenuGroup:hover {{
         background: {rgba(COLOR_FOCUS, 35)};
@@ -175,11 +219,17 @@ DIALOG_STYLE = f"""
         font-size: 14px;
     }}
     QFrame#SizeDialogCard,
-    QFrame#TimelineCard,
-    QFrame#TurnCard {{
-        background: {COLOR_CARD};
-        border: 1px solid {COLOR_BORDER_STRONG};
+    QFrame#TimelineCard {{
+        background: {GRADIENT_PAPER};
+        border: 1px solid {COLOR_BORDER};
+        border-top-color: {seam_highlight(80)};
         border-radius: {RADIUS_MEDIUM}px;
+    }}
+    QFrame#TurnCard {{
+        background: {GRADIENT_RAISED};
+        border: 1px solid {COLOR_BORDER};
+        border-left: 3px solid {rgba(COLOR_ACCENT, 110)};
+        border-radius: 12px;
     }}
     QLabel {{
         color: {COLOR_TEXT};
@@ -190,7 +240,7 @@ DIALOG_STYLE = f"""
         color: {COLOR_TEXT};
         font-family: {DISPLAY_FONT_FAMILY};
         font-size: 20px;
-        font-weight: 750;
+        font-weight: 700;
     }}
     QLabel#HelperText {{
         color: {COLOR_MUTED};
@@ -199,7 +249,7 @@ DIALOG_STYLE = f"""
     QLabel#FieldLabel {{
         color: {COLOR_SECONDARY};
         font-size: 12px;
-        font-weight: 650;
+        font-weight: 600;
     }}
     QLabel#TurnMeta {{
         color: {COLOR_MUTED};
@@ -216,8 +266,8 @@ DIALOG_STYLE = f"""
     }}
     QLabel#ScaleValue {{
         color: {COLOR_ACCENT};
-        font-size: 24px;
-        font-weight: 750;
+        font-size: 26px;
+        font-weight: 700;
     }}
     QPlainTextEdit,
     QTextEdit {{
@@ -226,8 +276,13 @@ DIALOG_STYLE = f"""
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
         padding: 10px 12px;
-        selection-background-color: {rgba(COLOR_ACCENT, 105)};
         font-size: 13px;
+        selection-background-color: {rgba(COLOR_ACCENT, 200)};
+        selection-color: {PALETTE['on_primary']};
+    }}
+    QPlainTextEdit:hover,
+    QTextEdit:hover {{
+        border-color: {COLOR_FOCUS};
     }}
     QPlainTextEdit:focus,
     QTextEdit:focus {{
@@ -247,9 +302,12 @@ DIALOG_STYLE = f"""
         margin: 4px 2px;
     }}
     QScrollBar::handle:vertical {{
-        background: {COLOR_BORDER_STRONG};
+        background: {rgba(COLOR_BORDER_STRONG, 170)};
         border-radius: 4px;
         min-height: 28px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {COLOR_MUTED};
     }}
     QScrollBar::add-line:vertical,
     QScrollBar::sub-line:vertical {{
@@ -257,28 +315,41 @@ DIALOG_STYLE = f"""
     }}
     QPushButton {{
         min-height: 44px;
-        background: {COLOR_ELEVATED};
+        background: {BUTTON_SECONDARY_BG};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
-        padding: 8px 16px;
+        padding: 8px 18px;
         font-weight: 600;
     }}
     QPushButton:hover {{
-        background: {rgba(COLOR_FOCUS, 28)};
-        border-color: {COLOR_MUTED};
+        background: {BUTTON_SECONDARY_BG_HOVER};
+        border-color: {COLOR_FOCUS};
+    }}
+    QPushButton:pressed {{
+        background: {BUTTON_SECONDARY_BG_PRESSED};
     }}
     QPushButton:focus {{
         border: 2px solid {COLOR_FOCUS};
-        padding: 7px 15px;
+        padding: 7px 17px;
+    }}
+    QPushButton:disabled {{
+        background: {rgba(COLOR_ELEVATED, 150)};
+        color: {rgba(COLOR_MUTED, 120)};
+        border-color: {rgba(COLOR_BORDER, 150)};
     }}
     QPushButton#PrimaryButton {{
-        background: {COLOR_ACCENT};
+        background: {GRADIENT_PRIMARY};
         color: {PALETTE['on_primary']};
         border-color: {COLOR_ACCENT};
+        font-weight: 700;
     }}
     QPushButton#PrimaryButton:hover {{
-        background: {PALETTE['primary_hover']};
+        background: {GRADIENT_PRIMARY_HOVER};
+        border-color: {PALETTE['primary_hover']};
+    }}
+    QPushButton#PrimaryButton:pressed {{
+        background: {COLOR_ACCENT};
     }}
     QPushButton#GhostButton {{
         background: transparent;
@@ -286,24 +357,35 @@ DIALOG_STYLE = f"""
         color: {COLOR_SECONDARY};
     }}
     QPushButton#GhostButton:hover {{
-        background: {rgba(COLOR_FOCUS, 22)};
+        background: {rgba(PALETTE['accent'], 26)};
         color: {COLOR_TEXT};
+        border-color: {rgba(PALETTE['accent'], 60)};
+    }}
+    QPushButton#GhostButton:pressed {{
+        background: {rgba(PALETTE['accent'], 44)};
     }}
     QSlider::groove:horizontal {{
         height: 6px;
-        background: {COLOR_BORDER};
+        background: {COLOR_INPUT};
+        border: 1px solid {COLOR_BORDER};
+        border-radius: 3px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background: {GRADIENT_PROGRESS};
         border-radius: 3px;
     }}
     QSlider::handle:horizontal {{
-        background: {COLOR_ACCENT};
-        border: 2px solid {COLOR_FOCUS};
+        background: {COLOR_TEXT};
+        border: 3px solid {COLOR_ACCENT};
         width: 20px;
         margin: -8px 0;
         border-radius: 11px;
     }}
-    QSlider::sub-page:horizontal {{
-        background: {COLOR_ACCENT};
-        border-radius: 3px;
+    QSlider::handle:horizontal:hover {{
+        border-color: {COLOR_FOCUS};
+    }}
+    QSlider::handle:horizontal:pressed {{
+        background: {PALETTE['primary_hover']};
     }}
     QSlider:focus {{
         border: 1px solid {COLOR_FOCUS};
@@ -320,13 +402,17 @@ CONSENT_DIALOG_STYLE = f"""
         background: transparent;
     }}
     QFrame#CloudConsentCard {{
-        background: {COLOR_CARD};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 #312647, stop:0.42 {COLOR_CARD}, stop:1 #1B1526);
         border: 1px solid {COLOR_BORDER_STRONG};
+        border-top-color: {seam_highlight(100)};
         border-radius: {RADIUS_LARGE}px;
     }}
     QFrame#SectionCard {{
-        background: {COLOR_ELEVATED};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 #352A4A, stop:1 #2A213A);
         border: 1px solid {COLOR_BORDER};
+        border-left: 3px solid {rgba(COLOR_ACCENT, 100)};
         border-radius: {RADIUS_SMALL}px;
     }}
     QLabel {{
@@ -343,7 +429,7 @@ CONSENT_DIALOG_STYLE = f"""
         color: {COLOR_TEXT};
         font-family: {DISPLAY_FONT_FAMILY};
         font-size: 20px;
-        font-weight: 750;
+        font-weight: 700;
     }}
     QLabel#ConsentBody {{
         color: {COLOR_SECONDARY};
@@ -352,7 +438,7 @@ CONSENT_DIALOG_STYLE = f"""
     QLabel#FieldLabel {{
         color: {COLOR_SECONDARY};
         font-size: 12px;
-        font-weight: 650;
+        font-weight: 600;
     }}
     QLabel#HelperText {{
         color: {COLOR_MUTED};
@@ -369,19 +455,19 @@ CONSENT_DIALOG_STYLE = f"""
     QLabel#ConsentValidation {{
         color: {COLOR_ERR};
         font-size: 12px;
-        font-weight: 650;
+        font-weight: 600;
         padding: 5px 8px;
-        background: {rgba(COLOR_ERR, 18)};
-        border: 1px solid {rgba(COLOR_ERR, 75)};
+        background: {rgba(COLOR_ERR, 26)};
+        border: 1px solid {rgba(COLOR_ERR, 90)};
         border-radius: {RADIUS_SMALL}px;
     }}
     QLabel#ConsentCountdown {{
         color: {COLOR_WARN};
         font-size: 12px;
-        font-weight: 650;
+        font-weight: 600;
         padding: 6px 10px;
-        background: {rgba(COLOR_WARN, 18)};
-        border: 1px solid {rgba(COLOR_WARN, 70)};
+        background: {rgba(COLOR_WARN, 24)};
+        border: 1px solid {rgba(COLOR_WARN, 85)};
         border-radius: {RADIUS_SMALL}px;
     }}
     QComboBox {{
@@ -391,10 +477,11 @@ CONSENT_DIALOG_STYLE = f"""
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
         padding: 0 12px;
-        selection-background-color: {rgba(COLOR_ACCENT, 105)};
+        selection-background-color: {rgba(COLOR_ACCENT, 200)};
+        selection-color: {PALETTE['on_primary']};
     }}
     QComboBox:hover {{
-        border-color: {COLOR_MUTED};
+        border-color: {COLOR_FOCUS};
     }}
     QComboBox:focus {{
         border: 2px solid {COLOR_FOCUS};
@@ -403,7 +490,7 @@ CONSENT_DIALOG_STYLE = f"""
         subcontrol-origin: padding;
         subcontrol-position: top right;
         width: 32px;
-        background: {COLOR_ELEVATED};
+        background: {rgba(COLOR_ELEVATED, 200)};
         border: none;
         border-left: 1px solid {COLOR_BORDER_STRONG};
         border-top-right-radius: {RADIUS_SMALL - 1}px;
@@ -418,23 +505,25 @@ CONSENT_DIALOG_STYLE = f"""
         color: {COLOR_TEXT};
         background: {COLOR_ELEVATED};
         border: 1px solid {COLOR_BORDER_STRONG};
+        border-radius: {RADIUS_SMALL}px;
         selection-color: {COLOR_TEXT};
-        selection-background-color: {rgba(COLOR_FOCUS, 45)};
+        selection-background-color: {rgba(COLOR_ACCENT, 70)};
         padding: 4px;
+        outline: 0;
     }}
     QPushButton {{
         min-width: 112px;
         min-height: 44px;
         padding: 0 16px;
         color: {COLOR_TEXT};
-        background: {COLOR_ELEVATED};
+        background: {BUTTON_SECONDARY_BG};
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
-        font-weight: 650;
+        font-weight: 600;
     }}
     QPushButton:hover {{
-        background: {rgba(COLOR_FOCUS, 28)};
-        border-color: {COLOR_MUTED};
+        background: {BUTTON_SECONDARY_BG_HOVER};
+        border-color: {COLOR_FOCUS};
     }}
     QPushButton:focus {{
         border: 2px solid {COLOR_FOCUS};
@@ -442,12 +531,12 @@ CONSENT_DIALOG_STYLE = f"""
     QPushButton#SelectRegionButton,
     QPushButton#RefreshWindowsButton {{
         color: {COLOR_TEXT};
-        background: {rgba(COLOR_FOCUS, 22)};
+        background: {rgba(PALETTE['accent'], 26)};
         border-color: {COLOR_BORDER_STRONG};
     }}
     QPushButton#SelectRegionButton:hover,
     QPushButton#RefreshWindowsButton:hover {{
-        background: {rgba(COLOR_FOCUS, 42)};
+        background: {rgba(PALETTE['accent'], 52)};
         border-color: {COLOR_FOCUS};
     }}
     QPushButton#RefreshWindowsButton {{
@@ -458,18 +547,19 @@ CONSENT_DIALOG_STYLE = f"""
     QPushButton#AllowUploadButton {{
         font-family: {DISPLAY_FONT_FAMILY};
         font-size: 14px;
+        font-weight: 700;
         color: {PALETTE['on_primary']};
-        background: {COLOR_ACCENT};
+        background: {GRADIENT_PRIMARY};
         border-color: {COLOR_ACCENT};
     }}
     QPushButton#AllowUploadButton:hover {{
-        background: {PALETTE['primary_hover']};
+        background: {GRADIENT_PRIMARY_HOVER};
         border-color: {PALETTE['primary_hover']};
     }}
     QPushButton#CancelUploadButton:default {{
         color: {COLOR_TEXT};
         border: 2px solid {COLOR_FOCUS};
-        background: {rgba(COLOR_FOCUS, 24)};
+        background: {rgba(COLOR_FOCUS, 30)};
     }}
 """
 
@@ -481,8 +571,12 @@ CHAT_COMPOSER_STYLE = f"""
         background: transparent;
     }}
     QFrame#ChatComposer {{
-        background: {rgba(COLOR_CARD, 250)};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 rgba(42, 33, 57, 252),
+            stop:0.45 rgba(34, 26, 46, 251),
+            stop:1 rgba(31, 24, 41, 251));
         border: 1px solid {COLOR_BORDER_STRONG};
+        border-top-color: {seam_highlight(100)};
         border-radius: {RADIUS_MEDIUM}px;
     }}
     QLabel {{
@@ -502,6 +596,7 @@ CHAT_COMPOSER_STYLE = f"""
     QLabel#ComposerFeedback {{
         color: {COLOR_ERR};
         font-size: 11px;
+        font-weight: 600;
     }}
     QLineEdit {{
         min-height: 44px;
@@ -511,10 +606,11 @@ CHAT_COMPOSER_STYLE = f"""
         border-radius: {RADIUS_SMALL}px;
         padding: 0 14px;
         font-size: 14px;
-        selection-background-color: {rgba(COLOR_ACCENT, 100)};
+        selection-background-color: {rgba(COLOR_ACCENT, 200)};
+        selection-color: {PALETTE['on_primary']};
     }}
     QLineEdit:hover {{
-        border-color: {COLOR_MUTED};
+        border-color: {COLOR_FOCUS};
     }}
     QLineEdit:focus {{
         border: 2px solid {COLOR_FOCUS};
@@ -523,7 +619,7 @@ CHAT_COMPOSER_STYLE = f"""
     QPushButton {{
         min-height: 44px;
         min-width: 44px;
-        background: {COLOR_ELEVATED};
+        background: {BUTTON_SECONDARY_BG};
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: {RADIUS_SMALL}px;
@@ -531,8 +627,11 @@ CHAT_COMPOSER_STYLE = f"""
         font-weight: 600;
     }}
     QPushButton:hover {{
-        background: {rgba(COLOR_FOCUS, 28)};
-        border-color: {COLOR_MUTED};
+        background: {BUTTON_SECONDARY_BG_HOVER};
+        border-color: {COLOR_FOCUS};
+    }}
+    QPushButton:pressed {{
+        background: {BUTTON_SECONDARY_BG_PRESSED};
     }}
     QPushButton:focus {{
         border: 2px solid {COLOR_FOCUS};
@@ -541,12 +640,22 @@ CHAT_COMPOSER_STYLE = f"""
         min-width: 80px;
         font-family: {DISPLAY_FONT_FAMILY};
         font-size: 15px;
-        background: {COLOR_ACCENT};
+        font-weight: 700;
+        background: {GRADIENT_PRIMARY};
         color: {PALETTE['on_primary']};
         border-color: {COLOR_ACCENT};
     }}
     QPushButton#SendButton:hover {{
-        background: {PALETTE['primary_hover']};
+        background: {GRADIENT_PRIMARY_HOVER};
+        border-color: {PALETTE['primary_hover']};
+    }}
+    QPushButton#SendButton:pressed {{
+        background: {COLOR_ACCENT};
+    }}
+    QPushButton#SendButton:disabled {{
+        background: {rgba(COLOR_ELEVATED, 150)};
+        color: {rgba(COLOR_MUTED, 120)};
+        border-color: {rgba(COLOR_BORDER, 150)};
     }}
     QPushButton#ComposerCloseButton {{
         background: transparent;
@@ -556,9 +665,9 @@ CHAT_COMPOSER_STYLE = f"""
         font-size: 18px;
     }}
     QPushButton#ComposerCloseButton:hover {{
-        background: {rgba(COLOR_ERR, 35)};
+        background: {rgba(COLOR_ERR, 40)};
         color: {COLOR_ERR};
-        border-color: {rgba(COLOR_ERR, 90)};
+        border-color: {rgba(COLOR_ERR, 110)};
     }}
 """
 
@@ -573,9 +682,9 @@ DIALOGUE_STYLE = f"""
         color: {COLOR_TEXT};
         border: none;
         padding: 0;
-        font-family: {FONT_FAMILY};
+        font-family: {DISPLAY_FONT_FAMILY};
         font-size: 15px;
-        font-weight: 500;
+        font-weight: 400;
     }}
     QScrollArea#DialogueScroll,
     QScrollArea#DialogueScroll > QWidget > QWidget {{
@@ -584,13 +693,16 @@ DIALOGUE_STYLE = f"""
     }}
     QScrollArea#DialogueScroll QScrollBar:vertical {{
         width: 8px;
-        margin: 4px 2px;
+        margin: 5px 3px;
         background: transparent;
     }}
     QScrollArea#DialogueScroll QScrollBar::handle:vertical {{
         min-height: 28px;
-        border-radius: 3px;
-        background: {rgba(COLOR_ACCENT, 150)};
+        border-radius: 4px;
+        background: {rgba(COLOR_ACCENT, 165)};
+    }}
+    QScrollArea#DialogueScroll QScrollBar::handle:vertical:hover {{
+        background: {rgba(PALETTE['primary_hover'], 210)};
     }}
     QScrollArea#DialogueScroll QScrollBar::add-line:vertical,
     QScrollArea#DialogueScroll QScrollBar::sub-line:vertical {{
@@ -611,7 +723,7 @@ STATUS_PANEL_STYLE = f"""
         color: {COLOR_TEXT};
     }}
     QLabel#PanelEyebrow {{
-        color: {COLOR_ACCENT};
+        color: {PALETTE['accent']};
         font-size: 11px;
         font-weight: 700;
     }}
@@ -622,8 +734,8 @@ STATUS_PANEL_STYLE = f"""
         font-weight: 700;
     }}
     QLabel#TierLabel {{
-        color: {COLOR_WARN};
-        font-size: 17px;
+        color: {COLOR_ACCENT};
+        font-size: 18px;
         font-weight: 700;
     }}
     QLabel#QuoteLabel {{
@@ -644,40 +756,46 @@ STATUS_PANEL_STYLE = f"""
         font-size: 11px;
     }}
     QFrame#StatusCard {{
-        background: {rgba(COLOR_CARD, 230)};
-        border: 1px solid {COLOR_BORDER_STRONG};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 rgba(61, 49, 84, 222),
+            stop:0.45 rgba(46, 36, 64, 218),
+            stop:1 rgba(40, 31, 56, 218));
+        border: 1px solid {COLOR_BORDER};
+        border-top-color: {seam_highlight(80)};
+        border-left: 3px solid {rgba(COLOR_ACCENT, 110)};
         border-radius: {RADIUS_MEDIUM}px;
     }}
     QPushButton#PanelCloseButton {{
-        min-width: 44px;
+        min-width: 64px;
         min-height: 44px;
-        background: {rgba(COLOR_CARD, 225)};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 rgba(51, 40, 74, 230), stop:1 rgba(40, 31, 56, 230));
         color: {COLOR_TEXT};
         border: 1px solid {COLOR_BORDER_STRONG};
-        border-radius: 10px;
+        border-radius: 12px;
         font-weight: 600;
     }}
     QPushButton#PanelCloseButton:hover {{
         background: {rgba(COLOR_ERR, 45)};
         color: {COLOR_ERR};
-        border-color: {COLOR_ERR};
+        border-color: {rgba(COLOR_ERR, 140)};
     }}
     QPushButton#PanelCloseButton:focus {{
         border: 2px solid {COLOR_FOCUS};
     }}
     QProgressBar {{
-        min-height: 20px;
+        min-height: 22px;
         background: {COLOR_INPUT};
         color: {COLOR_TEXT};
-        border: 1px solid {COLOR_BORDER_STRONG};
-        border-radius: 6px;
+        border: 1px solid {COLOR_BORDER};
+        border-radius: 8px;
         text-align: center;
+        font-size: 12px;
         font-weight: 700;
     }}
     QProgressBar::chunk {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
-        border-radius: 5px;
+        background: {GRADIENT_PROGRESS};
+        border-radius: 7px;
     }}
 """
 
@@ -689,8 +807,10 @@ SPLASH_STYLE = f"""
         background: transparent;
     }}
     QFrame#SplashCard {{
-        background: {COLOR_CARD};
-        border: 1px solid {COLOR_BORDER_STRONG};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 #312647, stop:0.42 {COLOR_CARD}, stop:1 {COLOR_BG});
+        border: 1px solid {COLOR_BORDER};
+        border-top-color: {seam_highlight(95)};
         border-radius: {RADIUS_LARGE}px;
     }}
     QLabel {{
@@ -698,17 +818,17 @@ SPLASH_STYLE = f"""
         border: none;
     }}
     QLabel#SplashMark {{
-        background: {COLOR_ACCENT};
+        background: {GRADIENT_PRIMARY};
         color: {PALETTE['on_primary']};
         border-radius: 18px;
         font-size: 18px;
-        font-weight: 800;
+        font-weight: 700;
     }}
     QLabel#SplashTitle {{
         color: {COLOR_TEXT};
         font-family: {DISPLAY_FONT_FAMILY};
         font-size: 26px;
-        font-weight: 750;
+        font-weight: 700;
     }}
     QLabel#SplashSubtitle {{
         color: {COLOR_SECONDARY};
@@ -731,13 +851,12 @@ SPLASH_STYLE = f"""
         font-size: 11px;
     }}
     QProgressBar {{
-        background: {COLOR_ELEVATED};
+        background: {COLOR_INPUT};
         border: 1px solid {COLOR_BORDER};
-        border-radius: 4px;
+        border-radius: 5px;
     }}
     QProgressBar::chunk {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {COLOR_ACCENT}, stop:1 {COLOR_ACCENT_2});
-        border-radius: 3px;
+        background: {GRADIENT_PROGRESS};
+        border-radius: 4px;
     }}
 """

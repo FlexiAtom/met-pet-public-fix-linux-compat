@@ -14,21 +14,21 @@
 
 | 角色 | 颜色 | 用途 |
 |---|---:|---|
-| Canvas | `#0E1020` | 窗口底色 |
-| Surface | `#17192D` | 主卡片 |
-| Elevated | `#20233D` | 浮层、次级卡片 |
-| Input | `#111326` | 输入区域 |
-| Primary | `#FF91B4` | 主操作与品牌强调 |
-| Secondary | `#FFB36B` | 渐变终点与温暖强调 |
-| Accent | `#A69BFF` | 焦点之外的辅助强调 |
-| Text Primary | `#F8F8FC` | 标题和正文 |
-| Text Secondary | `#CACCE0` | 说明文字 |
-| Text Muted | `#9FA3BC` | 次要提示，仍满足 AA 正文对比度 |
-| Border | `#3B3E5B` | 默认边界 |
-| Focus | `#C0B9FF` | 键盘焦点环 |
-| Success | `#70DDB0` | 成功状态，同时配合文字 |
-| Warning | `#F4CC75` | 警告状态，同时配合文字 |
-| Danger | `#FF8892` | 错误/危险状态，同时配合文字 |
+| Canvas | `#16111F` | 窗口底色（暖墨紫） |
+| Surface | `#221A2E` | 主卡片 |
+| Elevated | `#2E2440` | 浮层、次级卡片 |
+| Input | `#100C18` | 输入区域（比 Canvas 更深的“凹陷井”） |
+| Primary | `#FF9DBE` | 主操作与品牌强调（樱粉，配额化使用） |
+| Secondary | `#FFC48F` | 渐变终点（不单独作底色） |
+| Accent | `#B7A6FF` | 焦点之外的辅助强调 |
+| Text Primary | `#FAF6FB` | 标题和正文 |
+| Text Secondary | `#D6CBE0` | 说明文字 |
+| Text Muted | `#A79BB8` | 次要提示，仍满足 AA 正文对比度 |
+| Border | `#46385C` | 静态分隔（交互控件边用 `#7C69A0`，≥3:1） |
+| Focus | `#CDB8FF` | 键盘焦点环 |
+| Success | `#6FE0B4` | 成功状态，同时配合文字 |
+| Warning | `#FFD37A` | 警告状态，同时配合文字 |
+| Danger | `#FF8FA0` | 错误/危险状态，同时配合文字 |
 
 ## 字体、尺寸与间距
 
@@ -36,7 +36,7 @@
 - 字阶：12 / 13 / 14 / 16 / 20 / 24 / 28px。
 - 正文行高：约 1.5；长文本优先换行，不用截断隐藏关键信息。
 - 间距：4 / 8 / 12 / 16 / 20 / 24 / 32px。
-- 圆角：8 / 12 / 18px。
+- 圆角：10 / 14 / 20px。
 - 表单输入、主按钮和图标按钮的交互区域至少为 44×44px；桌面右键菜单遵循紧凑原生密度，单项总高度至少 32px。
 
 ## 组件规则
@@ -48,6 +48,7 @@
 - 配置中心使用四个固定标签页（环境、对话、语音、屏幕识图）；缺少必要配置时显示红点，并同时给出可访问的文字原因。
 - 异步检测超过 300ms 时显示状态文字或进度，进行中按钮必须禁止重复触发。
 - 浮窗必须支持 Escape 关闭，并提供可见关闭操作；状态不能只靠颜色表达。
+- 通用信息、警告、错误与确认统一使用 `meapet/message_dialog.py` 的无边框主题窗口；不得直接调用原生 `QMessageBox.information/question/critical`，避免 Windows 原生标题栏割裂主题。正文可复制，超长内容在窗口内滚动；确认框默认聚焦安全选项，危险操作同时使用文字和危险色。
 
 ## PyQt5 映射
 
@@ -68,6 +69,7 @@
 
 ## Page overrides
 
+- 视觉重设计（墨樱夜，取代本文件的视觉决策）: `design-system/REDESIGN.md`
 - Desktop pet: `design-system/pages/desktop.md`
 - Wizard: `design-system/pages/wizard.md`
 - Status copy source: `meapet/desktop/status_language.py`

@@ -790,10 +790,33 @@ class PetChatFlowMixin:
                 or {}
             )
             try:
-                history_turns = max(0, min(int(agent_config.get("history_turns", 5)), 50))
+                history_turns = max(
+                    0,
+                    min(int(agent_config.get("history_turns", 5)), 100),
+                )
             except (TypeError, ValueError):
                 history_turns = 5
             self._agent_history = history[-history_turns * 2:] if history_turns else []
+            # Hermes 的 runtime session id 每次 WebSocket 重连都会变化；这里只
+            # 持久化服务端返回的 stored session id，供下次启动 session.resume。
+            adapter = getattr(self, "agent_adapter", None)
+            remote_session_id = str(
+                getattr(adapter, "remote_session_id", "") or ""
+            ).strip()
+            if remote_session_id:
+                agent_config["remote_session_id"] = remote_session_id
+                if (
+                    getattr(
+                        self,
+                        "_persisted_agent_remote_session_id",
+                        "",
+                    )
+                    != remote_session_id
+                ):
+                    self._persisted_agent_remote_session_id = remote_session_id
+                    save_config = getattr(self, "_save_config", None)
+                    if callable(save_config):
+                        save_config()
         elif user_text and reply:
             mood = segments[0].mood if segments else "neutral"
             QTimer.singleShot(

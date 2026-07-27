@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,7 @@ from PyQt5.QtCore import (  # noqa: E402
     QRect,
     QSize,
     Qt,
+    QTimer,
 )
 from PyQt5.QtGui import QKeyEvent, QMouseEvent, QPainterPath  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
@@ -102,6 +104,67 @@ class UiRefactorTests(unittest.TestCase):
                     minimum,
                 )
 
+    def test_interactive_borders_meet_ui_graphic_contrast(self) -> None:
+        from meapet.ui_theme import PALETTE, contrast_ratio
+
+        required_pairs = (
+            ("border_strong", "surface", 3.0),
+            ("border_strong", "surface_input", 3.0),
+            ("border_strong", "surface_elevated", 3.0),
+            ("focus", "surface", 3.0),
+            ("focus", "canvas", 3.0),
+        )
+        for foreground, background, minimum in required_pairs:
+            with self.subTest(foreground=foreground, background=background):
+                self.assertGreaterEqual(
+                    contrast_ratio(PALETTE[foreground], PALETTE[background]),
+                    minimum,
+                )
+
+    def test_input_surface_reads_as_recessed_well(self) -> None:
+        from meapet.ui_theme import PALETTE, _relative_luminance
+
+        self.assertLess(
+            _relative_luminance(PALETTE["surface_input"]),
+            _relative_luminance(PALETTE["canvas"]),
+        )
+
+    def test_wizard_check_controls_have_visible_focus_ring(self) -> None:
+        from wizard.styles import WIZARD_STYLESHEET
+
+        focus_rules = re.findall(
+            r"QCheckBox:focus[^{]*\{([^}]*)\}",
+            WIZARD_STYLESHEET,
+        )
+        self.assertTrue(focus_rules)
+        self.assertTrue(
+            any("2px solid" in rule for rule in focus_rules),
+            "QCheckBox/QRadioButton 聚焦时必须出现 2px 可见焦点环，而不是只变字色",
+        )
+
+    def test_live_refreshing_surfaces_avoid_pixel_effects(self) -> None:
+        """光标闪烁/倒计时/进度刷新会让 QGraphicsEffect 反复整容器重模糊，导致卡顿。"""
+        from meapet.desktop.dialogs import CloudVisionConsentDialog
+        from meapet.desktop.splash import StartupSplash
+        from meapet.desktop.status_panel import StatusPanel
+        from wizard.app import SetupWizard
+
+        wizard = self._track(SetupWizard())
+        self.assertIsNone(wizard.container.graphicsEffect())
+
+        splash = self._track(StartupSplash())
+        self.assertIsNone(splash.card.graphicsEffect())
+
+        panel = self._track(StatusPanel(_MemoryStub()))
+        for card in panel.findChildren(QFrame):
+            if card.objectName() == "StatusCard":
+                self.assertIsNone(card.graphicsEffect())
+
+        consent = self._track(CloudVisionConsentDialog(timeout_seconds=5))
+        for card in consent.findChildren(QFrame):
+            if card.objectName() == "CloudConsentCard":
+                self.assertIsNone(card.graphicsEffect())
+
     def test_theme_helpers_validate_color_inputs(self) -> None:
         from meapet.ui_theme import contrast_ratio, rgba
 
@@ -114,22 +177,44 @@ class UiRefactorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             contrast_ratio("invalid", "#000000")
 
-    def test_wizard_message_box_styles_only_the_text_label_and_localizes_buttons(
+    def test_message_dialog_owns_its_chrome_and_localizes_standard_buttons(
         self,
     ) -> None:
-        from wizard.styles import WIZARD_STYLESHEET, styled_message_box
+        from meapet.message_dialog import (
+            MESSAGE_DIALOG_STYLE,
+            MeaMessageDialog,
+        )
+        from wizard.styles import styled_message_box
 
-        captured = {}
-
-        def capture_box(box):
-            captured["box"] = box
+        box = self._track(
+            MeaMessageDialog(
+                None,
+                title="仍有必要配置未完成",
+                text="仍要保存吗？",
+                icon=QMessageBox.Warning,
+                buttons=QMessageBox.Save | QMessageBox.Cancel,
+                default_button=QMessageBox.Cancel,
+            )
+        )
+        self.assertTrue(box.windowFlags() & Qt.FramelessWindowHint)
+        self.assertTrue(box.testAttribute(Qt.WA_TranslucentBackground))
+        self.assertEqual(box.objectName(), "MeaMessageDialog")
+        self.assertEqual(box.card.objectName(), "MessageCard")
+        self.assertEqual(box.title_label.text(), "仍有必要配置未完成")
+        self.assertEqual(box.kind_label.text(), "注意")
+        self.assertEqual(box.button(QMessageBox.Save).text(), "保存")
+        self.assertEqual(box.button(QMessageBox.Cancel).text(), "取消")
+        self.assertEqual(
+            box.button(QMessageBox.Cancel).objectName(),
+            "MessagePrimaryButton",
+        )
+        self.assertGreaterEqual(box.close_button.minimumWidth(), 44)
+        self.assertGreaterEqual(box.close_button.minimumHeight(), 44)
+        self.assertIn("QFrame#MessageCard", MESSAGE_DIALOG_STYLE)
+        self.assertIn("QTextBrowser#MessageBody", MESSAGE_DIALOG_STYLE)
 
         with patch(
-            "wizard.styles.apply_wizard_dialog_style",
-            side_effect=capture_box,
-        ), patch.object(
-            QMessageBox,
-            "exec_",
+            "meapet.message_dialog.MeaMessageDialog.exec_",
             return_value=QMessageBox.Cancel,
         ):
             result = styled_message_box(
@@ -141,11 +226,37 @@ class UiRefactorTests(unittest.TestCase):
                 default_button=QMessageBox.Cancel,
             )
 
-        box = captured["box"]
         self.assertEqual(result, QMessageBox.Cancel)
-        self.assertEqual(box.button(QMessageBox.Save).text(), "保存")
-        self.assertEqual(box.button(QMessageBox.Cancel).text(), "取消")
-        self.assertIn("QMessageBox QLabel#qt_msgbox_label", WIZARD_STYLESHEET)
+
+    def test_message_dialog_escape_uses_safe_result_and_long_text_scrolls(
+        self,
+    ) -> None:
+        from meapet.message_dialog import MeaMessageDialog
+
+        dialog = self._track(
+            MeaMessageDialog(
+                None,
+                title="启动失败",
+                text="\n".join(
+                    f"第 {index} 行错误：这是可复制的详细诊断信息。"
+                    for index in range(80)
+                ),
+                icon=QMessageBox.Critical,
+                buttons=QMessageBox.Retry | QMessageBox.Cancel,
+                default_button=QMessageBox.Cancel,
+            )
+        )
+        dialog.show()
+        QApplication.processEvents()
+        area = QApplication.primaryScreen().availableGeometry()
+        self.assertLessEqual(dialog.height(), area.height())
+        self.assertGreater(dialog.body.verticalScrollBar().maximum(), 0)
+        self.assertEqual(dialog.body.toPlainText().count("\n"), 79)
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+        QApplication.processEvents()
+        self.assertEqual(dialog.result(), QMessageBox.Cancel)
+        self.assertFalse(dialog.isVisible())
 
     def test_bundled_cute_display_font_loads_with_a_safe_body_font(self) -> None:
         from meapet.ui_theme import (
@@ -226,6 +337,16 @@ class UiRefactorTests(unittest.TestCase):
         self.assertGreater(wizard.maximumWidth(), wizard.minimumWidth())
         self.assertEqual(wizard.objectName(), "WizardRoot")
         self.assertEqual(wizard.container.objectName(), "WizardShell")
+        shell_margins = wizard.layout().contentsMargins()
+        self.assertEqual(
+            (
+                shell_margins.left(),
+                shell_margins.top(),
+                shell_margins.right(),
+                shell_margins.bottom(),
+            ),
+            (1, 1, 1, 1),
+        )
         self.assertIsInstance(wizard.tabs, QTabWidget)
         self.assertEqual(
             [wizard.tabs.tabText(index) for index in range(wizard.tabs.count())],
@@ -299,6 +420,97 @@ class UiRefactorTests(unittest.TestCase):
         self.assertEqual(
             wizard.collect_config()["display"]["size_factor"],
             PET_SIZE_FACTOR_MAX,
+        )
+
+    def test_environment_page_wraps_at_max_font_scale_without_horizontal_clipping(
+        self,
+    ) -> None:
+        from meapet.ui_theme import set_ui_font_scale
+        from wizard.app import SetupWizard
+        from wizard.platform_info import PYTHON_CHECK_NAME
+
+        self.addCleanup(set_ui_font_scale, 1.0)
+        wizard = self._track(SetupWizard())
+        wizard._load_timer.stop()
+        wizard.env_page._check_timer.stop()
+        wizard._suppress_dirty = True
+        wizard.resize(wizard.minimumWidth(), wizard.minimumHeight())
+        wizard.font_scale_slider.setValue(
+            wizard.font_scale_slider.maximum()
+        )
+        wizard.env_page._set_item_status(
+            PYTHON_CHECK_NAME,
+            True,
+            "就绪 · 3.13.3（桌宠可运行；本地 VITS 推荐 3.10–3.12）",
+        )
+        wizard.setWindowOpacity(1.0)
+        wizard.show()
+        self.app.processEvents()
+
+        scroll = wizard.tabs.widget(wizard.TAB_ENV)
+        content = scroll.widget()
+        self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+        self.assertLessEqual(content.width(), scroll.viewport().width())
+        for page in (wizard.display_page, wizard.env_page):
+            with self.subTest(page=page):
+                self.assertLessEqual(
+                    page.x() + page.width(),
+                    content.width(),
+                )
+
+        _, python_status, _, _ = wizard.env_page.items[PYTHON_CHECK_NAME]
+        self.assertTrue(python_status.wordWrap())
+        wizard._dirty = False
+
+    def test_configuration_scale_values_use_the_same_compact_style(self) -> None:
+        from wizard.app import SetupWizard
+        from wizard.styles import WIZARD_STYLESHEET
+
+        wizard = self._track(SetupWizard())
+        wizard._load_timer.stop()
+        self.assertEqual(
+            wizard.font_scale_value.minimumWidth(),
+            wizard.pet_size_value.minimumWidth(),
+        )
+        self.assertIn(
+            "QLabel#FontScaleValue,\n    QLabel#PetSizeValue",
+            WIZARD_STYLESHEET,
+        )
+
+    def test_configuration_window_mask_removes_square_outer_corners(self) -> None:
+        from meapet.ui_theme import RADIUS_LARGE
+        from wizard.app import SetupWizard
+
+        wizard = self._track(SetupWizard())
+        wizard._load_timer.stop()
+        wizard.env_page._check_timer.stop()
+        wizard.setWindowOpacity(1.0)
+        wizard.show()
+        self.app.processEvents()
+
+        mask = wizard.mask()
+        self.assertFalse(mask.isEmpty())
+        for corner in (
+            QPoint(0, 0),
+            QPoint(wizard.width() - 1, 0),
+            QPoint(0, wizard.height() - 1),
+            QPoint(wizard.width() - 1, wizard.height() - 1),
+        ):
+            with self.subTest(corner=corner):
+                self.assertFalse(mask.contains(corner))
+        self.assertTrue(mask.contains(QPoint(RADIUS_LARGE, RADIUS_LARGE)))
+        self.assertTrue(
+            mask.contains(QPoint(wizard.width() // 2, wizard.height() // 2))
+        )
+
+        wizard.resize(940, 820)
+        self.app.processEvents()
+        resized_mask = wizard.mask()
+        self.assertFalse(resized_mask.contains(QPoint(0, 0)))
+        self.assertTrue(
+            resized_mask.contains(
+                QPoint(wizard.width() // 2, wizard.height() // 2)
+            )
         )
 
     def test_configuration_restores_pet_window_size_from_existing_config(
@@ -1050,6 +1262,68 @@ class UiRefactorTests(unittest.TestCase):
         self.assertTrue(screen.adjusted(24, 24, -24, -24).contains(edge_bubble))
         self.assertFalse(edge_bubble.intersects(edge_pet))
 
+    def test_live2d_bubble_uses_visible_mask_instead_of_transparent_window(
+        self,
+    ) -> None:
+        from PyQt5.QtGui import QRegion
+
+        from meapet.desktop.render_host import (
+            BUBBLE_PET_GAP,
+            PetRenderHostMixin,
+            calculate_bubble_anchor_rect,
+        )
+
+        class BubbleHost(PetRenderHostMixin, QWidget):
+            pass
+
+        class BubbleStub:
+            def __init__(self) -> None:
+                self.position = None
+                self._size = QSize(140, 80)
+
+            def isVisible(self) -> bool:
+                return True
+
+            def size(self) -> QSize:
+                return QSize(self._size)
+
+            def move(self, position: QPoint) -> None:
+                self.position = QPoint(position)
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        host = self._track(BubbleHost())
+        host.resize(300, 400)
+        host.move(
+            screen.right() - host.width() - 40,
+            screen.top() + 100,
+        )
+        visible_local = QRect(72, 32, 180, 320)
+        host.setMask(QRegion(visible_local, QRegion.Ellipse))
+        bubble = BubbleStub()
+        host.bubble = bubble
+
+        host._position_bubble()
+        self.assertIsNotNone(bubble.position)
+        bubble_rect = QRect(bubble.position, bubble.size())
+        host_rect = QRect(
+            host.x(),
+            host.y(),
+            host.width(),
+            host.height(),
+        )
+        anchor = calculate_bubble_anchor_rect(
+            host_rect,
+            host.mask().boundingRect(),
+        )
+        visible_gap = anchor.left() - bubble_rect.right() - 1
+        transparent_window_gap = (
+            anchor.left() - host_rect.left()
+        )
+
+        self.assertEqual(visible_gap, BUBBLE_PET_GAP)
+        self.assertGreater(transparent_window_gap, BUBBLE_PET_GAP * 4)
+        self.assertLess(bubble_rect.right(), anchor.left())
+
     def test_bubble_prefers_the_horizontal_side_away_from_the_screen_edge(self) -> None:
         from meapet.desktop.render_host import (
             calculate_bubble_position,
@@ -1648,13 +1922,12 @@ class UiRefactorTests(unittest.TestCase):
         self.assertTrue(flags & int(Qt.FramelessWindowHint))
         self.assertTrue(flags & int(Qt.WindowStaysOnTopHint))
 
-        # 分组与 QMenu 结构一致；嵌套分组（窗口大小）就地展开在父组之前登记。
+        # 根窗口只登记第一层分组；更深层目录在侧边面板打开后才按需创建。
         self.assertEqual(
-            [title for _button, _body, title in window._groups],
+            [title for _button, _menu, title in window._groups],
             [
                 "切换表情",
                 "识图与观察",
-                "窗口大小 · 100%",
                 "显示与立绘",
                 "设置与数据",
             ],
@@ -1685,27 +1958,130 @@ class UiRefactorTests(unittest.TestCase):
         )
         self.assertEqual(window.pos() - start, QPoint(60, 60))
 
-        # 分组就地展开，不再弹出二级 popup。
-        toggle, body, _title = window._groups[0]
-        self.assertFalse(body.isVisible())
+        # 分组打开独立侧边面板，根窗口自身不再向下长高。
+        root_height = window.height()
+        toggle, _submenu, _title = window._groups[0]
         toggle.click()
         QApplication.processEvents()
-        self.assertTrue(body.isVisible())
+        self.assertEqual(window.height(), root_height)
+        self.assertEqual(len(window._submenu_panels), 1)
+        panel = window._submenu_panels[0]
+        self.assertTrue(panel.isWindow())
+        self.assertIsNone(panel.parentWidget())
+        self.assertTrue(panel.isVisible())
+        self.assertEqual(panel._title, "切换表情")
+        self.assertIn(panel.placement_side, {"left", "right"})
+        requested_rect = QRect(panel._requested_pos, panel.size())
+        self.assertTrue(
+            requested_rect.right() <= window.geometry().left() + 10
+            or requested_rect.left() >= window.geometry().right() - 10
+        )
 
     def test_context_menu_window_item_triggers_action_and_closes(self) -> None:
         host = self._make_menu_host()
         host.show()
         host._show_context_menu(QPoint(20, 20))
         window = self._track(host._menu_window)
-        toggle, _body, _title = window._groups[0]
+        toggle, _submenu, _title = window._groups[0]
         toggle.click()
         QApplication.processEvents()
+        panel = window._submenu_panels[0]
 
         button = next(b for b, a in window._action_buttons if a.text() == "开心")
         button.click()
         QApplication.processEvents()
         self.assertFalse(window.isVisible())
+        try:
+            panel_visible = panel.isVisible()
+        except RuntimeError:
+            panel_visible = False
+        self.assertFalse(panel_visible)
+        self.assertEqual(window._submenu_panels, [])
         self.assertEqual(host.moods, ["happy"])
+
+    def test_context_menu_cascades_nested_groups_without_growing_root(self) -> None:
+        host = self._make_menu_host()
+        host.show()
+        host._show_context_menu(QPoint(20, 20))
+        window = self._track(host._menu_window)
+        root_height = window.height()
+
+        display_button = next(
+            button
+            for button, _menu, title in window._menu_groups
+            if title == "显示与立绘"
+        )
+        display_button.click()
+        QApplication.processEvents()
+        self.assertEqual(window.height(), root_height)
+        self.assertEqual(len(window._submenu_panels), 1)
+
+        size_button = next(
+            button
+            for button, _menu, title in window._groups
+            if title == "窗口大小 · 100%"
+        )
+        size_button.click()
+        QApplication.processEvents()
+        self.assertEqual(window.height(), root_height)
+        self.assertEqual(len(window._submenu_panels), 2)
+        first, second = window._submenu_panels
+        self.assertEqual(second.parent_surface, first)
+        self.assertEqual(second.placement_side, first.placement_side)
+
+        # 同层切换目录时复用级联深度，不累积已经关闭的面板。
+        vision_button = next(
+            button
+            for button, _menu, title in window._menu_groups
+            if title == "识图与观察"
+        )
+        vision_button.click()
+        QApplication.processEvents()
+        self.assertEqual(len(window._submenu_panels), 1)
+        self.assertEqual(window._submenu_panels[0]._title, "识图与观察")
+        self.assertEqual(window.height(), root_height)
+
+    def test_context_menu_side_panel_chooses_screen_safe_direction(self) -> None:
+        from meapet.desktop.menu_window import calculate_submenu_position
+
+        area = QRect(0, 0, 800, 600)
+        panel_size = QSize(240, 260)
+
+        parent = QRect(30, 80, 280, 420)
+        trigger = QRect(50, 200, 220, 44)
+        position, side = calculate_submenu_position(
+            parent, trigger, panel_size, area
+        )
+        self.assertEqual(side, "right")
+        self.assertGreaterEqual(position.x(), parent.right() - 10)
+        self.assertTrue(area.contains(QRect(position, panel_size)))
+
+        parent = QRect(520, 80, 280, 420)
+        trigger = QRect(540, 520, 220, 44)
+        position, side = calculate_submenu_position(
+            parent, trigger, panel_size, area
+        )
+        self.assertEqual(side, "left")
+        self.assertLessEqual(position.x() + panel_size.width(), parent.left() + 10)
+        self.assertTrue(area.contains(QRect(position, panel_size)))
+
+        # 更深层继承向左方向，避免折返覆盖根菜单。
+        next_parent = QRect(position, panel_size)
+        next_trigger = QRect(
+            next_parent.left() + 20,
+            next_parent.top() + 80,
+            next_parent.width() - 40,
+            44,
+        )
+        next_position, next_side = calculate_submenu_position(
+            next_parent,
+            next_trigger,
+            panel_size,
+            area,
+            preferred_side=side,
+        )
+        self.assertEqual(next_side, "left")
+        self.assertTrue(area.contains(QRect(next_position, panel_size)))
 
     def test_context_menu_uses_readable_type_and_row_height(self) -> None:
         from meapet.desktop.theme import MENU_STYLE
@@ -1816,6 +2192,58 @@ class UiRefactorTests(unittest.TestCase):
         )
         self.assertEqual(dialog.approval.application, "")
 
+    def test_capture_consent_keeps_modal_result_while_region_selector_runs(
+        self,
+    ) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+
+        selector_calls = []
+
+        def select_region(parent, _initial_region):
+            selector_calls.append(
+                {
+                    "visible": parent.isVisible(),
+                    "opacity": parent.windowOpacity(),
+                }
+            )
+            # 模拟用户完成拖选后再点击允许。排到下一轮事件循环，确保
+            # 点击发生在区域选择器返回、授权框恢复交互之后。
+            QTimer.singleShot(0, parent.allow_button.click)
+            return {"x": 10, "y": 20, "width": 300, "height": 200}
+
+        dialog = self._track(
+            CaptureScopeConsentDialog(
+                requested_scope="full_screen",
+                timeout_seconds=15,
+                region_selector=select_region,
+                window_provider=lambda: (),
+            )
+        )
+
+        def select_and_allow():
+            index = dialog.scope_combo.findData("region")
+            dialog.scope_combo.setCurrentIndex(index)
+            dialog.scope_combo.activated.emit(index)
+
+        safety_timer = QTimer(dialog)
+        safety_timer.setSingleShot(True)
+        safety_timer.timeout.connect(dialog.reject)
+        safety_timer.start(1000)
+        QTimer.singleShot(0, select_and_allow)
+
+        result = dialog.exec_()
+        safety_timer.stop()
+
+        self.assertEqual(result, QDialog.Accepted)
+        self.assertEqual(len(selector_calls), 1)
+        self.assertTrue(selector_calls[0]["visible"])
+        self.assertLessEqual(selector_calls[0]["opacity"], 0.01)
+        self.assertEqual(dialog.windowOpacity(), 1.0)
+        self.assertEqual(
+            dialog.approval.region,
+            {"x": 10, "y": 20, "width": 300, "height": 200},
+        )
+
     def test_capture_consent_lists_windows_and_pauses_during_refresh(self) -> None:
         from meapet.desktop.dialogs import CaptureScopeConsentDialog
         from meapet.watcher.capture import CaptureWindow
@@ -1925,12 +2353,18 @@ class UiRefactorTests(unittest.TestCase):
             )
         )
         dialog.setMinimumHeight(dialog.height() + 19)
+        preferred_height = dialog.height() + 37
 
-        with patch.object(dialog, "resize") as resize:
+        with patch.object(
+            dialog,
+            "sizeHint",
+            return_value=QSize(dialog.width(), preferred_height),
+        ), patch.object(dialog, "resize") as resize:
             dialog._resize_to_content()
 
         requested_height = resize.call_args.args[1]
         self.assertGreaterEqual(requested_height, dialog.minimumHeight())
+        self.assertGreaterEqual(requested_height, preferred_height)
 
     def test_agent_requested_region_still_requires_a_local_mouse_drag(self) -> None:
         from meapet.desktop.dialogs import CaptureScopeConsentDialog
@@ -2221,13 +2655,23 @@ class UiRefactorTests(unittest.TestCase):
 
     def test_bubble_mood_accent_changes_border_color(self) -> None:
         from meapet.desktop.widgets import DialogueBox, MOOD_BORDER_COLORS
+        from meapet.ui_theme import PALETTE
 
         bubble = self._track(DialogueBox())
         bubble.show_text("今天也要加油喵", duration_ms=0, mood="happy")
         self.assertEqual(bubble._container.mood, "happy")
+        # 情绪描边色跟随语义令牌，而不是写死的裸色值。
         self.assertEqual(
             MOOD_BORDER_COLORS["happy"].lower(),
-            "#ffb36b",
+            PALETTE["secondary"].lower(),
+        )
+        self.assertEqual(
+            MOOD_BORDER_COLORS["neutral"].lower(),
+            PALETTE["primary"].lower(),
+        )
+        self.assertNotEqual(
+            MOOD_BORDER_COLORS["happy"].lower(),
+            MOOD_BORDER_COLORS["neutral"].lower(),
         )
         bubble.set_mood("annoyed")
         self.assertEqual(bubble._container.mood, "annoyed")

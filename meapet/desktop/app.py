@@ -300,7 +300,7 @@ class MeaPet(
             try:
                 history_turns = max(
                     0,
-                    min(int(agent_config.get("history_turns", 5)), 50),
+                    min(int(agent_config.get("history_turns", 5)), 100),
                 )
             except (TypeError, ValueError):
                 history_turns = 5
@@ -527,15 +527,20 @@ def _ensure_jieba():
         log.error("[boot] jieba 未安装，中文分词功能不可用")
         try:
             from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.critical(
+            from meapet.message_dialog import show_message_dialog
+
+            show_message_dialog(
                 None,
-                "依赖缺失",
-                "缺少核心依赖 jieba（中文分词库）。\n\n"
-                "请在终端执行：\n"
-                "  pip install jieba\n\n"
-                "或使用 uv：\n"
-                "  uv pip install jieba\n\n"
-                "然后重新启动桌宠。",
+                title="依赖缺失",
+                text=(
+                    "缺少核心依赖 jieba（中文分词库）。\n\n"
+                    "请在终端执行：\n"
+                    "  pip install jieba\n\n"
+                    "或使用 uv：\n"
+                    "  uv pip install jieba\n\n"
+                    "然后重新启动桌宠。"
+                ),
+                icon=QMessageBox.Critical,
             )
         except Exception:
             pass
@@ -662,7 +667,14 @@ def main():
         log.error(f"[boot] MeaPet 创建失败:\n{tb}")
         try:
             from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.critical(None, "MeaPet 启动失败", tb[-1200:])
+            from meapet.message_dialog import show_message_dialog
+
+            show_message_dialog(
+                None,
+                title="MeaPet 启动失败",
+                text=tb[-1200:],
+                icon=QMessageBox.Critical,
+            )
         except Exception:
             pass
         _abort_failed_startup(app, keepalive, splash)

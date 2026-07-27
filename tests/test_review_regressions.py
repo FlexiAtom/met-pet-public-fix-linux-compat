@@ -612,15 +612,21 @@ class TestConfigSafety(unittest.TestCase):
         self.assertEqual(cfg["llm"]["mode"], "direct")
         self.assertIn("direct", cfg["llm"])
         self.assertIn("agent", cfg["llm"])
-        self.assertNotIn("kind", cfg["llm"]["agent"])
+        self.assertEqual(cfg["llm"]["agent"]["kind"], "hermes")
+        self.assertTrue(
+            cfg["llm"]["agent"]["base_url"].startswith("ws://")
+        )
 
     def test_normalize_config_legacy_hermes_backend_defaults_to_agent_mode(self):
         from meapet.config.store import normalize_config
 
         cfg = normalize_config({"llm": {"backend": "hermes"}})
         self.assertEqual(cfg["llm"]["mode"], "agent")
-        # OpenAI 兼容 agent 形状：不再落 hermes kind
-        self.assertNotIn("kind", cfg["llm"]["agent"])
+        self.assertEqual(cfg["llm"]["agent"]["kind"], "hermes")
+        self.assertEqual(
+            cfg["llm"]["agent"]["base_url"],
+            "ws://127.0.0.1:9119/api/ws",
+        )
 
     def test_infer_direct_protocol_known_and_unknown(self):
         from meapet.config.store import infer_direct_protocol
@@ -977,4 +983,3 @@ class TestTtsOutputPaths(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
