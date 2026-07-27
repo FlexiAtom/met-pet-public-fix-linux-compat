@@ -135,7 +135,8 @@ class SetupWizard(QWidget):
         palette.setColor(self.backgroundRole(), QColor("#0E1020"))
         self.setPalette(palette)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        #self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.Window)
         # Start invisible to avoid showing a blank frame before the
         # dark-themed UI is fully painted.  Fade in once the event loop runs.
         self.setWindowOpacity(0.0)
