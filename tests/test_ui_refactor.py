@@ -2103,16 +2103,65 @@ class UiRefactorTests(unittest.TestCase):
         self.assertGreaterEqual(menu.font().pixelSize(), 14)
         self.assertGreaterEqual(menu.actionGeometry(action).height(), 38)
 
-    def test_cloud_consent_dialog_is_compact_and_has_balanced_actions(self) -> None:
+    def test_cloud_consent_dialog_fits_max_font_scale_and_has_balanced_actions(
+        self,
+    ) -> None:
         from meapet.desktop.dialogs import CloudVisionConsentDialog
+        from meapet.ui_theme import set_ui_font_scale
 
+        self.addCleanup(set_ui_font_scale, 1.0)
+        set_ui_font_scale(1.5)
         dialog = self._track(CloudVisionConsentDialog(timeout_seconds=5))
         dialog.show()
         dialog._timer.stop()
         QApplication.processEvents()
 
-        self.assertEqual(dialog.size(), QSize(420, 270))
+        self.assertGreaterEqual(
+            dialog.width(),
+            dialog.minimumSizeHint().width(),
+        )
+        self.assertGreaterEqual(
+            dialog.height(),
+            dialog.minimumSizeHint().height(),
+        )
+        self.assertGreater(dialog.maximumWidth(), dialog.minimumWidth())
         self.assertEqual(dialog.allow_button.width(), dialog.cancel_button.width())
+
+    def test_capture_and_size_dialogs_fit_max_font_scale(self) -> None:
+        from meapet.desktop.dialogs import CaptureScopeConsentDialog
+        from meapet.desktop.widgets import SizeScaleDialog
+        from meapet.ui_theme import set_ui_font_scale
+
+        self.addCleanup(set_ui_font_scale, 1.0)
+        set_ui_font_scale(1.5)
+        dialogs = (
+            self._track(
+                CaptureScopeConsentDialog(
+                    timeout_seconds=5,
+                    window_provider=lambda: (),
+                )
+            ),
+            self._track(SizeScaleDialog(1.0)),
+        )
+        for dialog in dialogs:
+            dialog.show()
+            timer = getattr(dialog, "_timer", None)
+            if timer is not None:
+                timer.stop()
+            QApplication.processEvents()
+            with self.subTest(dialog=type(dialog).__name__):
+                self.assertGreaterEqual(
+                    dialog.width(),
+                    dialog.minimumSizeHint().width(),
+                )
+                self.assertGreaterEqual(
+                    dialog.height(),
+                    dialog.minimumSizeHint().height(),
+                )
+                self.assertGreater(
+                    dialog.maximumWidth(),
+                    dialog.minimumWidth(),
+                )
 
     def test_cloud_consent_dialog_defaults_to_cancel_and_times_out(self) -> None:
         from meapet.desktop.dialogs import CloudVisionConsentDialog
