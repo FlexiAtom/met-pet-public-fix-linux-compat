@@ -1316,6 +1316,10 @@ class UiRefactorTests(unittest.TestCase):
         transparent_window_gap = (
             anchor.left() - host_rect.left()
         )
+        print(f"host_rect: {host_rect}")
+        print(f"bubble_rect: {bubble_rect}")
+        print(f"visible_gap: {visible_gap}")
+
 
         self.assertEqual(visible_gap, 12)
         self.assertGreater(transparent_window_gap, BUBBLE_PET_GAP * 4)
