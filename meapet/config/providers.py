@@ -12,6 +12,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
+from meapet.config.defaults import (
+    DEFAULT_DIRECT_MODEL,
+    DEFAULT_MIMO_API_BASE,
+    DEFAULT_OLLAMA_HOST,
+    DEFAULT_OPENAI_API_BASE,
+)
+
 
 # 直连协议标识，与 meapet/direct/client.py 支持的协议一致。
 PROTO_OPENAI = "openai_chat"
@@ -70,9 +77,9 @@ class ProviderPreset:
 # 云端 OpenAI 兼容供应商 + Anthropic 原生 + 本地推理。顺序即下拉展示顺序。
 PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
     ProviderPreset(
-        "openai", "OpenAI", "https://api.openai.com/v1",
+        "openai", "OpenAI", DEFAULT_OPENAI_API_BASE,
         env_keys=("OPENAI_API_KEY",), url_signatures=("api.openai.com",),
-        models=("gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "o3-mini"),
+        models=(DEFAULT_DIRECT_MODEL, "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "o3-mini"),
     ),
     ProviderPreset(
         "deepseek", "DeepSeek 深度求索", "https://api.deepseek.com/v1",
@@ -124,7 +131,7 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
         models=("MiniMax-Text-01", "abab6.5s-chat"),
     ),
     ProviderPreset(
-        "mimo", "小米 MiMo", "https://api.xiaomimimo.com/v1",
+        "mimo", "小米 MiMo", DEFAULT_MIMO_API_BASE,
         env_keys=("MIMO_API_KEY", "XIAOMIMIMO_API_KEY"),
         url_signatures=("xiaomimimo", "mimo.mi.com"),
     ),
@@ -176,7 +183,7 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
         env_keys=("LONGCAT_API_KEY",), url_signatures=("api.longcat.chat",),
     ),
     ProviderPreset(
-        "ollama", "Ollama（本地）", "http://127.0.0.1:11434",
+        "ollama", "Ollama（本地）", DEFAULT_OLLAMA_HOST,
         protocol=PROTO_OLLAMA, requires_key=False,
         url_signatures=("11434",),
         note="本地运行的 Ollama，无需 API Key；模型 ID 即你 ollama pull 的名字。",

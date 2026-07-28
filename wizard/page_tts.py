@@ -23,6 +23,11 @@ from wizard.styles import (
 from wizard.page_tts_gsv import TtsPageGsvMixin
 from wizard.page_tts_mimo import TtsPageMimoMixin
 from wizard.page_tts_vits import TtsPageVitsMixin
+from meapet.config.defaults import (
+    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MIMO_TTS_CLONE_MODEL,
+    DEFAULT_MIMO_TTS_MODEL,
+)
 from meapet.config.normalizers import normalize_gsv_ref_language
 from wizard.widgets import WheelSafeComboBox
 
@@ -97,7 +102,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         mimo_layout.setContentsMargins(18, 16, 18, 18)
         mimo_layout.setSpacing(10)
         mimo_description = QLabel(
-            "小米 MiMo 语音合成（mimo-v2.5-tts）。\n"
+            f"小米 MiMo 语音合成（{DEFAULT_MIMO_TTS_MODEL}）。\n"
             "会自动检测：对话页 Key / config.json / 环境变量 MIMO_API_KEY。\n"
             "音色示例：冰糖 / 茉莉 / 苏打 / 白桦 / Chloe / Mia"
         )
@@ -126,9 +131,9 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         mimo_base_label = QLabel("API Base：")
         mimo_base_label.setObjectName("FieldLabel")
         mimo_layout.addWidget(mimo_base_label)
-        self.mimo_api_base_input = QLineEdit("https://api.xiaomimimo.com/v1")
+        self.mimo_api_base_input = QLineEdit(DEFAULT_MIMO_API_BASE)
         self.mimo_api_base_input.setObjectName("MimoTtsApiBase")
-        self.mimo_api_base_input.setPlaceholderText("https://api.xiaomimimo.com/v1")
+        self.mimo_api_base_input.setPlaceholderText(DEFAULT_MIMO_API_BASE)
         self.mimo_api_base_input.setStyleSheet(STYLE_INPUT)
         self.mimo_api_base_input.setAccessibleName("MiMo TTS API 地址")
         mimo_layout.addWidget(self.mimo_api_base_input)
@@ -175,7 +180,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
 
         self.mimo_voiceclone_cb = QCheckBox("使用 voice-clone（发送参考音频克隆音色）")
         self.mimo_voiceclone_cb.setToolTip(
-            "启用后模型改为 mimo-v2.5-tts-voiceclone，\n"
+            f"启用后模型改为 {DEFAULT_MIMO_TTS_CLONE_MODEL}，\n"
             "并把 clone_ref / 同语言样本（zh_* 或 jp_*）以 base64 发给 API。"
         )
         mimo_layout.addWidget(self.mimo_voiceclone_cb)

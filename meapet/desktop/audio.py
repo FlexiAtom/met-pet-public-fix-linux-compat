@@ -22,6 +22,7 @@ from meapet.desktop.status_panel import StatusPanel
 
 
 AUDIO_BUBBLE_TAIL_MS = 500
+MIN_REPLY_BUBBLE_MS = 3000
 
 
 def bubble_duration_for_audio(

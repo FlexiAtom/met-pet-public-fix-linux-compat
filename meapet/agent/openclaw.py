@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Mapping
 
 from meapet import __version__
+from meapet.config.defaults import (
+    DEFAULT_AGENT_TIMEOUT_SECONDS,
+    DEFAULT_OPENCLAW_WS_URL,
+)
 from meapet.agent.base import (
     AgentTurnRequest,
     FormatRepairRequired,
@@ -91,11 +95,11 @@ def _policy_byte_limit(value: object, default: int) -> int:
 
 @dataclass(frozen=True)
 class OpenClawConfig:
-    base_url: str = "ws://127.0.0.1:18789"
+    base_url: str = DEFAULT_OPENCLAW_WS_URL
     auth_token: str = ""
     session_key: str = ""
     session_id: str = ""
-    timeout_seconds: float = 120.0
+    timeout_seconds: float = DEFAULT_AGENT_TIMEOUT_SECONDS
     verify_tls: bool = True
     ca_file: str = ""
     allow_insecure_ws: bool = False
@@ -121,11 +125,11 @@ class OpenClawConfig:
         try:
             timeout = float(self.timeout_seconds)
         except (TypeError, ValueError):
-            timeout = 120.0
+            timeout = DEFAULT_AGENT_TIMEOUT_SECONDS
         object.__setattr__(
             self,
             "timeout_seconds",
-            timeout if timeout > 0 else 120.0,
+            timeout if timeout > 0 else DEFAULT_AGENT_TIMEOUT_SECONDS,
         )
         object.__setattr__(self, "verify_tls", bool(self.verify_tls))
         object.__setattr__(self, "ca_file", str(self.ca_file or "").strip())

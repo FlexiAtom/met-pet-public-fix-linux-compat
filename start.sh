@@ -111,9 +111,11 @@ if ! $PY_CMD -m pip --version &>/dev/null; then
 fi
 
 # ======== 4. 选择 pip 镜像 ========
-MIRROR_URL=""
+MIRROR_URL="${MEAPET_PIP_INDEX_URL:-${PIP_INDEX_URL:-}}"
 MIRROR_CHOICE="1"
-if [[ -t 0 ]]; then
+if [[ -n "$MIRROR_URL" ]]; then
+    echo "[MeaPet] 使用环境变量配置的 pip 源"
+elif [[ -t 0 ]]; then
     echo ""
     echo "请选择 pip 安装源:"
     echo "  1) PyPI 默认源 (国际)"
@@ -142,7 +144,7 @@ elif [[ -f "$REQ_FILE" ]]; then
     echo "[MeaPet] 💡 Live2D 模型支持需手动配置，下载地址及说明请参阅项目 README"
     PIP_ARGS=(-r "$REQ_FILE" -q)
     if [[ -n "$MIRROR_URL" ]]; then
-        PIP_ARGS+=(--index-url "$MIRROR_URL" --trusted-host pypi.tuna.tsinghua.edu.cn)
+        PIP_ARGS+=(--index-url "$MIRROR_URL")
     fi
     $PY_CMD -m pip install "${PIP_ARGS[@]}" || {
         echo "[MeaPet] ❌ 基础依赖安装失败"

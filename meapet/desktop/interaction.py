@@ -8,6 +8,7 @@ from typing import Optional
 
 from PyQt5.QtCore import QTimer
 
+from meapet.config.defaults import bubble_duration_ms
 from meapet.utils import (
     audio_cache_key,
     legacy_audio_cache_name,
@@ -56,7 +57,7 @@ class PetInteractionMixin:
         path, text = picked
         self._record_interaction()
         self._safe_set_mood("neutral")
-        dur = (self.config.get("bubble_duration_ms") or {}).get("interaction", 3000)
+        dur = bubble_duration_ms(self.config, "interaction")
         wav_dur = self._get_wav_duration_ms(path)
         bubble_ms = bubble_duration_for_audio(wav_dur, dur)
         self.show_reply(text, "neutral", duration_ms=bubble_ms)
@@ -80,14 +81,17 @@ class PetInteractionMixin:
             ]
             text, mood = random.choice(reactions)
             self._safe_set_mood(mood)
-            dur = (self.config.get("bubble_duration_ms") or {}).get("interaction", 3000)
+            dur = bubble_duration_ms(self.config, "interaction")
             self._interaction_speak(text, dur, mood)
             QTimer.singleShot(3000, lambda: self._safe_set_mood("neutral"))
         except Exception as e:
             log_error("head_patted", f"{type(e).__name__}: {e}")
             safe_print(f"[pet] head_patted error: {e}")
             try:
-                self._show_bubble("唔…摸头出了点问题喵", 2500)
+                self._show_bubble(
+                    "唔…摸头出了点问题喵",
+                    bubble_duration_ms(self.config, "interaction"),
+                )
             except Exception:
                 pass
 
@@ -98,7 +102,10 @@ class PetInteractionMixin:
             log_error("lower_left_patted", f"{type(e).__name__}: {e}")
             safe_print(f"[pet] lower_left error: {e}")
             try:
-                self._show_bubble("唔…出错了喵", 2500)
+                self._show_bubble(
+                    "唔…出错了喵",
+                    bubble_duration_ms(self.config, "interaction"),
+                )
             except Exception:
                 pass
 
@@ -109,7 +116,10 @@ class PetInteractionMixin:
             log_error("lower_right_patted", f"{type(e).__name__}: {e}")
             safe_print(f"[pet] lower_right error: {e}")
             try:
-                self._show_bubble("唔…出错了喵", 2500)
+                self._show_bubble(
+                    "唔…出错了喵",
+                    bubble_duration_ms(self.config, "interaction"),
+                )
             except Exception:
                 pass
 
@@ -134,7 +144,11 @@ class PetInteractionMixin:
                 self.show_reply(text, mood, duration_ms=duration_ms)
             except Exception:
                 try:
-                    self._show_bubble(text, duration_ms or 3000)
+                    self._show_bubble(
+                        text,
+                        duration_ms
+                        or bubble_duration_ms(self.config, "interaction"),
+                    )
                 except Exception:
                     pass
 
@@ -210,7 +224,7 @@ class PetInteractionMixin:
     def _show_bubble(self, text: str, duration_ms: int = None, mood: str | None = None):
         try:
             if duration_ms is None:
-                duration_ms = (self.config.get("bubble_duration_ms") or {}).get("default", 5000)
+                duration_ms = bubble_duration_ms(self.config, "default")
             stack = getattr(self, "_bubble_stack", None)
             if stack is not None:
                 self.bubble = stack.show_message(text, duration_ms, mood=mood)
@@ -227,7 +241,10 @@ class PetInteractionMixin:
             safe_print(f"[pet] show_bubble error: {e}")
 
     def _show_random_bubble(self, text: str):
-        self._show_bubble(text, 3000)
+        self._show_bubble(
+            text,
+            bubble_duration_ms(self.config, "interaction"),
+        )
 
     def _record_interaction(self):
         """记录互动时间（聊天、摸头等触发）"""

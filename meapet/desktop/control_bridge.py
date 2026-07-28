@@ -22,6 +22,7 @@ from meapet.agent.presentation import (
     SubmitTTS,
     UpdateBubble,
 )
+from meapet.config.defaults import DEFAULT_CONTROL_PORT
 from meapet.config.store import resolve_resource_path, resolve_secret
 from meapet.control.broker import CompanionControlBroker
 from meapet.control.transport import (
@@ -109,7 +110,7 @@ class PetControlBridgeMixin:
         server_config = ControlServerConfig(
             listen_host=control.get("listen_host", "127.0.0.1"),
             allowed_agent_ip=control.get("allowed_agent_ip", "127.0.0.1"),
-            port=control.get("port", 8765),
+            port=control.get("port", DEFAULT_CONTROL_PORT),
             auth_token=token,
             allow_insecure_http=control.get("allow_insecure_http", False),
             cert_file=resolve_resource_path(control.get("cert_file", "")),

@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 import os
 
+from meapet.config.defaults import DEFAULT_MIMO_API_BASE
 from wizard.platform_info import CONFIG_PATH
 from wizard.styles import set_status, styled_open_file
+
 
 class TtsPageMimoMixin:
     @staticmethod
@@ -111,7 +113,7 @@ class TtsPageMimoMixin:
         candidates.sort(key=lambda x: x[0])
         _prio, source, key, base = candidates[0]
         if not base:
-            base = "https://api.xiaomimimo.com/v1"
+            base = DEFAULT_MIMO_API_BASE
         return {"key": key, "base": base, "source": source}
 
     def _refresh_mimo_key_status(self):
@@ -166,7 +168,7 @@ class TtsPageMimoMixin:
 
         found = self._find_existing_mimo_credentials()
         key = found.get("key") or ""
-        base = found.get("base") or "https://api.xiaomimimo.com/v1"
+        base = found.get("base") or DEFAULT_MIMO_API_BASE
         source = found.get("source") or ""
 
         current = self.mimo_api_key_input.text().strip()
@@ -191,7 +193,8 @@ class TtsPageMimoMixin:
             if base and (
                 force
                 or not self.mimo_api_base_input.text().strip()
-                or self.mimo_api_base_input.text().strip() == "https://api.xiaomimimo.com/v1"
+                or self.mimo_api_base_input.text().strip()
+                == DEFAULT_MIMO_API_BASE
             ):
                 self.mimo_api_base_input.setText(base)
 

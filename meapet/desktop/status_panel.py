@@ -2,26 +2,23 @@
 梅尔桌宠 - 养成状态面板
 半透明 overlay，显示好感度、心情、统计等信息
 """
-import os
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QProgressBar, QFrame, QPushButton,
 )
-from PyQt5.QtCore import Qt, QTimer, QRectF
+from PyQt5.QtCore import QSize, Qt, QTimer, QRectF
 from PyQt5.QtGui import (
-    QPixmap, QPainter, QPainterPath, QPen, QColor, QLinearGradient,
+    QPainter, QPainterPath, QPen, QColor, QLinearGradient,
 )
 from meapet.desktop import status_language
 from meapet.desktop.icons import standard_icon
+from meapet.desktop.screen_geometry import resize_dialog_to_content
 from meapet.desktop.theme import STATUS_PANEL_STYLE
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
+    PALETTE,
     ensure_application_fonts,
     set_scaled_stylesheet,
 )
-from meapet.paths import project_path
-
-
-BG_PATH = project_path("ev312b.png")
 
 
 class StatusPanel(QWidget):
@@ -41,24 +38,11 @@ class StatusPanel(QWidget):
     def _build_ui(self):
         self.setWindowTitle("梅尔酱 - 养成状态")
         self.setObjectName("StatusPanelRoot")
-        self.setFixedSize(440, 620)
         self.setWindowFlags(Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAccessibleName("梅尔养成状态")
         self.setAccessibleDescription("查看好感度、心情、对话统计和重要记忆")
         set_scaled_stylesheet(self, STATUS_PANEL_STYLE)
-
-        # 背景
-        self.bg_label = QLabel(self)
-        self.bg_label.setGeometry(0, 0, self.width(), self.height())
-        if os.path.exists(BG_PATH):
-            pix = QPixmap(BG_PATH).scaled(
-                self.width(), self.height(), Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation,
-            )
-            self.bg_pix = pix
-        else:
-            self.bg_pix = None
 
         # 主布局
         main_layout = QVBoxLayout(self)
@@ -169,6 +153,7 @@ class StatusPanel(QWidget):
         main_layout.addWidget(hint)
 
         self.setLayout(main_layout)
+        resize_dialog_to_content(self, QSize(440, 620))
 
     def paintEvent(self, event):
         """圆角裁切背景图，覆一层竖向墨纱，最后描内亮环（双环装置）。"""
@@ -184,19 +169,17 @@ class StatusPanel(QWidget):
         )
         painter.setClipPath(clip)
 
-        if self.bg_pix:
-            painter.drawPixmap(0, 0, self.bg_pix)
-            veil = QLinearGradient(0, 0, 0, self.height())
-            veil.setColorAt(0.00, QColor(22, 17, 31, 150))
-            veil.setColorAt(0.45, QColor(22, 17, 31, 205))
-            veil.setColorAt(1.00, QColor(16, 12, 24, 238))
-            painter.fillRect(self.rect(), veil)
-        else:
-            painter.fillRect(self.rect(), QColor(22, 17, 31, 238))
+        surface = QColor(PALETTE["surface_elevated"])
+        canvas = QColor(PALETTE["canvas"])
+        gradient = QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0.00, surface)
+        gradient.setColorAt(0.45, QColor(PALETTE["surface"]))
+        gradient.setColorAt(1.00, canvas)
+        painter.fillRect(self.rect(), gradient)
 
         painter.setClipping(False)
         painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor("#7C69A0"), 1))
+        painter.setPen(QPen(QColor(PALETTE["border_strong"]), 1))
         painter.drawPath(clip)
 
     def mousePressEvent(self, event):

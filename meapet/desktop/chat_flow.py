@@ -30,6 +30,7 @@ from meapet.agent.presentation import (
     UpdateBubble,
 )
 from meapet.chat.engine import SYSTEM_PROMPT
+from meapet.config.defaults import MIN_ERROR_BUBBLE_MS, bubble_duration_ms
 from meapet.config.normalizers import canonical_tts_language
 from meapet.conversation.capabilities import build_agent_frontend_context
 from meapet.conversation.output_protocol import (
@@ -45,7 +46,10 @@ from meapet.conversation.types import (
     normalize_voice_language,
 )
 from meapet.desktop import status_language
-from meapet.desktop.audio import bubble_duration_for_audio
+from meapet.desktop.audio import (
+    MIN_REPLY_BUBBLE_MS,
+    bubble_duration_for_audio,
+)
 from meapet.desktop.workers import AgentChatWorker, ChatWorker, TTSWorker
 from meapet.desktop.chat_input import ChatInputBox, set_awaiting_reply_state
 from meapet.desktop.screen_geometry import (
@@ -278,13 +282,19 @@ class PetChatFlowMixin:
         """用户提交了输入"""
         if getattr(self, "_awaiting_reply", False):
             log.warning("[chat] 对话被拒绝：正在等待回复中")
-            self._show_bubble(status_language.thinking_busy(), 2500)
+            self._show_bubble(
+                status_language.thinking_busy(),
+                bubble_duration_ms(getattr(self, "config", None), "interaction"),
+            )
             self._position_bubble()
             return
         self._record_interaction()
         _log_private_text("[input] 收到用户输入", text)
         log.info("[input] 提交消息，准备回复")
-        self._show_bubble("……？", 1500)
+        self._show_bubble(
+            "……？",
+            bubble_duration_ms(getattr(self, "config", None), "interaction"),
+        )
         self._position_bubble()
         QTimer.singleShot(1200, lambda: self._do_chat(text))
 
@@ -408,9 +418,6 @@ class PetChatFlowMixin:
         self._active_timeline_turn_id = turn_id
         tts = getattr(self, "tts", None)
         tts_enabled = bool(tts is not None and getattr(tts, "enabled", False))
-        bubble_config = (getattr(self, "config", {}) or {}).get(
-            "bubble_duration_ms"
-        ) or {}
         self._active_agent_turn_id = turn_id
         self._agent_turn_result = None
         self._agent_bubbles = {}
@@ -420,7 +427,10 @@ class PetChatFlowMixin:
 
         self._agent_presentation = AgentTurnPresentation(
             tts_enabled=tts_enabled,
-            reply_min_duration_ms=int(bubble_config.get("reply", 3000)),
+            reply_min_duration_ms=bubble_duration_ms(
+                self.config,
+                "reply",
+            ),
             supported_moods=tuple(MOOD_TO_EXPRESSION),
         )
         request = AgentTurnRequest(
@@ -446,7 +456,10 @@ class PetChatFlowMixin:
         """执行 LLM 对话（后台线程）"""
         if self._awaiting_reply:
             log.warning("[chat] 对话被拒绝：正在等待回复中")
-            self._show_bubble(status_language.thinking_busy(), 2500)
+            self._show_bubble(
+                status_language.thinking_busy(),
+                bubble_duration_ms(getattr(self, "config", None), "interaction"),
+            )
             self._position_bubble()
             return
         interrupt_control = getattr(self, "_interrupt_control_say", None)
@@ -469,7 +482,7 @@ class PetChatFlowMixin:
         # 显示思考中提示
         self._show_bubble(
             status_language.thinking(),
-            self.config["bubble_duration_ms"]["thinking"],
+            bubble_duration_ms(getattr(self, "config", None), "thinking"),
         )  # 0 = 持久显示
         self._position_bubble()
 
@@ -711,7 +724,11 @@ class PetChatFlowMixin:
                 "succeeded": "处理完成",
                 "failed": "处理失败",
             }.get(str(action.state or "").lower(), "状态已更新")
-            self._show_bubble(safe_text, 4500, mood=None)
+            self._show_bubble(
+                safe_text,
+                bubble_duration_ms(getattr(self, "config", None), "default"),
+                mood=None,
+            )
             self._position_bubble()
             return
         if isinstance(action, RequestFormatRepair):
@@ -861,7 +878,17 @@ class PetChatFlowMixin:
         self._agent_format_repair_pending = False
         if hasattr(self, '_chat_timeout') and self._chat_timeout:
             self._chat_timeout.stop()
-        self._show_bubble(str(safe_message or "回复请求失败。"), 10000, mood=None)
+        self._show_bubble(
+            str(safe_message or "回复请求失败。"),
+            max(
+                bubble_duration_ms(
+                    getattr(self, "config", None),
+                    "reply",
+                ),
+                MIN_ERROR_BUBBLE_MS,
+            ),
+            mood=None,
+        )
         self._position_bubble()
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
@@ -1167,13 +1194,11 @@ class PetChatFlowMixin:
 
         reply, mood = pending
         duration_ms = None
-        config = getattr(self, "config", {}) or {}
-        bubble_config = config.get("bubble_duration_ms") or {}
         if wav_path:
             audio_ms = self._get_wav_duration_ms(wav_path)
             duration_ms = bubble_duration_for_audio(
                 audio_ms,
-                bubble_config.get("reply", 3000),
+                bubble_duration_ms(getattr(self, "config", None), "reply"),
             )
 
         try:
@@ -1240,7 +1265,13 @@ class PetChatFlowMixin:
         self._active_timeline_turn_id = ""
         self._show_bubble(
             status_language.model_service_error(),
-            10000,
+            max(
+                bubble_duration_ms(
+                    getattr(self, "config", None),
+                    "reply",
+                ),
+                MIN_ERROR_BUBBLE_MS,
+            ),
             mood=None,
         )
         self._position_bubble()
@@ -1261,7 +1292,10 @@ class PetChatFlowMixin:
             f"worker_alive={worker is not None and worker.isRunning()}"
         )
         set_awaiting_reply_state(self, False)
-        self._show_bubble(status_language.chat_timeout(), 3000)
+        self._show_bubble(
+            status_language.chat_timeout(),
+            bubble_duration_ms(getattr(self, "config", None), "default"),
+        )
         self._position_bubble()
         timeline = getattr(self, "_conversation_timeline", None)
         key = (
@@ -1365,9 +1399,16 @@ class PetChatFlowMixin:
 
     def show_reply(self, text: str, mood: str = "neutral", duration_ms: int = None):
         if duration_ms is None:
-            duration_ms = self.config["bubble_duration_ms"]["reply"]
+            duration_ms = bubble_duration_ms(
+                getattr(self, "config", None),
+                "reply",
+            )
         self._safe_set_mood(mood)
-        self._show_bubble(text, max(duration_ms, 3000), mood=mood)
+        self._show_bubble(
+            text,
+            max(duration_ms, MIN_REPLY_BUBBLE_MS),
+            mood=mood,
+        )
         self._bind_bubble_to_timeline(
             getattr(self, "bubble", None),
             str(getattr(self, "_active_timeline_turn_id", "") or ""),

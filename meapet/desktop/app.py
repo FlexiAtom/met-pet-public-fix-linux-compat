@@ -29,6 +29,10 @@ from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QSurfaceFormat
 
+from meapet.config.defaults import (
+    DEFAULT_OLLAMA_VISION_MODEL,
+    bubble_duration_ms,
+)
 from meapet.utils import (
     safe_print,
     log_error,
@@ -198,7 +202,13 @@ class MeaPet(
             log.warning(f"[audio_cache] 缓存清理跳过: {e}")
 
         if self._config_broken:
-            QTimer.singleShot(800, lambda: self._show_bubble("配置文件坏了喵", 5000))
+            QTimer.singleShot(
+                800,
+                lambda: self._show_bubble(
+                    status_language.config_corrupt(),
+                    bubble_duration_ms(self.config, "default"),
+                ),
+            )
 
     def _init_window(self):
         # 注意：不要用 SubWindow（无父窗口时在部分 Windows 上会"存在但不可见/无任务栏"）
@@ -342,7 +352,10 @@ class MeaPet(
         ui = self.config.setdefault("ui", {})
         if ui.get("first_run_hint_shown"):
             return
-        self._show_bubble(status_language.first_run_hint(), 4500)
+        self._show_bubble(
+            status_language.first_run_hint(),
+            bubble_duration_ms(self.config, "default"),
+        )
         ui["first_run_hint_shown"] = True
         try:
             self._save_config()
@@ -369,7 +382,10 @@ class MeaPet(
 
     def _show_warmup_status(self):
         if getattr(self.chat_engine, "_warmed_up", False):
-            self._show_bubble(status_language.ready_hint(), 3000)
+            self._show_bubble(
+                status_language.ready_hint(),
+                bubble_duration_ms(self.config, "interaction"),
+            )
 
     def _init_tts(self):
         self.tts = MeaTTS(self.config)
@@ -383,7 +399,9 @@ class MeaPet(
         backend = resolve_vision_backend(vision_cfg, llm_cfg)
         # 上传目标与云端确认共用同一解析：ollama 只走 host，mimo 走 api_base
         api_base = resolve_vision_api_base(vision_cfg, llm_cfg)
-        vision_model = vision_cfg.get("model") or "qwen3.5:4b"
+        vision_model = (
+            vision_cfg.get("model") or DEFAULT_OLLAMA_VISION_MODEL
+        )
 
         log.info(
             f"[watcher] 视觉路由: mode={vision_mode} backend={backend} "

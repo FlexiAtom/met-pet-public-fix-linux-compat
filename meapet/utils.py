@@ -14,6 +14,8 @@ import urllib.parse
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from meapet.config.defaults import DEFAULT_WATCHER_INTERVAL
+
 
 # 日志/打印时需要打码的键名（大小写不敏感）
 _SECRET_KEY_RE = re.compile(
@@ -154,12 +156,6 @@ def legacy_audio_cache_name(text: str, max_length: int = 120) -> str:
 # ========================
 # Watcher 规范化 / 云端门闩
 # ========================
-
-DEFAULT_WATCHER_INTERVAL = {
-    "min_ms": 180000,
-    "max_ms": 360000,
-}
-
 
 def normalize_watcher(raw: Optional[dict]) -> dict:
     """规范化 watcher 开关字段（缺省安全：关观察、禁云端）"""

@@ -20,27 +20,14 @@ from PyQt5.QtWidgets import (
 )
 
 from wizard.styles import (
+    STYLE_INPUT,
     STYLE_PAGE_CARD,
     set_status,
 )
 from wizard.widgets import WheelSafeComboBox
 
+from meapet.config.defaults import DEFAULT_OPENAI_API_BASE
 from meapet.config.providers import CUSTOM_ID, all_presets, preset_by_id
-
-
-_INPUT_STYLE = (
-    "QLineEdit {"
-    "  background: #1B1D2E;"
-    "  color: #E8EAF0;"
-    "  border: 1px solid #3A3D52;"
-    "  border-radius: 6px;"
-    "  padding: 0px 12px;"
-    "  font-size: 14px;"
-    "}"
-    "QLineEdit:focus {"
-    "  border: 2px solid #7C8AFF;"
-    "}"
-)
 
 # 查询模型列表时使用的 UA。不少网关（Cloudflare 等）会 403 掉无 UA 的请求。
 _MODELS_USER_AGENT = "MeaPet/1.0 (+https://github.com/suan-11/mea-pet-public)"
@@ -129,23 +116,11 @@ class LLMPage(QFrame):
         base_url_label = QLabel("API 地址：")
         base_url_label.setObjectName("FieldLabel")
         conn_layout.addWidget(base_url_label)
-        self.endpoint_input = QLineEdit("https://api.openai.com/v1")
+        self.endpoint_input = QLineEdit(DEFAULT_OPENAI_API_BASE)
         self.endpoint_input.setObjectName("ApiBaseUrl")
         self.endpoint_input.setAccessibleName("API 地址")
-        self.endpoint_input.setPlaceholderText("https://api.openai.com/v1")
-        self.endpoint_input.setStyleSheet(
-            "QLineEdit {"
-            "  background: #1B1D2E;"
-            "  color: #E8EAF0;"
-            "  border: 1px solid #3A3D52;"
-            "  border-radius: 6px;"
-            "  padding: 0px 12px;"
-            "  font-size: 14px;"
-            "}"
-            "QLineEdit:focus {"
-            "  border: 2px solid #7C8AFF;"
-            "}"
-        )
+        self.endpoint_input.setPlaceholderText(DEFAULT_OPENAI_API_BASE)
+        self.endpoint_input.setStyleSheet(STYLE_INPUT)
         conn_layout.addWidget(self.endpoint_input)
 
         # Model ID with fetch button
@@ -207,19 +182,7 @@ class LLMPage(QFrame):
         conn_layout.addWidget(api_key_label)
         self.direct_api_key_input = QLineEdit()
         self.direct_api_key_input.setObjectName("ApiKey")
-        self.direct_api_key_input.setStyleSheet(
-            "QLineEdit {"
-            "  background: #1B1D2E;"
-            "  color: #E8EAF0;"
-            "  border: 1px solid #3A3D52;"
-            "  border-radius: 6px;"
-            "  padding: 0px 12px;"
-            "  font-size: 14px;"
-            "}"
-            "QLineEdit:focus {"
-            "  border: 2px solid #7C8AFF;"
-            "}"
-        )
+        self.direct_api_key_input.setStyleSheet(STYLE_INPUT)
         self.direct_api_key_input.setEchoMode(QLineEdit.Password)
         self.direct_api_key_input.setAccessibleName("API Key")
         self.direct_api_key_input.setAccessibleDescription(
@@ -280,16 +243,6 @@ class LLMPage(QFrame):
         self.advanced_toggle.setCheckable(True)
         self.advanced_toggle.setAccessibleName("展开或收起高级配置")
         self.advanced_toggle.setProperty("doesNotModifyConfig", True)
-        self.advanced_toggle.setStyleSheet(
-            "QPushButton {"
-            "  background: transparent;"
-            "  border: none;"
-            "  color: #9AA0B5;"
-            "  text-align: left;"
-            "  padding: 4px 0px;"
-            "}"
-            "QPushButton:hover { color: #C8CCDC; }"
-        )
         conn_layout.addWidget(self.advanced_toggle)
 
         self.advanced_box = QFrame()
@@ -326,7 +279,7 @@ class LLMPage(QFrame):
         self.proxy_input.setObjectName("ProxyUrl")
         self.proxy_input.setAccessibleName("HTTP 代理地址")
         self.proxy_input.setPlaceholderText("如 http://127.0.0.1:7890，留空则不使用代理")
-        self.proxy_input.setStyleSheet(_INPUT_STYLE)
+        self.proxy_input.setStyleSheet(STYLE_INPUT)
         adv.addWidget(self.proxy_input)
         proxy_hint = QLabel("仅对该模型接口的请求生效，不影响其它网络访问。")
         proxy_hint.setObjectName("HelperText")
@@ -341,7 +294,7 @@ class LLMPage(QFrame):
         self.headers_input.setObjectName("CustomHeaders")
         self.headers_input.setAccessibleName("自定义请求头")
         self.headers_input.setPlaceholderText("每条一个，形如 X-Title: MeaPet，多条用 ; 分隔")
-        self.headers_input.setStyleSheet(_INPUT_STYLE)
+        self.headers_input.setStyleSheet(STYLE_INPUT)
         adv.addWidget(self.headers_input)
         headers_hint = QLabel(
             "部分网关要求附加请求头。鉴权相关的头由程序按协议自动设置，"
@@ -819,4 +772,3 @@ class LLMPage(QFrame):
         self.api_key_visibility.setAccessibleName(
             "隐藏 API Key" if visible else "显示 API Key"
         )
-

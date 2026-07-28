@@ -14,6 +14,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence, TextIO
 
+from meapet.dependencies import (
+    CRYPTOGRAPHY_REQUIREMENT,
+    HTTPX_REQUIREMENT,
+    JIEBA_REQUIREMENT,
+    MCP_REQUIREMENT,
+    PILLOW_REQUIREMENT,
+    PYOPENGL_REQUIREMENT,
+    PYQT_REQUIREMENT,
+    REQUESTS_REQUIREMENT,
+    TRANSLATORS_REQUIREMENT,
+    UVICORN_REQUIREMENT,
+    WEBSOCKETS_REQUIREMENT,
+)
+
 
 @dataclass(frozen=True)
 class RuntimeDependency:
@@ -25,17 +39,17 @@ class RuntimeDependency:
 
 
 _BASE_DEPENDENCIES = (
-    RuntimeDependency("PyQt5", "PyQt5>=5.15.9", "桌面界面"),
-    RuntimeDependency("PIL", "Pillow>=10.0", "PNG 渲染与截图"),
-    RuntimeDependency("requests", "requests>=2.28", "兼容网络服务"),
-    RuntimeDependency("httpx", "httpx>=0.27.0", "异步模型请求"),
-    RuntimeDependency("jieba", "jieba>=0.42", "中文记忆分词"),
+    RuntimeDependency("PyQt5", PYQT_REQUIREMENT, "桌面界面"),
+    RuntimeDependency("PIL", PILLOW_REQUIREMENT, "PNG 渲染与截图"),
+    RuntimeDependency("requests", REQUESTS_REQUIREMENT, "兼容网络服务"),
+    RuntimeDependency("httpx", HTTPX_REQUIREMENT, "异步模型请求"),
+    RuntimeDependency("jieba", JIEBA_REQUIREMENT, "中文记忆分词"),
 )
 
 _AGENT_DEPENDENCIES = (
     RuntimeDependency(
         "websockets",
-        "websockets>=13,<16",
+        WEBSOCKETS_REQUIREMENT,
         "Hermes/OpenClaw Agent",
     ),
 )
@@ -43,24 +57,24 @@ _AGENT_DEPENDENCIES = (
 _OPENCLAW_DEPENDENCIES = (
     RuntimeDependency(
         "cryptography",
-        "cryptography>=42",
+        CRYPTOGRAPHY_REQUIREMENT,
         "OpenClaw 设备身份签名",
     ),
 )
 
 _CONTROL_DEPENDENCIES = (
-    RuntimeDependency("mcp", "mcp>=1.27,<2", "Companion MCP 服务"),
-    RuntimeDependency("uvicorn", "uvicorn>=0.30", "Companion MCP 服务"),
+    RuntimeDependency("mcp", MCP_REQUIREMENT, "Companion MCP 服务"),
+    RuntimeDependency("uvicorn", UVICORN_REQUIREMENT, "Companion MCP 服务"),
 )
 
 # Windows 启动器负责把完整源码运行环境补齐。以下组件具有安全回退路径，
 # 所以手动运行 pet.py 时不应仅因它们缺失就阻断 PNG/非翻译场景。
 _OPTIONAL_SOURCE_DEPENDENCIES = (
     RuntimeDependency("numpy", "numpy", "本地语音与模型支持"),
-    RuntimeDependency("OpenGL", "PyOpenGL>=3.1.0", "Live2D 渲染"),
+    RuntimeDependency("OpenGL", PYOPENGL_REQUIREMENT, "Live2D 渲染"),
     RuntimeDependency(
         "translators",
-        "translators>=6.0.4,<7",
+        TRANSLATORS_REQUIREMENT,
         "语音翻译",
     ),
 )

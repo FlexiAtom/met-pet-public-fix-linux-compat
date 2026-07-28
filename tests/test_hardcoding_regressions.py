@@ -136,9 +136,13 @@ def test_gsv_runtime_discovery_has_no_developer_machine_or_dated_paths(
 
 def test_runtime_dependency_specs_have_one_python_source_of_truth():
     from meapet.bootstrap import all_runtime_dependencies
+    from meapet.control import mcp_server
+    from meapet.control import transport as control_transport
     from meapet.dependencies import (
         CRYPTOGRAPHY_REQUIREMENT,
+        MCP_REQUIREMENT,
         PYQT_REQUIREMENT,
+        UVICORN_REQUIREMENT,
         WEBSOCKETS_REQUIREMENT,
     )
     from wizard.agent_setup_help import _AGENT_DEPENDENCY_SPECS
@@ -160,6 +164,9 @@ def test_runtime_dependency_specs_have_one_python_source_of_truth():
     assert PYQT_REQUIREMENT in (
         ROOT / "linux_requirements.txt"
     ).read_text(encoding="utf-8")
+    assert MCP_REQUIREMENT not in inspect.getsource(mcp_server)
+    assert MCP_REQUIREMENT not in inspect.getsource(control_transport)
+    assert UVICORN_REQUIREMENT not in inspect.getsource(control_transport)
 
 
 def test_agent_numeric_defaults_have_one_python_source_of_truth():
@@ -193,6 +200,15 @@ def test_agent_numeric_defaults_have_one_python_source_of_truth():
     assert 'agent.get("history_turns", 5)' not in backend_source
     assert "setValue(8765)" not in backend_source
     assert 'control.get("port", 8765)' not in backend_source
+
+    control_consumers = (
+        ROOT / "meapet" / "control" / "transport.py",
+        ROOT / "meapet" / "desktop" / "control_bridge.py",
+    )
+    for path in control_consumers:
+        assert "8765" not in path.read_text(
+            encoding="utf-8",
+        ), path.relative_to(ROOT)
 
 
 def test_llm_page_does_not_embed_a_second_legacy_palette():

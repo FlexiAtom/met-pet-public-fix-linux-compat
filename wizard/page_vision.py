@@ -18,6 +18,12 @@ from wizard.styles import (
     set_status,
 )
 from wizard.widgets import WheelSafeComboBox
+from meapet.config.defaults import (
+    DEFAULT_MIMO_API_BASE,
+    DEFAULT_OLLAMA_HOST,
+    DEFAULT_OLLAMA_VISION_MODEL,
+    DEFAULT_WATCHER_INTERVAL,
+)
 
 # 兼容页面内可能使用的短名
 class VisionPage(QFrame):
@@ -128,7 +134,7 @@ class VisionPage(QFrame):
         self.advanced_layout.addWidget(self.host_label)
         self.host_input = QLineEdit()
         self.host_input.setObjectName("VisionOllamaHost")
-        self.host_input.setPlaceholderText("http://127.0.0.1:11434")
+        self.host_input.setPlaceholderText(DEFAULT_OLLAMA_HOST)
         self.host_input.setStyleSheet(STYLE_INPUT)
         self.host_input.setAccessibleName("识图 Ollama 地址")
         self.advanced_layout.addWidget(self.host_input)
@@ -151,7 +157,7 @@ class VisionPage(QFrame):
         cloud_base_label = QLabel("API Base：")
         cloud_base_label.setObjectName("FieldLabel")
         cloud_l.addWidget(cloud_base_label)
-        self.api_base_input = QLineEdit("https://api.xiaomimimo.com/v1")
+        self.api_base_input = QLineEdit(DEFAULT_MIMO_API_BASE)
         self.api_base_input.setObjectName("VisionCloudApiBase")
         self.api_base_input.setStyleSheet(STYLE_INPUT)
         self.api_base_input.setAccessibleName("云端识图 API 地址")
@@ -274,7 +280,8 @@ class VisionPage(QFrame):
             set_status(
                 self.hint,
                 "muted",
-                "本地 Ollama 需已拉取视觉模型，例如：ollama pull qwen3.5:4b",
+                "本地 Ollama 需已拉取视觉模型，例如："
+                f"ollama pull {DEFAULT_OLLAMA_VISION_MODEL}",
             )
         else:
             set_status(
@@ -328,8 +335,14 @@ class VisionPage(QFrame):
 
         # interval: prefer watcher.interval, else top-level later
         interval = watcher_cfg.get("interval") or {}
-        min_ms = interval.get("min_ms", 180000)
-        max_ms = interval.get("max_ms", 360000)
+        min_ms = interval.get(
+            "min_ms",
+            DEFAULT_WATCHER_INTERVAL["min_ms"],
+        )
+        max_ms = interval.get(
+            "max_ms",
+            DEFAULT_WATCHER_INTERVAL["max_ms"],
+        )
         try:
             self.min_min_input.setText(str(max(1, int(min_ms) // 60000)))
             self.max_min_input.setText(str(max(1, int(max_ms) // 60000)))
@@ -377,7 +390,10 @@ class VisionPage(QFrame):
         }
         if backend == "mimo":
             # 云端时 model 用占位 mimo，实际请求用 llm/vision 的多模态模型名
-            if not vision["model"] or vision["model"] in ("qwen3.5:4b",):
+            if (
+                not vision["model"]
+                or vision["model"] == DEFAULT_OLLAMA_VISION_MODEL
+            ):
                 vision["model"] = "mimo"
             same_provider = (llm_backend or "").lower() == "mimo"
             if not vision["api_key"] and same_provider:
@@ -389,11 +405,11 @@ class VisionPage(QFrame):
                     else ""
                 )
                 vision["api_base"] = (
-                    inherited_base or "https://api.xiaomimimo.com/v1"
+                    inherited_base or DEFAULT_MIMO_API_BASE
                 )
         elif backend == "ollama":
             if vision["model"] in ("mimo", ""):
-                vision["model"] = "qwen3.5:4b"
+                vision["model"] = DEFAULT_OLLAMA_VISION_MODEL
             # 切到本地 ollama 时清空云端 api_base，防止残留默认 MiMo 地址
             # 让 ScreenWatcher 误 POST 截图到云端
             vision["api_base"] = ""

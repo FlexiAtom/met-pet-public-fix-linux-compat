@@ -18,6 +18,13 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from meapet.config.defaults import (
+    DEFAULT_AGENT_HISTORY_TURNS,
+    DEFAULT_CONTROL_PORT,
+    DEFAULT_HERMES_WS_URL,
+    DEFAULT_OPENAI_API_BASE,
+    DEFAULT_OPENCLAW_WS_URL,
+)
 from meapet.ui_theme import MIN_TARGET_SIZE
 from wizard.styles import STYLE_INPUT, STYLE_PAGE_CARD, field_label
 from wizard.agent_setup_help import AgentSetupHelpDialog
@@ -120,9 +127,9 @@ class BackendPage(QFrame):
         help_row.addWidget(self.agent_setup_help_hint, 1)
         agent_layout.addLayout(help_row)
 
-        self.agent_base_url = QLineEdit("ws://127.0.0.1:9119/api/ws")
+        self.agent_base_url = QLineEdit(DEFAULT_HERMES_WS_URL)
         self.agent_base_url.setStyleSheet(STYLE_INPUT)
-        self.agent_base_url.setPlaceholderText("ws://127.0.0.1:9119/api/ws")
+        self.agent_base_url.setPlaceholderText(DEFAULT_HERMES_WS_URL)
         _field(
             agent_layout,
             "Agent WebSocket 地址：",
@@ -173,7 +180,7 @@ class BackendPage(QFrame):
         history_row.addWidget(field_label("发送最近对话轮数：", inline=True))
         self.agent_history_turns = QSpinBox()
         self.agent_history_turns.setRange(0, 100)
-        self.agent_history_turns.setValue(5)
+        self.agent_history_turns.setValue(DEFAULT_AGENT_HISTORY_TURNS)
         self.agent_history_turns.setAccessibleName("Agent 最近对话轮数")
         self.agent_history_turns.setMinimumHeight(MIN_TARGET_SIZE)
         history_row.addWidget(self.agent_history_turns)
@@ -248,7 +255,7 @@ class BackendPage(QFrame):
         port_row.addWidget(field_label("监听端口：", inline=True))
         self.control_port = QSpinBox()
         self.control_port.setRange(1, 65535)
-        self.control_port.setValue(8765)
+        self.control_port.setValue(DEFAULT_CONTROL_PORT)
         self.control_port.setAccessibleName("Companion MCP 监听端口")
         self.control_port.setMinimumHeight(MIN_TARGET_SIZE)
         port_row.addWidget(self.control_port)
@@ -386,12 +393,12 @@ class BackendPage(QFrame):
         )
         current = self.agent_base_url.text().strip()
         defaults = {
-            "hermes": "ws://127.0.0.1:9119/api/ws",
-            "openclaw": "ws://127.0.0.1:18789",
+            "hermes": DEFAULT_HERMES_WS_URL,
+            "openclaw": DEFAULT_OPENCLAW_WS_URL,
         }
         legacy_defaults = {
             "http://127.0.0.1:8642",
-            "https://api.openai.com/v1",
+            DEFAULT_OPENAI_API_BASE,
         }
         if not current or current in defaults.values() or current in legacy_defaults:
             self.agent_base_url.setText(defaults[kind])
@@ -437,8 +444,8 @@ class BackendPage(QFrame):
         self.direct_radio.setChecked(mode != "agent")
         self.set_agent_kind(agent.get("kind", "hermes"))
         default_url = {
-            "hermes": "ws://127.0.0.1:9119/api/ws",
-            "openclaw": "ws://127.0.0.1:18789",
+            "hermes": DEFAULT_HERMES_WS_URL,
+            "openclaw": DEFAULT_OPENCLAW_WS_URL,
         }[self.agent_kind.currentData() or "hermes"]
         self.agent_base_url.setText(
             str(agent.get("base_url") or default_url)
@@ -447,9 +454,16 @@ class BackendPage(QFrame):
         self.agent_session_id.setText(str(agent.get("session_id") or ""))
         self.agent_session_key.setText(str(agent.get("session_key") or ""))
         try:
-            self.agent_history_turns.setValue(int(agent.get("history_turns", 5)))
+            self.agent_history_turns.setValue(
+                int(
+                    agent.get(
+                        "history_turns",
+                        DEFAULT_AGENT_HISTORY_TURNS,
+                    )
+                )
+            )
         except (TypeError, ValueError):
-            self.agent_history_turns.setValue(5)
+            self.agent_history_turns.setValue(DEFAULT_AGENT_HISTORY_TURNS)
         self.agent_allow_insecure_ws.setChecked(
             bool(agent.get("allow_insecure_ws", False))
         )
@@ -472,9 +486,11 @@ class BackendPage(QFrame):
             str(control.get("allowed_agent_ip") or "127.0.0.1")
         )
         try:
-            self.control_port.setValue(int(control.get("port", 8765)))
+            self.control_port.setValue(
+                int(control.get("port", DEFAULT_CONTROL_PORT))
+            )
         except (TypeError, ValueError):
-            self.control_port.setValue(8765)
+            self.control_port.setValue(DEFAULT_CONTROL_PORT)
         self.control_auth_token.setText(str(control.get("auth_token") or ""))
         self.control_allow_http.setChecked(
             bool(control.get("allow_insecure_http", False))

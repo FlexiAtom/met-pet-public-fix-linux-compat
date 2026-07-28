@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+
+from meapet.config.defaults import DEFAULT_MIMO_TTS_CLONE_MODEL
 from meapet.paths import project_path
 from meapet.log import get_color_logger
 
@@ -84,7 +86,7 @@ class TtsMimoMixin:
             if not uri:
                 return None, ""
             voice_field = uri
-            model_name = "mimo-v2.5-tts-voiceclone"
+            model_name = DEFAULT_MIMO_TTS_CLONE_MODEL
 
         payload = {
             "model": model_name,

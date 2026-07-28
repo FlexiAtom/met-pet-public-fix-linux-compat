@@ -29,6 +29,7 @@ from PyQt5.QtCore import (
     QPropertyAnimation,
     QRect,
     QRectF,
+    QSize,
     Qt,
     QTimer,
     pyqtProperty,
@@ -36,6 +37,7 @@ from PyQt5.QtCore import (
 )
 
 from meapet.desktop.theme import DIALOG_STYLE, DIALOGUE_STYLE
+from meapet.desktop.screen_geometry import resize_dialog_to_content
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
     PALETTE,
@@ -872,7 +874,6 @@ class SizeScaleDialog(QDialog):
         self.setWindowTitle("调节窗口大小")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(360, 200)
         self.setAccessibleName("调节窗口大小")
         set_scaled_stylesheet(self, DIALOG_STYLE)
 
@@ -932,6 +933,7 @@ class SizeScaleDialog(QDialog):
         outer.setContentsMargins(10, 10, 10, 10)
         outer.addWidget(container)
         self.setLayout(outer)
+        resize_dialog_to_content(self, QSize(360, 200))
 
     def _on_slider(self, value: int):
         self._factor = value / 100.0

@@ -10,6 +10,11 @@ import socket  # noqa: F401  # 必须在 PyQt 之前导入（避免 QtNetwork ho
 import threading
 from typing import TYPE_CHECKING, Dict, List, Tuple
 
+from meapet.config.defaults import (
+    DEFAULT_DIRECT_MODEL,
+    DEFAULT_MIMO_API_BASE,
+    DEFAULT_OLLAMA_HOST,
+)
 from meapet.log import get_color_logger
 from meapet.utils import debug_enabled, redact_mapping, redact_text
 
@@ -79,13 +84,12 @@ class ChatEngine:
         self,
         backend: str = "custom",
         protocol: str = "",
-        host: str = "http://127.0.0.1:11434",       # 兼容旧配置，实际优先使用 api_base
-        model: str = "gpt-4o-mini",
+        host: str = DEFAULT_OLLAMA_HOST,  # 兼容旧配置，实际优先使用 api_base
+        model: str = DEFAULT_DIRECT_MODEL,
         api_key: str = "",
         api_base: str = "",
         temperature: float = 0.7,
         memory: "MeaMemory" = None,
-        bridge_url: str = "http://127.0.0.1:18888",
         max_tokens: int = 4096,
         direct_client=None,
         extra_headers: dict | None = None,
@@ -122,7 +126,6 @@ class ChatEngine:
             self.max_tokens = max(1, int(max_tokens))
         except (TypeError, ValueError):
             self.max_tokens = 4096
-        self.bridge_url = bridge_url.rstrip("/")
         self.memory = memory
 
         raw_backend = str(backend or "custom").strip().lower() or "custom"
@@ -175,7 +178,9 @@ class ChatEngine:
             return
         try:
             from meapet.async_runtime import run as _arun
-            base = (self.api_base or self.host or "http://127.0.0.1:11434").rstrip("/")
+            base = (
+                self.api_base or self.host or DEFAULT_OLLAMA_HOST
+            ).rstrip("/")
             # Ollama tags 在 host 根，不在 /v1
             if base.endswith("/v1"):
                 base = base[:-3].rstrip("/")
@@ -187,7 +192,9 @@ class ChatEngine:
 
     def _direct_base_url(self) -> str:
         # 优先使用 api_base，其次 host
-        base = (self.api_base or self.host or "http://127.0.0.1:11434").rstrip("/")
+        base = (
+            self.api_base or self.host or DEFAULT_OLLAMA_HOST
+        ).rstrip("/")
         return base
 
     def _get_direct_adapter(self):
@@ -636,7 +643,9 @@ class ChatEngine:
         import time as _time
         msgs = messages if messages is not None else self.history
         t0 = _time.time()
-        base_url = (self.api_base or self.host or "http://127.0.0.1:11434").rstrip("/")
+        base_url = (
+            self.api_base or self.host or DEFAULT_OLLAMA_HOST
+        ).rstrip("/")
         url = f"{base_url}/chat/completions"
         headers = {
             "Content-Type": "application/json",
@@ -780,14 +789,16 @@ class ChatEngine:
         """MiMo OpenAI 兼容请求（content 为空时从 reasoning 弱兜底）。"""
         return await self._chat_openai_compatible_async(
             messages,
-            default_base="https://api.xiaomimimo.com/v1",
+            default_base=DEFAULT_MIMO_API_BASE,
             label="MiMo",
         )
 
     async def _chat_ollama_async(self, messages: List[Dict[str, str]] = None) -> str:
         """Ollama 原生 /api/chat 请求（本地默认无鉴权）。"""
         msgs = messages if messages is not None else self.history
-        host = (getattr(self, "host", "") or "http://127.0.0.1:11434").rstrip("/")
+        host = (
+            getattr(self, "host", "") or DEFAULT_OLLAMA_HOST
+        ).rstrip("/")
         url = f"{host}/api/chat"
         body = {
             "model": self.model,
@@ -937,7 +948,9 @@ class ChatEngine:
         from meapet.async_runtime import run as _arun
         from meapet.http_async import post_json
 
-        base_url = (self.api_base or self.host or "http://127.0.0.1:11434").rstrip("/")
+        base_url = (
+            self.api_base or self.host or DEFAULT_OLLAMA_HOST
+        ).rstrip("/")
         url = f"{base_url}/chat/completions"
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -1027,9 +1040,17 @@ def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatE
     )
     api_key = resolve_direct_api_key(llm_cfg)
 
-    model = direct.get("model") or llm_cfg.get("model") or "gpt-4o-mini"
+    model = (
+        direct.get("model")
+        or llm_cfg.get("model")
+        or DEFAULT_DIRECT_MODEL
+    )
     api_base = direct.get("api_base") or llm_cfg.get("api_base") or ""
-    host = direct.get("host") or llm_cfg.get("host") or "http://127.0.0.1:11434"
+    host = (
+        direct.get("host")
+        or llm_cfg.get("host")
+        or DEFAULT_OLLAMA_HOST
+    )
     protocol = str(direct.get("protocol") or "").strip().lower()
     if not protocol:
         protocol = infer_direct_protocol(
@@ -1052,7 +1073,6 @@ def create_engine_from_config(config: dict, memory: "MeaMemory" = None) -> ChatE
         api_base=api_base,
         temperature=direct.get("temperature", llm_cfg.get("temperature", 0.7)),
         memory=memory,
-        bridge_url=llm_cfg.get("bridge_url", "http://127.0.0.1:18888"),
         max_tokens=direct.get("max_tokens", llm_cfg.get("max_tokens", 4096)),
         extra_headers=(
             direct.get("headers") if isinstance(direct.get("headers"), dict) else {}
@@ -1073,4 +1093,3 @@ if __name__ == "__main__":
         reply, mood = engine.chat(msg)
         _safe_print(f"\n你: {msg}")
         _safe_print(f"梅尔 [{mood}]: {reply}")
-

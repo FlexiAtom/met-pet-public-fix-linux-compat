@@ -17,6 +17,11 @@ from meapet.desktop.dialogs import (
     confirm_cloud_capture_scope,
     confirm_cloud_vision,
 )
+from meapet.config.defaults import (
+    DEFAULT_OLLAMA_HOST,
+    DEFAULT_WATCHER_INTERVAL,
+    bubble_duration_ms,
+)
 from meapet.config.store import (
     resolve_vision_api_base,
     resolve_vision_backend,
@@ -38,9 +43,18 @@ def _log_private_text(label: str, text: str) -> None:
 class PetWatcherMixin:
     def _start_watcher_timer(self):
         """随机间隔，从配置读取范围"""
-        interval = (self.config.get("watcher") or {}).get("interval", {"min_ms": 60000, "max_ms": 600000})
-        min_ms = interval.get("min_ms", 60000)
-        max_ms = interval.get("max_ms", 600000)
+        interval = (
+            (self.config.get("watcher") or {}).get("interval")
+            or DEFAULT_WATCHER_INTERVAL
+        )
+        min_ms = interval.get(
+            "min_ms",
+            DEFAULT_WATCHER_INTERVAL["min_ms"],
+        )
+        max_ms = interval.get(
+            "max_ms",
+            DEFAULT_WATCHER_INTERVAL["max_ms"],
+        )
         if min_ms > max_ms:
             min_ms, max_ms = max_ms, min_ms  # 保证最小值不大于最大值
         ms = random.randint(min_ms, max_ms)
@@ -86,7 +100,7 @@ class PetWatcherMixin:
                 or llm_cfg.get("api_base")
                 or direct.get("host")
                 or llm_cfg.get("host")
-                or "http://127.0.0.1:11434"
+                or DEFAULT_OLLAMA_HOST
             ).strip()
         backend = resolve_vision_backend(vision_cfg, llm_cfg)
         if backend == "ollama":
@@ -105,7 +119,10 @@ class PetWatcherMixin:
 
         if not cloud_vision_allowed(self.config, True):
             log.info("[watcher] cloud vision disabled (allow_cloud=false)")
-            self._show_bubble(status_language.cloud_vision_disabled(), 4000)
+            self._show_bubble(
+                status_language.cloud_vision_disabled(),
+                bubble_duration_ms(self.config, "default"),
+            )
             return False
 
         approval = confirm_cloud_capture_scope(
@@ -114,7 +131,10 @@ class PetWatcherMixin:
         )
         if approval is None:
             log.info("[watcher] user denied cloud screenshot upload")
-            self._show_bubble(status_language.watching_denied(), 2500)
+            self._show_bubble(
+                status_language.watching_denied(),
+                bubble_duration_ms(self.config, "interaction"),
+            )
             return False
         watcher = getattr(self, "_watcher", None)
         if watcher is not None:
@@ -134,7 +154,7 @@ class PetWatcherMixin:
             log.warning(f"[watcher] vision route unavailable: {route.reason}")
             self._show_bubble(
                 status_language.vision_mode_unavailable(route.reason),
-                5000,
+                bubble_duration_ms(self.config, "default"),
             )
             if hasattr(self, "_watcher_timer"):
                 self._start_watcher_timer()
@@ -191,9 +211,13 @@ class PetWatcherMixin:
             ),
         )
         if self._is_cloud_vision():
-            self._show_bubble("（已确认）梅尔酱偷看并上传识别中…", 30000)
+            status = status_language.watcher_uploading_cloud()
         else:
-            self._show_bubble("梅尔酱偷看了一眼……", 30000)
+            status = status_language.watcher_uploading_local()
+        self._show_bubble(
+            status,
+            bubble_duration_ms(self.config, "thinking"),
+        )
         self._position_bubble()
         self._watcher.start()
 
@@ -290,21 +314,31 @@ class PetWatcherMixin:
         if hasattr(self, '_pending_reply'):
             reply, mood = self._pending_reply
             del self._pending_reply
-            self.show_reply(reply, mood, duration_ms=5000)
+            self.show_reply(
+                reply,
+                mood,
+                duration_ms=bubble_duration_ms(self.config, "default"),
+            )
         self._start_watcher_timer()
 
     def _on_watch_error(self, err: str):
         _log_private_text("[watch] 识图错误", err)
         # 显示简短提示，不打扰主人
         set_awaiting_reply_state(self, False)
-        self._show_bubble(f"唔…看不清喵 ({err[:30]})", self.config["bubble_duration_ms"]["default"])
+        self._show_bubble(
+            status_language.vision_failed(err),
+            bubble_duration_ms(self.config, "default"),
+        )
 
         self._start_watcher_timer()
 
     def _on_watch_silent(self):
         """视觉模型评估后决定不说话——安静恢复"""
         set_awaiting_reply_state(self, False)
-        self._show_bubble("😼 没什么好说的喵…", self.config["bubble_duration_ms"]["default"])
+        self._show_bubble(
+            status_language.watcher_silent(),
+            bubble_duration_ms(self.config, "default"),
+        )
 
         self._start_watcher_timer()
 
@@ -343,7 +377,10 @@ class PetWatcherMixin:
                     accept_text="允许并开启",
                 )
                 if not allowed:
-                    self._show_bubble("未开启屏幕观察喵", 2500)
+                    self._show_bubble(
+                        status_language.watcher_not_enabled(),
+                        bubble_duration_ms(self.config, "interaction"),
+                    )
                     return
                 w["allow_cloud"] = True
                 w["require_confirm"] = True
@@ -362,7 +399,10 @@ class PetWatcherMixin:
                     accept_text="继续开启",
                 )
                 if not allowed:
-                    self._show_bubble("未开启屏幕观察喵", 2500)
+                    self._show_bubble(
+                        status_language.watcher_not_enabled(),
+                        bubble_duration_ms(self.config, "interaction"),
+                    )
                     return
 
         w["enabled"] = turning_on
@@ -375,12 +415,18 @@ class PetWatcherMixin:
 
         if w["enabled"]:
             if self._is_cloud_vision():
-                self._show_bubble(status_language.watcher_enabled_cloud(), 3500)
+                status = status_language.watcher_enabled_cloud()
             else:
-                self._show_bubble(status_language.watcher_enabled_local(), 2500)
+                status = status_language.watcher_enabled_local()
+            self._show_bubble(
+                status,
+                bubble_duration_ms(self.config, "interaction"),
+            )
             self._start_watcher_timer()
         else:
             if hasattr(self, "_watcher_timer") and self._watcher_timer:
                 self._watcher_timer.stop()
-            self._show_bubble("屏幕观察已关闭喵", 2500)
-
+            self._show_bubble(
+                status_language.watcher_disabled(),
+                bubble_duration_ms(self.config, "interaction"),
+            )

@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
 )
 
 from meapet.desktop.capture_selection import select_screen_region
+from meapet.desktop.screen_geometry import resize_dialog_to_content
 from meapet.desktop.theme import CONSENT_DIALOG_STYLE
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
@@ -113,7 +114,6 @@ class CloudVisionConsentDialog(QDialog):
         )
         self.setWindowModality(Qt.ApplicationModal)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(420, 270)
         set_scaled_stylesheet(self, CONSENT_DIALOG_STYLE)
         self.setAccessibleName("云端识图隐私确认")
         self.setAccessibleDescription(
@@ -182,6 +182,7 @@ class CloudVisionConsentDialog(QDialog):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
         self._update_countdown()
+        resize_dialog_to_content(self, QSize(420, 270))
 
     def _update_countdown(self) -> None:
         self.countdown_label.setText(
@@ -294,7 +295,6 @@ class CaptureScopeConsentDialog(QDialog):
         )
         self.setWindowModality(Qt.ApplicationModal)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedWidth(440)
         set_scaled_stylesheet(self, CONSENT_DIALOG_STYLE)
         self.setAccessibleName(accessible_name)
         self.setAccessibleDescription(
@@ -665,18 +665,9 @@ class CaptureScopeConsentDialog(QDialog):
         self._outer_layout.invalidate()
         self._outer_layout.activate()
         self.updateGeometry()
-        # 不能再用“紧凑高度 ± 子面板高度”推算：Windows 在字体缩放后
-        # 可能给 QDialog 一个更高的真实 sizeHint。低于该值调用 resize()
-        # 会触发 QWindowsWindow::setGeometry 警告，并被原生窗口强制改高。
-        preferred_height = self.sizeHint().height()
-        layout_height = self._outer_layout.totalSizeHint().height()
-        target_height = max(
-            preferred_height,
-            layout_height,
-            self.minimumHeight(),
-            self.minimumSizeHint().height(),
-        )
-        self.resize(self.width(), target_height)
+        # 宽高都跟随字体与可见字段；同时夹进任务栏之外的屏幕区域，避免
+        # Windows 因固定 track size 拒绝 setGeometry。
+        resize_dialog_to_content(self, QSize(440, 1))
 
     def _update_countdown(self) -> None:
         if self._countdown_disabled:
