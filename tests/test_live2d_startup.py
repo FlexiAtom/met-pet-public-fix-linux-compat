@@ -2,35 +2,40 @@
 
 from __future__ import annotations
 
-import inspect
+# ════════════════════════════════════════════════════════════════════
+# 最顶部：在导入任何 meapet 模块之前，确保 live2d 可用
+# ════════════════════════════════════════════════════════════════════
 import os
 import sys
-import tempfile
-import unittest
-from pathlib import Path
-from types import ModuleType, SimpleNamespace
-from unittest import mock
+from types import ModuleType
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# ── live2d 可用性检测与假模块注入 ──────────────────────────────────
-# live2d_widget.py 在模块级别引用 live2d.LAppModel（类型注解求值），
-# 如果 live2d 不可用，需要在导入 live2d_widget 之前注入一个假模块，
-# 否则整个模块导入会失败，导致所有测试都无法加载。
 try:
     import live2d  # noqa: F401
     HAVE_LIVE2D = True
 except ImportError:
     HAVE_LIVE2D = False
-    # 创建假 live2d 模块，使 live2d_widget.py 能正常导入
-    _fake = ModuleType("live2d")
-    _fake.LAppModel = type("LAppModel", (), {})  # 空类占位
-    _fake.LAppLive2DManager = type("LAppLive2DManager", (), {})
-    sys.modules["live2d"] = _fake
-    # 如果 live2d.v3 也被引用，同样提供
-    _fake_v3 = ModuleType("live2d.v3")
-    _fake_v3.LAppModel = _fake.LAppModel
-    sys.modules["live2d.v3"] = _fake_v3
+    # 构造一个完整的假 live2d 模块树，使 live2d_widget.py 中的
+    # `import live2d.v3 as live2d` 能成功
+    _v3 = ModuleType("live2d.v3")
+    _v3.LAppModel = type("LAppModel", (), {})
+    _v3.LAppLive2DManager = type("LAppLive2DManager", (), {})
+    _v3.CubismFramework = type("CubismFramework", (), {})
+    sys.modules["live2d.v3"] = _v3
+
+    _top = ModuleType("live2d")
+    _top.v3 = _v3
+    _top.LAppModel = _v3.LAppModel
+    sys.modules["live2d"] = _top
+
+# 现在安全地导入 Qt 和 meapet 模块
+import inspect
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from PyQt5.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PyQt5.QtGui import QColor, QMouseEvent, QPixmap, QRegion  # noqa: E402
@@ -83,6 +88,7 @@ class _Live2DModelStub:
         type(self).created += 1
         self.widget = None
         self._model_dir = _model_dir
+        self.model = None
 
     def create_widget(self, parent=None):
         self.widget = _Live2DWidgetStub(parent)
@@ -92,7 +98,7 @@ class _Live2DModelStub:
         return (525, 735)
 
     def get_model(self):
-        return None
+        return self.model
 
 
 class _InteractiveLive2DModelStub:
@@ -137,7 +143,7 @@ class _RenderHost(PetRenderHostMixin, QWidget):
         }
         self.hit_region_updates = 0
         self.placements = 0
-        self._l2d_model = None  # 供 _size_factor_preview 调试打印使用
+        self._l2d_model = None  # 供 _size_factor_preview 调试输出使用
 
     def init_renderer(self) -> None:
         self._init_renderer()
