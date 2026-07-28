@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import QPoint, QRect, QSize
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QWIDGETSIZE_MAX
 
 # 与屏幕可用区域边缘保持的最小空隙，避免窗口贴边或压住任务栏圆角。
 POPUP_SCREEN_MARGIN = 8
@@ -242,6 +242,71 @@ def widget_size(widget) -> QSize:
                 width = max(width, suggested.width())
                 height = max(height, suggested.height())
     return QSize(max(1, width), max(1, height))
+
+
+def resize_dialog_to_content(
+    dialog,
+    preferred: QSize,
+    *,
+    reference=None,
+    margin: int = POPUP_SCREEN_MARGIN,
+) -> QSize:
+    """按布局提示调整弹窗，并限制在当前屏幕可用区域内。
+
+    ``setFixedSize`` 会在字体放大后把文字和按钮裁掉，也会让 Windows 原生
+    窗口管理器拒绝 Qt 请求的几何尺寸。本函数先解除固定约束，再取
+    ``sizeHint`` / ``minimumSizeHint`` / 设计基准三者的最大值，最后按任务栏
+    之外的可用区域收敛。返回实际请求的尺寸，便于调用方二次定位。
+    """
+    dialog.setMinimumSize(0, 0)
+    dialog.setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX)
+
+    layout = dialog.layout()
+    if layout is not None:
+        layout.invalidate()
+        layout.activate()
+    dialog.updateGeometry()
+
+    def desired_size() -> QSize:
+        hint = dialog.sizeHint()
+        minimum_hint = dialog.minimumSizeHint()
+        return QSize(
+            max(
+                int(preferred.width()),
+                int(hint.width()),
+                int(minimum_hint.width()),
+                int(dialog.minimumWidth()),
+            ),
+            max(
+                int(preferred.height()),
+                int(hint.height()),
+                int(minimum_hint.height()),
+                int(dialog.minimumHeight()),
+            ),
+        )
+
+    desired = desired_size()
+    area = available_geometry_for(
+        reference if reference is not None else dialog.parentWidget()
+    )
+    if area is not None and not area.isEmpty():
+        safe = _safe_area(area, margin)
+        desired.setWidth(min(desired.width(), safe.width()))
+        desired.setHeight(min(desired.height(), safe.height()))
+
+    dialog.resize(desired.width(), desired.height())
+
+    # Word-wrap 的高度提示依赖最终宽度；用新宽度激活一次布局后再校正高度。
+    if layout is not None:
+        layout.invalidate()
+        layout.activate()
+    second_pass = desired_size()
+    second_pass.setWidth(desired.width())
+    if area is not None and not area.isEmpty():
+        safe = _safe_area(area, margin)
+        second_pass.setHeight(min(second_pass.height(), safe.height()))
+    dialog.resize(second_pass.width(), second_pass.height())
+    return QSize(second_pass)
 
 
 def move_within_screen(

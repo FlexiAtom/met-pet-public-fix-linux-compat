@@ -101,7 +101,6 @@
     "reduced_motion": false
   },
   "character": {
-    "name": "梅尔",
     "default_outfit": "01",
     "default_direction": "A"
   },

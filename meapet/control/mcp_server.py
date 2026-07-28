@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from meapet.dependencies import MCP_REQUIREMENT
+
 from .broker import CompanionControlBroker
 
 
@@ -17,7 +19,7 @@ def build_companion_mcp(
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:  # pragma: no cover - 由可选依赖环境触发
         raise RuntimeError(
-            "Companion MCP 需要安装 mcp>=1.27,<2"
+            f"Companion MCP 需要安装 {MCP_REQUIREMENT}"
         ) from exc
 
     server = FastMCP(

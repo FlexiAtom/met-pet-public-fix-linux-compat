@@ -23,6 +23,14 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from meapet.config.defaults import (
+    DEFAULT_HERMES_WS_URL,
+    DEFAULT_OPENCLAW_WS_URL,
+)
+from meapet.dependencies import (
+    CRYPTOGRAPHY_REQUIREMENT,
+    WEBSOCKETS_REQUIREMENT,
+)
 from meapet.message_dialog import MESSAGE_DIALOG_STYLE, MeaMessageDialog
 from meapet.ui_theme import (
     FONT_FAMILY,
@@ -39,7 +47,7 @@ from wizard.styles import set_status
 
 
 _HERMES_HELP = dedent(
-    """\
+    f"""\
     MeaPet 连接的是 hermes serve 提供的原生 TUI Gateway，不是 8642
     端口的 HTTP API。WebSocket 访问令牌与模型服务商 API Key 是两套凭据。
 
@@ -60,7 +68,7 @@ _HERMES_HELP = dedent(
     3. 在当前 Agent 配置中填写
 
        Agent 类型：Hermes Agent
-       WebSocket 地址：ws://127.0.0.1:9119/api/ws
+       WebSocket 地址：{DEFAULT_HERMES_WS_URL}
        访问令牌：$HERMES_DASHBOARD_SESSION_TOKEN
        当前会话 ID / 长期记忆 Key：首次接入时留空
        最近对话轮数：保持 5 即可
@@ -80,7 +88,7 @@ _HERMES_HELP = dedent(
 
 
 _OPENCLAW_HELP = dedent(
-    """\
+    f"""\
     MeaPet 连接的是 OpenClaw Gateway WebSocket。Gateway 访问令牌与
     OpenAI、Anthropic 等模型服务商 API Key 是两套凭据。
 
@@ -111,7 +119,7 @@ _OPENCLAW_HELP = dedent(
     3. 在当前 Agent 配置中填写
 
        Agent 类型：OpenClaw Gateway
-       WebSocket 地址：ws://127.0.0.1:18789
+       WebSocket 地址：{DEFAULT_OPENCLAW_WS_URL}
        访问令牌：$OPENCLAW_GATEWAY_TOKEN
        当前会话 ID / 长期记忆 Key：首次接入时留空
 
@@ -145,11 +153,17 @@ class AgentDependencyReport:
 
 _AGENT_DEPENDENCY_SPECS = {
     "hermes": (
-        ("websockets", "websockets", "websockets>=13,<16", 13, 16),
+        ("websockets", "websockets", WEBSOCKETS_REQUIREMENT, 13, 16),
     ),
     "openclaw": (
-        ("websockets", "websockets", "websockets>=13,<16", 13, 16),
-        ("cryptography", "cryptography", "cryptography>=42", 42, None),
+        ("websockets", "websockets", WEBSOCKETS_REQUIREMENT, 13, 16),
+        (
+            "cryptography",
+            "cryptography",
+            CRYPTOGRAPHY_REQUIREMENT,
+            42,
+            None,
+        ),
     ),
 }
 

@@ -25,8 +25,21 @@ from meapet.config.normalizers import (
     canonical_tts_language,
     normalize_gsv_ref_language,
 )
+from meapet.config.defaults import (
+    DEFAULT_AGENT_CONTROL,
+    DEFAULT_AGENT_HISTORY_TURNS,
+    DEFAULT_AGENT_TIMEOUT_SECONDS,
+    DEFAULT_BUBBLE_DURATIONS,
+    DEFAULT_CONTROL_PORT,
+    DEFAULT_HERMES_WS_URL,
+    DEFAULT_LIVE2D_WINDOW_MASK,
+    DEFAULT_MIMO_API_BASE,
+    DEFAULT_OLLAMA_HOST,
+    DEFAULT_OPENAI_API_BASE,
+    DEFAULT_OPENCLAW_WS_URL,
+    DEFAULT_WATCHER_INTERVAL,
+)
 from meapet.config import providers as _providers
-from meapet.ui_theme import normalize_ui_font_scale
 from meapet.ui_theme import normalize_pet_size_factor, normalize_ui_font_scale
 from meapet.utils import mask_secret, normalize_watcher
 from meapet.vision.policy import normalize_vision_mode
@@ -73,12 +86,8 @@ _AGENT_KINDS = frozenset({"hermes", "openclaw"})
 # 支持独立识图解析的视觉后端（vision.backend，不是 llm.provider）。
 _VISION_BACKENDS = frozenset({"ollama", "mimo"})
 
-# 默认 OpenAI 兼容地址（vision 等路径的公共 fallback）
-DEFAULT_API_BASE = "https://api.openai.com/v1"
-# Ollama 本地默认地址（host 形式，不带 /v1）
-DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
-# MiMo 云端默认地址
-DEFAULT_MIMO_API_BASE = "https://api.xiaomimimo.com/v1"
+# 旧导出名兼容；真实值统一维护在 ``meapet.config.defaults``。
+DEFAULT_API_BASE = DEFAULT_OPENAI_API_BASE
 
 _ENV_PLACEHOLDERS = ("", "$ENV", "${ENV}", "env", "ENV")
 
@@ -194,37 +203,7 @@ def llm_endpoint_family(llm_cfg: Optional[dict] = None) -> str:
             return key
     return ""
 
-DEFAULT_BUBBLE = {
-    "default": 5000,
-    "reply": 8000,
-    "watch": 7000,
-    "interaction": 3000,
-    "thinking": 0,
-}
-
-DEFAULT_WATCHER_INTERVAL = {"min_ms": 180000, "max_ms": 360000}
-
-DEFAULT_AGENT_CONTROL = {
-    "enabled": False,
-    "listen_host": "127.0.0.1",
-    "port": 8765,
-    "allowed_agent_ip": "127.0.0.1",
-    "auth_token": "",
-    "allow_insecure_http": False,
-    "cert_file": "",
-    "key_file": "",
-    "ca_file": "",
-}
-
-# Live2D 顶层窗椭圆 mask：比例相对当前窗口宽高，随 size_factor 自动缩放。
-# 默认值来自实测微调后的贴合参数。
-DEFAULT_LIVE2D_WINDOW_MASK = {
-    "enabled": True,
-    "cx": 0.54,
-    "cy": 0.40,
-    "rw": 0.29,
-    "rh": 0.40,
-}
+DEFAULT_BUBBLE = DEFAULT_BUBBLE_DURATIONS
 
 
 def project_root() -> str:
@@ -716,12 +695,12 @@ def _normalize_llm_contract(value: object) -> dict:
     # 8642 是 Hermes HTTP API Server，原生 WS 由 ``hermes serve`` 默认在
     # 9119 的 /api/ws 提供。精确识别旧本机默认，避免生成不存在的 :8642/ws。
     if raw_kind == "hermes":
-        default_url = "ws://127.0.0.1:9119/api/ws"
+        default_url = DEFAULT_HERMES_WS_URL
         lowered = raw_base.lower().rstrip("/")
         if lowered in {
             "http://127.0.0.1:8642",
             "http://localhost:8642",
-            "https://api.openai.com/v1",
+            DEFAULT_OPENAI_API_BASE,
         }:
             raw_base = default_url
         elif lowered.startswith(("http://", "https://")):
@@ -738,7 +717,7 @@ def _normalize_llm_contract(value: object) -> dict:
         elif not lowered.startswith(("ws://", "wss://")):
             raw_base = default_url
     else:
-        default_url = "ws://127.0.0.1:18789"
+        default_url = DEFAULT_OPENCLAW_WS_URL
         if not raw_base.lower().startswith(("ws://", "wss://")):
             raw_base = default_url
     agent["base_url"] = raw_base or default_url
@@ -765,16 +744,28 @@ def _normalize_llm_contract(value: object) -> dict:
         or ""
     ).strip()
     try:
-        timeout_seconds = float(agent.get("timeout_seconds", 120.0))
+        timeout_seconds = float(
+            agent.get(
+                "timeout_seconds",
+                DEFAULT_AGENT_TIMEOUT_SECONDS,
+            )
+        )
     except (TypeError, ValueError):
-        timeout_seconds = 120.0
+        timeout_seconds = DEFAULT_AGENT_TIMEOUT_SECONDS
     agent["timeout_seconds"] = (
-        timeout_seconds if timeout_seconds > 0 else 120.0
+        timeout_seconds
+        if timeout_seconds > 0
+        else DEFAULT_AGENT_TIMEOUT_SECONDS
     )
     try:
-        history_turns = int(agent.get("history_turns", 5))
+        history_turns = int(
+            agent.get(
+                "history_turns",
+                DEFAULT_AGENT_HISTORY_TURNS,
+            )
+        )
     except (TypeError, ValueError):
-        history_turns = 5
+        history_turns = DEFAULT_AGENT_HISTORY_TURNS
     agent["history_turns"] = max(0, min(history_turns, 100))
     agent["allow_insecure_ws"] = bool(
         agent.get("allow_insecure_ws", False)
@@ -829,10 +820,12 @@ def _normalize_agent_control(value: object) -> dict:
         or "127.0.0.1"
     )
     try:
-        port = int(control.get("port", 8765))
+        port = int(control.get("port", DEFAULT_CONTROL_PORT))
     except (TypeError, ValueError):
-        port = 8765
-    control["port"] = port if 1 <= port <= 65535 else 8765
+        port = DEFAULT_CONTROL_PORT
+    control["port"] = (
+        port if 1 <= port <= 65535 else DEFAULT_CONTROL_PORT
+    )
     for key in ("auth_token", "cert_file", "key_file", "ca_file"):
         control[key] = str(control.get(key) or "").strip()
     return control

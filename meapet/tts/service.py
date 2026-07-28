@@ -11,8 +11,18 @@ import sys
 import shutil
 import unicodedata
 import uuid
-from typing import Optional
+from pathlib import Path
+from typing import Mapping, Optional
 
+from meapet.config.defaults import (
+    DEFAULT_GSV_GPT_MODEL,
+    DEFAULT_GSV_GPT_WEIGHTS_DIR,
+    DEFAULT_GSV_SOVITS_MODEL,
+    DEFAULT_GSV_SOVITS_WEIGHTS_DIR,
+    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MIMO_TTS_CLONE_MODEL,
+    DEFAULT_MIMO_TTS_MODEL,
+)
 from meapet.config.normalizers import normalize_gsv_ref_language
 from meapet.utils import audio_cache_key, legacy_audio_cache_name
 from meapet.log import get_color_logger
@@ -40,6 +50,77 @@ from meapet.tts.language_policy import (
 from meapet.tts.translation import TranslationService
 
 
+def gsv_python_candidates(
+    *,
+    home: str | os.PathLike[str] | None = None,
+    environ: Mapping[str, str] | None = None,
+    executable: str | os.PathLike[str] | None = None,
+    frozen: bool | None = None,
+) -> tuple[str, ...]:
+    """返回可移植的 GPT-SoVITS Python 候选路径。
+
+    不扫描整块磁盘，也不假设开发者盘符或某个发布日期。环境变量、当前用户
+    目录和 Conda 的标准目录足以覆盖向导安装与手工解压场景；源码模式最后才
+    回落到当前解释器。
+    """
+    env = dict(os.environ if environ is None else environ)
+    home_path = Path(home or os.path.expanduser("~"))
+    current_executable = Path(executable or sys.executable)
+    is_frozen = _is_frozen() if frozen is None else bool(frozen)
+
+    candidates: list[Path] = []
+    for key in ("CONDA_PREFIX", "VIRTUAL_ENV"):
+        prefix = str(env.get(key) or "").strip()
+        if prefix:
+            candidates.extend(
+                (Path(prefix) / "python.exe", Path(prefix) / "bin" / "python")
+            )
+
+    for directory in (
+        "GPT-SoVITS",
+        "GPT-SoVITS-v2pro",
+        "GPT_SoVITS",
+    ):
+        candidates.append(home_path / directory / "runtime" / "python.exe")
+
+    for root_key in ("ProgramFiles", "ProgramData", "LOCALAPPDATA"):
+        root = str(env.get(root_key) or "").strip()
+        if root:
+            candidates.append(
+                Path(root) / "GPT-SoVITS" / "runtime" / "python.exe"
+            )
+
+    for conda_root in (
+        home_path / "miniconda3",
+        home_path / "anaconda3",
+    ):
+        candidates.extend(
+            (
+                conda_root / "envs" / "GPTSoVits" / "python.exe",
+                conda_root / "envs" / "gpt-sovits" / "python.exe",
+                conda_root / "python.exe",
+            )
+        )
+
+    if not is_frozen:
+        candidates.append(current_executable)
+        for command in ("python", "python3"):
+            found = shutil.which(command)
+            if found:
+                candidates.append(Path(found))
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        value = str(candidate)
+        key = os.path.normcase(os.path.abspath(value))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return tuple(result)
+
+
 class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
     """梅尔语音合成：通过子进程调用 GPT-SoVITS v2pro"""
 
@@ -58,31 +139,9 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
 
         if not self.python_exe:
-            # 自动检测常见安装路径（引导安装解压的 GPT-SoVITS 整合包）
-            _home = os.path.expanduser("~")
-            _candidates = [
-                # GPT-SoVITS v2pro 整合包（解压后常见位置）
-                r"D:\GPT-SoVITS-v2pro-20250604\GPT-SoVITS-v2pro-20250604\runtime\python.exe",
-                r"D:\GPT-SoVITS-v2pro\GPT-SoVITS-v2pro\runtime\python.exe",
-                r"C:\Program Files\GPT-SoVITS\runtime\python.exe",
-                # 用户目录下的解压版
-                os.path.join(_home, "GPT-SoVITS-v2pro", "runtime", "python.exe"),
-            ]
-            if not _is_frozen():
-                # 源码模式才允许回退到当前解释器
-                _candidates.append(sys.executable)
-            # 扫描常见 conda 环境（setup_wizard 创建或手动安装的）
-            for _conda_root in (_home, r"C:\ProgramData", r"C:\Users"):
-                for _maybe in (
-                    os.path.join(_conda_root, "miniconda3", "envs", "GPTSoVits", "python.exe"),
-                    os.path.join(_conda_root, "miniconda3", "python.exe"),
-                    os.path.join(_conda_root, "anaconda3", "envs", "GPTSoVits", "python.exe"),
-                    os.path.join(_conda_root, "anaconda3", "python.exe"),
-                ):
-                    _candidates.append(_maybe)
             # 去重 + 按存在过滤；跳过 pet exe
             _seen = set()
-            for _p in _candidates:
+            for _p in gsv_python_candidates():
                 if is_pet_executable(_p) or not os.path.isfile(_p):
                     continue
                 _rp = os.path.realpath(_p)
@@ -120,15 +179,30 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
 
         # 模型路径（从配置读取，无默认硬编码路径）
-        self.gpt_weights_dir = tts_cfg.get("gpt_weights_dir", "./models/GPT_weights")
-        self.sovits_weights_dir = tts_cfg.get("sovits_weights_dir", "./models/SoVITS_weights")
+        self.gpt_weights_dir = tts_cfg.get(
+            "gpt_weights_dir",
+            DEFAULT_GSV_GPT_WEIGHTS_DIR,
+        )
+        self.sovits_weights_dir = tts_cfg.get(
+            "sovits_weights_dir",
+            DEFAULT_GSV_SOVITS_WEIGHTS_DIR,
+        )
 
         # 具体模型文件
-        self.gpt_model = tts_cfg.get("gpt_model", "mea_pro-e50.ckpt")
-        self.sovits_model = tts_cfg.get("sovits_model", "mea_pro_e24_s13704.pth")
+        self.gpt_model = tts_cfg.get("gpt_model", DEFAULT_GSV_GPT_MODEL)
+        self.sovits_model = tts_cfg.get(
+            "sovits_model",
+            DEFAULT_GSV_SOVITS_MODEL,
+        )
         # 模型路径转绝对（子进程会切换目录，相对路径会失效）
-        gpt_dir = tts_cfg.get("gpt_weights_dir", "./models/GPT_weights")
-        sv_dir = tts_cfg.get("sovits_weights_dir", "./models/SoVITS_weights")
+        gpt_dir = tts_cfg.get(
+            "gpt_weights_dir",
+            DEFAULT_GSV_GPT_WEIGHTS_DIR,
+        )
+        sv_dir = tts_cfg.get(
+            "sovits_weights_dir",
+            DEFAULT_GSV_SOVITS_WEIGHTS_DIR,
+        )
         self.gpt_path = os.path.normpath(os.path.join(base_dir, gpt_dir, self.gpt_model))
         self.sovits_path = os.path.normpath(os.path.join(base_dir, sv_dir, self.sovits_model))
 
@@ -251,9 +325,9 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self.mimo_api_base = (
             tts_cfg.get("api_base", "")
             or (llm_cfg.get("api_base", "") if llm_cfg.get("backend") == "mimo" else "")
-            or "https://api.xiaomimimo.com/v1"
+            or DEFAULT_MIMO_API_BASE
         )
-        self.mimo_model = tts_cfg.get("model", "mimo-v2.5-tts")
+        self.mimo_model = tts_cfg.get("model", DEFAULT_MIMO_TTS_MODEL)
         self.mimo_voice = tts_cfg.get("voice", "冰糖")
         # 可选：固定风格提示；空则按 mood 自动生成
         self.mimo_style = tts_cfg.get("style", "")
@@ -284,7 +358,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             or bool(self.mimo_clone_ref)
         )
         if self._mimo_voiceclone and "voiceclone" not in model_l:
-            self.mimo_model = "mimo-v2.5-tts-voiceclone"
+            self.mimo_model = DEFAULT_MIMO_TTS_CLONE_MODEL
 
         # 自检依赖（默认不自动安装）
         self._deps_ready = False

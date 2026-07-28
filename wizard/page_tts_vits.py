@@ -13,6 +13,10 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject
 from PyQt5.QtGui import *
 
+from meapet.dependencies import (
+    resolve_pip_index_url,
+    resolve_torch_index_url,
+)
 from wizard.styles import (
     styled_message_box,
     styled_open_file,
@@ -200,7 +204,7 @@ class TtsPageVitsMixin:
             if req_lines:
                 log(f"{desc_prefix}安装 VITS 依赖包（{len(req_lines)} 个）…")
                 rc = _pip_run(py_exe, req_lines + ["-i",
-                    "https://pypi.tuna.tsinghua.edu.cn/simple"], timeout_sec=600)
+                    resolve_pip_index_url()], timeout_sec=600)
                 if rc != 0:
                     log(f"{desc_prefix}⚠ pip 部分失败，继续…")
                     ok = False
@@ -219,11 +223,11 @@ class TtsPageVitsMixin:
                 log(f"{desc_prefix}本地 .whl 安装 PyTorch…")
                 _pip_run(py_exe, [torch_whl, torchaudio_whl], timeout_sec=300)
             else:
-                tsinghua_torch = "https://mirrors.tuna.tsinghua.edu.cn/pytorch/whl/cpu"
-                log(f"{desc_prefix}清华镜像下载 PyTorch（约 200MB）…")
+                torch_index = resolve_torch_index_url()
+                log(f"{desc_prefix}下载 PyTorch（约 200MB）…")
                 _pip_run(py_exe, ["torch", "torchaudio",
-                         "--index-url", tsinghua_torch,
-                         "--extra-index-url", "https://pypi.tuna.tsinghua.edu.cn/simple"],
+                         "--index-url", torch_index,
+                         "--extra-index-url", resolve_pip_index_url()],
                         timeout_sec=900)
             return ok
 
@@ -437,7 +441,7 @@ class TtsPageVitsMixin:
             try:
                 r = subprocess.run(
                     [py_exe, "-m", "pip", "install", "--timeout", "120",
-                     "-i", "https://pypi.tuna.tsinghua.edu.cn/simple"] + needed,
+                     "-i", resolve_pip_index_url()] + needed,
                     capture_output=True, text=True, timeout=300, env=env
                 )
                 if r.returncode == 0:

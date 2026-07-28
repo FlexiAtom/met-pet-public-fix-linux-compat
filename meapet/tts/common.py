@@ -4,6 +4,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+
+from meapet.dependencies import (
+    resolve_pip_index_url,
+    resolve_torch_index_url,
+)
 from meapet.log import get_color_logger
 
 log = get_color_logger("tts")
@@ -131,8 +136,8 @@ GSV_OPTIONAL_PACKAGES = [
     "ToJyutping",        # 粤语拼音
 ]
 
-GSV_PIP_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
-TORCH_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+GSV_PIP_INDEX = resolve_pip_index_url()
+TORCH_INDEX_URL = resolve_torch_index_url()
 
 
 def _has_module(py_exe: str, module_name: str) -> bool:

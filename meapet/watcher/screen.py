@@ -12,6 +12,7 @@ import io
 import traceback
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from meapet.config.defaults import DEFAULT_OLLAMA_HOST
 from meapet.log import get_color_logger
 from meapet.watcher.capture import capture_screen_image
 
@@ -228,7 +229,9 @@ class ScreenWatcher(QThread):
                  capture_application: str = ""):
         super().__init__()
         # 统一使用 api_base，不再区分 ollama_host 和 api_base
-        self.api_base = api_base.rstrip('/') if api_base else "http://127.0.0.1:11434"
+        self.api_base = (
+            api_base.rstrip("/") if api_base else DEFAULT_OLLAMA_HOST
+        )
         self.vision_model = vision_model
         self.chat_model = chat_model
         self.idle_minutes = idle_minutes
@@ -570,4 +573,3 @@ class ScreenWatcher(QThread):
         if any(w in text for w in ["哼", "……", "懒得"]):
             return "melancholy"
         return "neutral"
-

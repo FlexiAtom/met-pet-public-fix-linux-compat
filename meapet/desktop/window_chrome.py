@@ -15,6 +15,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QRect, Qt
 
+from meapet.config.defaults import (
+    DEFAULT_OLLAMA_VISION_MODEL,
+    bubble_duration_ms,
+)
 from meapet.desktop import status_language
 from meapet.desktop.icons import standard_icon
 from meapet.desktop.screen_geometry import (
@@ -215,7 +219,10 @@ class PetWindowChromeMixin:
 
     def _toggle_auto_start(self):
         if sys.platform != "win32":
-            self._show_bubble("Autostart currently only supports Windows", 2500)
+            self._show_bubble(
+                status_language.autostart_unsupported(),
+                bubble_duration_ms(self.config, "interaction"),
+            )
             return
         import winreg
         key = winreg.OpenKey(
@@ -228,7 +235,10 @@ class PetWindowChromeMixin:
             winreg.QueryValueEx(key, "MeaPet")
             winreg.DeleteValue(key, "MeaPet")
             winreg.CloseKey(key)
-            self._show_bubble("Autostart disabled", 2000)
+            self._show_bubble(
+                status_language.autostart_disabled(),
+                bubble_duration_ms(self.config, "interaction"),
+            )
         except FileNotFoundError:
             winreg.CloseKey(key)
             # Build the command to register.
@@ -249,7 +259,10 @@ class PetWindowChromeMixin:
             )
             winreg.SetValueEx(key, "MeaPet", 0, winreg.REG_SZ, cmd)
             winreg.CloseKey(key)
-            self._show_bubble("Autostart enabled", 2000)
+            self._show_bubble(
+                status_language.autostart_enabled(),
+                bubble_duration_ms(self.config, "interaction"),
+            )
 
 
     def _build_tray_menu(self) -> QMenu:
@@ -359,7 +372,10 @@ class PetWindowChromeMixin:
         vision_menu.setObjectName("VisionAndWatchMenu")
         set_scaled_stylesheet(vision_menu, MENU_STYLE)
         vision_menu.setAccessibleName("识图与观察设置")
-        current_vision = vision_cfg.get("model", "qwen3.5:4b")
+        current_vision = vision_cfg.get(
+            "model",
+            DEFAULT_OLLAMA_VISION_MODEL,
+        )
         for label, bname in (
             ("Ollama 本地识图", "ollama"),
             ("MiMo 云端识图", "mimo"),
@@ -372,7 +388,10 @@ class PetWindowChromeMixin:
         vision_menu.addSeparator()
         if vision_backend != "mimo":
             for label, model_name in (
-                ("模型 · qwen3.5:4b", "qwen3.5:4b"),
+                (
+                    f"模型 · {DEFAULT_OLLAMA_VISION_MODEL}",
+                    DEFAULT_OLLAMA_VISION_MODEL,
+                ),
             ):
                 action = QAction(label, self)
                 action.setCheckable(True)
@@ -574,7 +593,11 @@ class PetWindowChromeMixin:
     def _show_timeline(self) -> None:
         timeline = getattr(self, "_conversation_timeline", None)
         if timeline is None:
-            self._show_bubble("还没有可查看的对话。", 3000, mood=None)
+            self._show_bubble(
+                status_language.timeline_empty(),
+                bubble_duration_ms(self.config, "interaction"),
+                mood=None,
+            )
             return
         from meapet.desktop.timeline_viewer import TimelineDialog
 
@@ -594,7 +617,11 @@ class PetWindowChromeMixin:
         timeline = getattr(self, "_conversation_timeline", None)
         turn = timeline.find(turn_id) if timeline is not None else None
         if turn is None:
-            self._show_bubble("这轮完整回复已不在最近缓存中。", 3500, mood=None)
+            self._show_bubble(
+                status_language.recent_reply_missing(),
+                bubble_duration_ms(self.config, "default"),
+                mood=None,
+            )
             return
         from meapet.desktop.timeline_viewer import TurnDetailDialog
 
@@ -629,7 +656,7 @@ class PetWindowChromeMixin:
                 clear_history()
             self._show_bubble(
                 "-什么都没发生喵。" if random.random() < 0.1 else "……你是谁喵？",
-                3000,
+                bubble_duration_ms(self.config, "interaction"),
             )
 
     def _start_new_agent_session(self) -> None:
@@ -698,13 +725,17 @@ class PetWindowChromeMixin:
             if callable(refresh_key):
                 refresh_key()
             self._show_bubble(
-                "已开始新的 Agent 会话。旧时间线仍可查看。",
-                4500,
+                status_language.agent_session_started(),
+                bubble_duration_ms(self.config, "default"),
                 mood=None,
             )
         except Exception as exc:
             safe_print(f"[agent] 新建会话失败: {type(exc).__name__}: {exc}")
-            self._show_bubble("新建 Agent 会话失败，请检查配置。", 8000, mood=None)
+            self._show_bubble(
+                status_language.agent_session_failed(),
+                bubble_duration_ms(self.config, "reply"),
+                mood=None,
+            )
 
     def _copy_agent_control_token(self) -> None:
         from meapet.config.store import resolve_secret
@@ -714,10 +745,18 @@ class PetWindowChromeMixin:
         ).strip()
         token = resolve_secret(raw, ("MEAPET_CONTROL_TOKEN",))
         if not token:
-            self._show_bubble("当前没有可复制的 Agent 控制令牌。", 3500, mood=None)
+            self._show_bubble(
+                status_language.control_token_missing(),
+                bubble_duration_ms(self.config, "default"),
+                mood=None,
+            )
             return
         QApplication.clipboard().setText(token)
-        self._show_bubble("Agent 控制令牌已复制。", 3000, mood=None)
+        self._show_bubble(
+            status_language.control_token_copied(),
+            bubble_duration_ms(self.config, "interaction"),
+            mood=None,
+        )
 
     def _regenerate_agent_control_token(self) -> None:
         reply = show_message_dialog(
@@ -732,10 +771,18 @@ class PetWindowChromeMixin:
             return
         rotate = getattr(self, "_rotate_control_token", None)
         if not callable(rotate):
-            self._show_bubble("令牌重新生成失败。", 5000, mood=None)
+            self._show_bubble(
+                status_language.control_token_regeneration_failed(),
+                bubble_duration_ms(self.config, "default"),
+                mood=None,
+            )
             return
         rotate()
-        self._show_bubble("已重新生成 Agent 控制令牌，旧令牌已失效。", 4500, mood=None)
+        self._show_bubble(
+            status_language.control_token_regenerated(),
+            bubble_duration_ms(self.config, "default"),
+            mood=None,
+        )
 
     def _reopen_setup_wizard(self):
         try:
@@ -750,4 +797,7 @@ class PetWindowChromeMixin:
             self._setup_wizard.show()
         except Exception as e:
             safe_print(f"[pet] 打开配置页失败: {e}")
-            self._show_bubble(f"打开配置页失败喵: {e}", 3000)
+            self._show_bubble(
+                status_language.config_open_failed(e),
+                bubble_duration_ms(self.config, "default"),
+            )

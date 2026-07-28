@@ -10,6 +10,11 @@ from __future__ import annotations
 from contextlib import suppress
 from dataclasses import dataclass
 
+from meapet.config.defaults import (
+    DEFAULT_MIMO_VISION_MODEL,
+    DEFAULT_OLLAMA_HOST,
+    DEFAULT_OLLAMA_VISION_MODEL,
+)
 
 # 1×1 PNG；识图测试从不截取用户桌面。
 _TEST_PNG_BASE64 = (
@@ -34,7 +39,7 @@ def _safe_failure(exc: BaseException) -> ConnectionResult:
 def _profile_base_url(profile: dict) -> str:
     protocol = str(profile.get("protocol") or "openai_chat").strip().lower()
     if protocol == "ollama_chat":
-        return str(profile.get("host") or "http://127.0.0.1:11434").strip()
+        return str(profile.get("host") or DEFAULT_OLLAMA_HOST).strip()
     return str(profile.get("api_base") or "").strip()
 
 
@@ -218,14 +223,18 @@ async def _probe_vision(config: dict) -> ConnectionResult:
         profile = {
             "protocol": "openai_chat",
             "api_base": resolve_vision_api_base(vision, llm),
-            "model": str(vision.get("model") or "mimo-v2.5"),
+            "model": str(
+                vision.get("model") or DEFAULT_MIMO_VISION_MODEL
+            ),
             "api_key": resolve_vision_api_key(vision, llm),
         }
     else:
         profile = {
             "protocol": "ollama_chat",
             "host": resolve_vision_host(vision, llm),
-            "model": str(vision.get("model") or "qwen3.5:4b"),
+            "model": str(
+                vision.get("model") or DEFAULT_OLLAMA_VISION_MODEL
+            ),
             "api_key": "",
         }
     return await _probe_direct_profile(profile, with_image=True)

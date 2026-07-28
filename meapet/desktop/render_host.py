@@ -11,6 +11,7 @@ from collections.abc import Callable
 from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
 
+from meapet.config.defaults import bubble_duration_ms
 from meapet.desktop.renderer import SpriteCanvas, SpriteRenderer
 from meapet.desktop.widgets import (
     SizeScaleDialog,
@@ -747,7 +748,11 @@ class PetRenderHostMixin:
         self._save_config()
         show = getattr(self, "_show_bubble", None)
         if callable(show):
-            show(status_language.window_size_applied(new_factor), 2500, mood=None)
+            show(
+                status_language.window_size_applied(new_factor),
+                bubble_duration_ms(self.config, "interaction"),
+                mood=None,
+            )
 
     def _apply_display_preference(self):
         """把 `display.size_factor` 应用到当前窗口（配置页保存后立即生效）。"""
@@ -1019,7 +1024,10 @@ class PetRenderHostMixin:
                 clear_bubbles()
             elif hasattr(self, "bubble") and self.bubble:
                 self.bubble.hide()
-            self._show_bubble(status_language.standby_off(), 2500)
+            self._show_bubble(
+                status_language.standby_off(),
+                bubble_duration_ms(self.config, "interaction"),
+            )
             self._position_bubble()
             self._start_watcher_timer()
         refresh_tray = getattr(self, "_refresh_tray_state", None)
@@ -1162,7 +1170,10 @@ class PetRenderHostMixin:
             self._l2d_pending = False
             self._live2d_startup_widget = None
             self._init_png_renderer()
-            self._show_bubble("已切回 PNG 立绘喵", 2500)
+            self._show_bubble(
+                status_language.render_png_enabled(),
+                bubble_duration_ms(self.config, "interaction"),
+            )
             self.config.setdefault("live2d", {})["enabled"] = False
             self._save_config()
             if getattr(self, "_standby", False):
@@ -1188,9 +1199,15 @@ class PetRenderHostMixin:
 
             def announce_mode_change():
                 if self._use_live2d:
-                    self._show_bubble("已切换到 Live2D 喵", 2500)
+                    self._show_bubble(
+                        status_language.render_live2d_enabled(),
+                        bubble_duration_ms(self.config, "interaction"),
+                    )
                 else:
-                    self._show_bubble("Live2D 加载失败，已切回 PNG 喵", 3000)
+                    self._show_bubble(
+                        status_language.render_live2d_failed(),
+                        bubble_duration_ms(self.config, "default"),
+                    )
                 if getattr(self, "_standby", False):
                     self._ensure_standby_click_through()
 
@@ -1200,4 +1217,3 @@ class PetRenderHostMixin:
         """取消未完成的启动回调，避免关闭后被超时回退重新显示。"""
         self._cancel_live2d_startup_timeout()
         super().closeEvent(event)
-

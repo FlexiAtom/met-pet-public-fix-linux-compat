@@ -3,6 +3,12 @@ from __future__ import annotations
 
 import json
 
+from meapet.config.defaults import (
+    DEFAULT_OLLAMA_VISION_MODEL,
+    MIN_CONFIG_APPLIED_BUBBLE_MS,
+    bubble_duration_ms,
+)
+from meapet.desktop import status_language
 from meapet.config.store import (
     load_config as store_load_config,
     save_config as store_save_config,
@@ -102,12 +108,23 @@ class PetConfigBridgeMixin:
             )
             show = getattr(self, "_show_bubble", None)
             if callable(show):
-                show("新配置未能启动，请检查配置。", 8000, mood=None)
+                show(
+                    status_language.config_apply_failed(),
+                    bubble_duration_ms(self.config, "reply"),
+                    mood=None,
+                )
             return False
 
         show = getattr(self, "_show_bubble", None)
         if callable(show):
-            show("新配置已应用。", 3500, mood=None)
+            show(
+                status_language.config_applied(),
+                max(
+                    bubble_duration_ms(self.config, "interaction"),
+                    MIN_CONFIG_APPLIED_BUBBLE_MS,
+                ),
+                mood=None,
+            )
         return True
 
     def _disconnect_watcher_signals(self):
@@ -140,15 +157,21 @@ class PetConfigBridgeMixin:
         v = self.config.setdefault("vision", {})
         v["backend"] = backend
         if backend == "mimo":
-            if not v.get("model") or v.get("model") in ("qwen3.5:4b",):
+            if (
+                not v.get("model")
+                or v.get("model") == DEFAULT_OLLAMA_VISION_MODEL
+            ):
                 v["model"] = "mimo"
         else:
             if not v.get("model") or v.get("model") in ("mimo",):
-                v["model"] = "qwen3.5:4b"
+                v["model"] = DEFAULT_OLLAMA_VISION_MODEL
         self._save_config()
         self._disconnect_watcher_signals()
         self._init_watcher()
-        self._show_bubble(f"识图后端切换为 {backend}", 2000)
+        self._show_bubble(
+            status_language.vision_backend_switched(backend),
+            bubble_duration_ms(self.config, "interaction"),
+        )
 
     def _set_vision_model(self, model_name: str):
         self.config.setdefault("vision", {})["model"] = model_name
@@ -158,4 +181,7 @@ class PetConfigBridgeMixin:
         self._disconnect_watcher_signals()
         self._init_watcher()
         short = model_name.split(":")[0]
-        self._show_bubble(f"识图模型切换为 {short}", 2000)
+        self._show_bubble(
+            status_language.vision_model_switched(short),
+            bubble_duration_ms(self.config, "interaction"),
+        )

@@ -7,6 +7,12 @@ import uuid
 
 from meapet.agent.hermes import HermesAdapter, HermesConfig
 from meapet.agent.openclaw import OpenClawAdapter, OpenClawConfig
+from meapet.config.defaults import (
+    DEFAULT_AGENT_HISTORY_TURNS,
+    DEFAULT_AGENT_TIMEOUT_SECONDS,
+    DEFAULT_HERMES_WS_URL,
+    DEFAULT_OPENCLAW_WS_URL,
+)
 
 
 def _resolve_secret(value: str, env_keys: tuple[str, ...]) -> str:
@@ -76,7 +82,10 @@ def create_agent_adapter_from_config(
         )
 
     _ensure_local_session(agent_cfg)
-    timeout = _positive_float(agent_cfg.get("timeout_seconds"), 120.0)
+    timeout = _positive_float(
+        agent_cfg.get("timeout_seconds"),
+        DEFAULT_AGENT_TIMEOUT_SECONDS,
+    )
     tls = agent_cfg.get("tls")
     tls = tls if isinstance(tls, dict) else {}
     verify_tls = bool(tls.get("verify", True))
@@ -99,7 +108,7 @@ def create_agent_adapter_from_config(
             OpenClawConfig(
                 base_url=(
                     str(agent_cfg.get("base_url") or "").strip()
-                    or "ws://127.0.0.1:18789"
+                    or DEFAULT_OPENCLAW_WS_URL
                 ),
                 auth_token=token,
                 session_key=session_key,
@@ -126,7 +135,7 @@ def create_agent_adapter_from_config(
         HermesConfig(
             base_url=(
                 str(agent_cfg.get("base_url") or "").strip()
-                or "ws://127.0.0.1:9119/api/ws"
+                or DEFAULT_HERMES_WS_URL
             ),
             auth_token=token,
             model=str(agent_cfg.get("model") or "").strip(),
@@ -137,7 +146,7 @@ def create_agent_adapter_from_config(
             ).strip(),
             history_turns=_bounded_int(
                 agent_cfg.get("history_turns"),
-                5,
+                DEFAULT_AGENT_HISTORY_TURNS,
                 minimum=0,
                 maximum=100,
             ),

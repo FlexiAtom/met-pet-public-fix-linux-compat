@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable, Mapping, MutableMapping
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+from meapet.config.defaults import (
+    DEFAULT_AGENT_HISTORY_TURNS,
+    DEFAULT_AGENT_TIMEOUT_SECONDS,
+    DEFAULT_HERMES_WS_URL,
+)
 from meapet.agent.base import (
     AgentTurnRequest,
     FormatRepairRequired,
@@ -53,14 +58,14 @@ def _safe_value(name: str, value: object, *, limit: int = 512) -> str:
 
 @dataclass(frozen=True)
 class HermesConfig:
-    base_url: str = "ws://127.0.0.1:9119/api/ws"
+    base_url: str = DEFAULT_HERMES_WS_URL
     auth_token: str = ""
     model: str = ""
     session_id: str = ""
     session_key: str = ""
     remote_session_id: str = ""
-    history_turns: int = 5
-    timeout_seconds: float = 120.0
+    history_turns: int = DEFAULT_AGENT_HISTORY_TURNS
+    timeout_seconds: float = DEFAULT_AGENT_TIMEOUT_SECONDS
     verify_tls: bool = True
     ca_file: str = ""
     allow_insecure_ws: bool = False
@@ -99,7 +104,7 @@ class HermesConfig:
         try:
             history_turns = int(self.history_turns)
         except (TypeError, ValueError):
-            history_turns = 5
+            history_turns = DEFAULT_AGENT_HISTORY_TURNS
         object.__setattr__(
             self,
             "history_turns",
@@ -108,11 +113,11 @@ class HermesConfig:
         try:
             timeout = float(self.timeout_seconds)
         except (TypeError, ValueError):
-            timeout = 120.0
+            timeout = DEFAULT_AGENT_TIMEOUT_SECONDS
         object.__setattr__(
             self,
             "timeout_seconds",
-            timeout if timeout > 0 else 120.0,
+            timeout if timeout > 0 else DEFAULT_AGENT_TIMEOUT_SECONDS,
         )
         object.__setattr__(self, "verify_tls", bool(self.verify_tls))
         object.__setattr__(self, "ca_file", str(self.ca_file or "").strip())

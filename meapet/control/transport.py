@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
+from meapet.config.defaults import DEFAULT_CONTROL_PORT
+from meapet.dependencies import MCP_REQUIREMENT, UVICORN_REQUIREMENT
+
 from .broker import CompanionControlBroker
 from .mcp_server import build_companion_mcp
 
@@ -43,7 +46,7 @@ def _existing_file(value: object, label: str) -> str:
 class ControlServerConfig:
     listen_host: str = "127.0.0.1"
     allowed_agent_ip: str = "127.0.0.1"
-    port: int = 8765
+    port: int = DEFAULT_CONTROL_PORT
     auth_token: str = ""
     allow_insecure_http: bool = False
     cert_file: str = ""
@@ -356,7 +359,9 @@ def build_control_asgi_app(
     try:
         from mcp.server.transport_security import TransportSecuritySettings
     except ImportError as exc:  # pragma: no cover - 可选依赖环境
-        raise RuntimeError("Companion MCP 需要安装 mcp>=1.27,<2") from exc
+        raise RuntimeError(
+            f"Companion MCP 需要安装 {MCP_REQUIREMENT}"
+        ) from exc
 
     allowed_hosts = [
         hostname
@@ -408,7 +413,9 @@ class CompanionMcpRuntime:
         try:
             import uvicorn
         except ImportError as exc:  # pragma: no cover - 可选依赖环境
-            raise RuntimeError("Companion MCP 需要安装 uvicorn>=0.30") from exc
+            raise RuntimeError(
+                f"Companion MCP 需要安装 {UVICORN_REQUIREMENT}"
+            ) from exc
         uvicorn_config = uvicorn.Config(
             self.app,
             host=self.config.listen_host,

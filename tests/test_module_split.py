@@ -692,9 +692,9 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
         )
         self.assertEqual(seen["filter"], "Audio (*.wav *.mp3);;All (*.*)")
 
-    def test_tts_log_and_status_background_stay_project_relative(self):
+    def test_tts_log_stays_project_relative_and_status_has_no_missing_asset(self):
         import meapet.log as meapet_log
-        from meapet.desktop.status_panel import BG_PATH
+        import meapet.desktop.status_panel as status_panel
 
         with tempfile.TemporaryDirectory() as td:
             previous_cwd = os.getcwd()
@@ -715,7 +715,10 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
 
             self.assertEqual(log_path.parent, (ROOT / "logs").resolve())
 
-        self.assertEqual(Path(BG_PATH).resolve(), (ROOT / "ev312b.png").resolve())
+        self.assertFalse(hasattr(status_panel, "BG_PATH"))
+        self.assertNotIn("ev312b.png", Path(status_panel.__file__).read_text(
+            encoding="utf-8",
+        ))
 
     def test_vits_health_does_not_probe_gpt_sovits_dependencies(self):
         from meapet.tts.service import MeaTTS
@@ -882,4 +885,3 @@ print(TTSPage.__name__)
 
 if __name__ == "__main__":
     unittest.main()
-

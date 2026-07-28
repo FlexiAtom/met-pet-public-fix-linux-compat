@@ -474,6 +474,23 @@ WIZARD_STYLESHEET = f"""
         background: {rgba(COLOR_ELEVATED, 150)};
         border-color: {rgba(COLOR_BORDER, 150)};
     }}
+    QPushButton#AdvancedToggle {{
+        min-height: 32px;
+        background: transparent;
+        color: {COLOR_MUTED};
+        border: 1px solid transparent;
+        text-align: left;
+        padding: 4px 0px;
+    }}
+    QPushButton#AdvancedToggle:hover {{
+        background: {rgba(PALETTE['accent'], 26)};
+        color: {COLOR_TEXT_SECONDARY};
+        border-color: transparent;
+    }}
+    QPushButton#AdvancedToggle:focus {{
+        border: 2px solid {COLOR_FOCUS};
+        padding: 3px 0px;
+    }}
     QPushButton#PrimaryButton {{
         background: {GRADIENT_PRIMARY};
         font-family: {DISPLAY_FONT_FAMILY};

@@ -22,6 +22,8 @@ if exist "%~dp0.python-version" (
 :py_ver_done
 for /f "delims=" %%i in ("!MEAPET_PY!") do set "MEAPET_PY=%%i"
 
+if not defined UV_INDEX_URL if defined MEAPET_PIP_INDEX_URL set "UV_INDEX_URL=%MEAPET_PIP_INDEX_URL%"
+if not defined UV_INDEX_URL if defined PIP_INDEX_URL set "UV_INDEX_URL=%PIP_INDEX_URL%"
 if not defined UV_INDEX_URL set "UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
 if not defined UV_PYTHON_INSTALL_MIRROR set "UV_PYTHON_INSTALL_MIRROR=https://ghproxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"
 
@@ -213,7 +215,7 @@ if defined UV_CMD (
 )
 echo [MeaPet] pip install...
 "!PY_CMD!" -m pip install --upgrade pip setuptools wheel >nul 2>&1
-"!PY_CMD!" -m pip install -r linux_requirements.txt --prefer-binary -i "%UV_INDEX_URL%" --trusted-host pypi.tuna.tsinghua.edu.cn
+"!PY_CMD!" -m pip install -r linux_requirements.txt --prefer-binary -i "%UV_INDEX_URL%"
 if errorlevel 1 "!PY_CMD!" -m pip install -r linux_requirements.txt --prefer-binary
 if errorlevel 1 exit /b 1
 "!PY_CMD!" -m pip install live2d-py --prefer-binary >nul 2>&1
@@ -246,7 +248,7 @@ if errorlevel 1 (
     echo [MeaPet] uv install failed, try pip
     where python >nul 2>&1
     if not errorlevel 1 (
-        python -m pip install -U uv -i https://pypi.tuna.tsinghua.edu.cn/simple
+        python -m pip install -U uv -i "%UV_INDEX_URL%"
     )
 )
 

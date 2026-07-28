@@ -214,7 +214,7 @@ RADIUS_LARGE = 20    # 旧 18 — 外壳：WizardShell、SplashCard、CloudConse
 
 附加固定值（写死在各自 QSS）：菜单 `12`、菜单项 `8`、pill/chip `11`、复选框指示器 `6`、单选钮 `11`、进度条 `8`（chunk `7`）、滚动条把手 `4`、气泡 `DIALOGUE_RADIUS = 22`。
 
-**间距：不变**（`4 / 8 / 12 / 16 / 20 / 24 / 32`）。本次不动任何 `setContentsMargins` / `setSpacing`，以免影响固定尺寸窗口的布局。
+**间距：不变**（`4 / 8 / 12 / 16 / 20 / 24 / 32`）。弹窗使用设计基准尺寸，但不得用固定几何压住字体缩放后的布局；统一通过 `resize_dialog_to_content()` 按 `sizeHint` 和屏幕可用区域收敛。
 
 **字阶（收敛为 8 档，去掉随手写的中间值）：**
 
@@ -795,7 +795,7 @@ QSlider:focus { border: 1px solid #CDB8FF; border-radius: 5px; }
 
 #### 6.2 `CONSENT_DIALOG_STYLE`（截图同意 / 云端同意）
 
-> **尺寸红线：** `CloudVisionConsentDialog` 是 `setFixedSize(420, 270)`（单测断言精确等于 `QSize(420,270)`），`CaptureScopeConsentDialog` 是 `setFixedWidth(440)` + 自适应高度。因此**所有 `padding` / `min-height` 保持与现状完全一致**，本节只换颜色、边框、圆角、字重。
+> **尺寸红线（响应式修订）：** `CloudVisionConsentDialog` 以 `420×270` 为设计基准，`CaptureScopeConsentDialog` 以 `440px` 为基准宽度；二者都必须随 80%–150% 字体缩放增长，并夹在当前屏幕可用区域内。不得使用 `setFixedSize` / `setFixedWidth` 锁住布局。
 
 ```qss
 QDialog#CloudConsentRoot,
@@ -1430,7 +1430,7 @@ QFileDialog QHeaderView::section {
 |---|---|
 | `MENU_STYLE`（L35） | 背景改 §3-③ 的竖向 rgba 渐变；`border-radius: 12`；`padding: 6`；item `min-height: 34` / `padding: 8px 28px 8px 14px` / `radius 8` / `margin 2px 4px`；`item:selected` 换成 **G5 扫光** + 粉色边；新增 `item:pressed`；separator 换成渐变发丝线；新增 `QMenu::icon { left: 10px; }`。**保持 `font-size: 14px`**（单测） |
 | `DIALOG_STYLE`（L73） | `QDialog` 底色改 canvas；`SizeDialogCard/TimelineCard` 用 **G3** + `border-top-color`；`TurnCard` 从共用规则里**拆出来**单独用 **G4 + 樱腰线**；输入类底改 `#100C18` 并补 `selection-color`；`QPushButton` 基础态改 90° 墨渐变 + 新增 `:pressed` / `:disabled`；`PrimaryButton` 改 **G1**；`GhostButton` hover 改紫罗兰；`QSlider` groove 改深井 + sub-page 改 **G2**；滚动条把手改 `rgba(124,105,160,170)`；全部 `font-weight` 收敛到 400/600/700 |
-| `CONSENT_DIALOG_STYLE`（L218） | **只换色/边/角/字重，一切 `padding`、`min-width`、`min-height`、`width` 原样保留**（420×270 / 440 宽是硬尺寸，单测断言）。`CloudConsentCard` 用 G3 变体 + `radius 20`；`SectionCard` 加樱腰线；校验/倒计时条换新 tint；`AllowUploadButton` 换 G1；`CancelUploadButton:default` 换 `rgba(205,184,255,30)` + 2px focus 色边 |
+| `CONSENT_DIALOG_STYLE`（L218） | 保留控件 `padding` 与最小触控尺寸；420×270 / 440 只作为设计基准，窗口由布局提示与屏幕边界决定。`CloudConsentCard` 用 G3 变体 + `radius 20`；`SectionCard` 加樱腰线；校验/倒计时条换新 tint；`AllowUploadButton` 换 G1；`CancelUploadButton:default` 换 `rgba(205,184,255,30)` + 2px focus 色边 |
 | `CHAT_COMPOSER_STYLE`（L380） | 按 §3-② 整段替换。**`QLabel#ComposerTitle` 的第一条声明必须仍是 `color:`**（单测 `assertIn("QLabel#ComposerTitle {\n        color: ")` 逐字匹配，含 8 空格缩进）；**必须仍含 `font-family: {DISPLAY_FONT_FAMILY};`** |
 | `DIALOGUE_STYLE`（L469） | 按 §3.4 替换。**必须仍含 `QFrame#DialogueBubble`**，**不得出现 `DialogueName` / `DialogueAccent`**，**必须仍含 `font-family: {DISPLAY_FONT_FAMILY};`** |
 | `STATUS_PANEL_STYLE`（L505） | 按 §3-④ 替换；`PanelEyebrow` 改 accent、`TierLabel` 改 primary 18px、`StatusCard` 加樱腰线与月光缝、进度条改 G2 |
@@ -1457,7 +1457,7 @@ QFileDialog QHeaderView::section {
 | `paintEvent()`（L175–187） | 按 §4.1 重写：圆角裁切 `radius=20` + 墨纱竖向渐变 + `#7C69A0` 1px 内亮环；无背景图时 fallback 改 `QColor(22,17,31,238)` |
 | `_build_ui()` 末尾 | 给 `section1/2/3` 各挂 `QGraphicsDropShadowEffect(color=QColor(6,4,12,120), blurRadius=16, xOffset=0, yOffset=4)` |
 | 需新增 import | `QPainterPath, QPen, QLinearGradient` from `QtGui`；`QRectF` from `QtCore`；`QGraphicsDropShadowEffect` from `QtWidgets` |
-| **不要动** | 布局边距/间距、`setFixedSize(440, 620)`、`refresh()` 逻辑 |
+| **不要动** | 布局边距/间距、`440×620` 设计基准、`refresh()` 逻辑；窗口本身必须可随字体和屏幕调整 |
 
 ### 5.5 `meapet/desktop/splash.py`
 
@@ -1482,7 +1482,7 @@ self.card.setGraphicsEffect(shadow)
 |---|---|
 | `CloudVisionConsentDialog.__init__`（L131 `outer.addWidget(card)` 之后） | 给 `card`（`CloudConsentCard`）挂 `rgba(6,4,12,200) / blur 8 / (0,2)` |
 | `CaptureScopeConsentDialog.__init__`（同名位置） | 同上参数 |
-| **不要动** | `setFixedSize(420,270)`、`setFixedWidth(440)`、`_resize_to_content()`、`_compact_height` 基线逻辑（有专门的高度自适应契约与回归测试）；所有同意流程的按钮默认值、倒计时与授权判定 |
+| **响应式约束** | 删除固定几何；保留 `420×270` / `440px` 设计基准，并由 `resize_dialog_to_content()` 同时计算宽高、限制到屏幕可用区域。所有同意流程的按钮默认值、倒计时与授权判定不变 |
 
 ### 5.7 `meapet/desktop/capture_selection.py`
 
@@ -1544,7 +1544,7 @@ self.card.setGraphicsEffect(shadow)
 4. `DIALOGUE_STYLE` 必须包含 `QFrame#DialogueBubble`，且不得包含 `DialogueName` / `DialogueAccent`。
 5. `WIZARD_STYLESHEET` 必须包含 `QMessageBox QLabel#qt_msgbox_label`。
 6. `MENU_STYLE`：菜单 `font-size` ≥14px，菜单项实测行高 ≥38px。
-7. `CloudVisionConsentDialog` 尺寸恒为 `420×270`，且 `allow_button.width() == cancel_button.width()`。
+7. `CloudVisionConsentDialog` 在 80%–150% 字体缩放下不得小于 `minimumSizeHint()`，不得锁死最大宽度，且 `allow_button.width() == cancel_button.width()`。
 8. 短气泡 `< 260×130`、长气泡 `≤ 420×240`；因此 `DIALOGUE_TAIL_SIZE / _DEPTH / _REACH / *_PADDING / *_WIDTH / *_HEIGHT` 一个都不能改。
 9. 全部 `objectName` 原样：`WizardRoot` / `WizardShell` / `SplashCard` / `DialogueBubble` / `StatusCard` 及 `theme.py`、`styles.py` 中出现的每一个。
 10. 交互目标 ≥44px、菜单项 ≥32px、焦点环 2px —— 本规范全部保留，并在 QCheckBox/QRadioButton 上**补齐了原先缺失的真实焦点环**。
