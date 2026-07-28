@@ -19,12 +19,15 @@ except ImportError:
     # 构造一个完整的假 live2d 模块树，使 live2d_widget.py 中的
     # `import live2d.v3 as live2d` 能成功
     _v3 = ModuleType("live2d.v3")
+    _v3.__package__ = "live2d.v3"          # ← 新增
     _v3.LAppModel = type("LAppModel", (), {})
     _v3.LAppLive2DManager = type("LAppLive2DManager", (), {})
     _v3.CubismFramework = type("CubismFramework", (), {})
     sys.modules["live2d.v3"] = _v3
 
     _top = ModuleType("live2d")
+    _top.__path__ = []                      # ← 新增：标记为包
+    _top.__package__ = "live2d"            # ← 新增
     _top.v3 = _v3
     _top.LAppModel = _v3.LAppModel
     sys.modules["live2d"] = _top
