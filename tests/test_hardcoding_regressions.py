@@ -178,3 +178,72 @@ def test_default_endpoint_literals_stay_in_the_defaults_registry():
         source = path.read_text(encoding="utf-8")
         for literal in duplicated_literals:
             assert literal not in source, f"{path.relative_to(ROOT)}: {literal}"
+
+
+def test_operational_bubble_copy_is_owned_by_status_language():
+    from meapet.desktop import status_language
+
+    required_functions = (
+        "autostart_unsupported",
+        "autostart_disabled",
+        "autostart_enabled",
+        "timeline_empty",
+        "recent_reply_missing",
+        "agent_session_failed",
+        "control_token_missing",
+        "control_token_copied",
+        "control_token_regeneration_failed",
+        "control_token_regenerated",
+        "config_open_failed",
+        "config_corrupt",
+        "vision_backend_switched",
+        "vision_model_switched",
+        "watcher_uploading_cloud",
+        "watcher_uploading_local",
+        "vision_failed",
+        "watcher_silent",
+        "watcher_not_enabled",
+        "render_png_enabled",
+        "render_live2d_enabled",
+        "render_live2d_failed",
+    )
+    for name in required_functions:
+        assert callable(getattr(status_language, name, None)), name
+
+    raw_copy = (
+        "Autostart currently only supports Windows",
+        "Autostart disabled",
+        "Autostart enabled",
+        "还没有可查看的对话。",
+        "这轮完整回复已不在最近缓存中。",
+        "配置文件坏了喵",
+        "已切回 PNG 立绘喵",
+        "已切换到 Live2D 喵",
+        "Live2D 加载失败，已切回 PNG 喵",
+        "未开启屏幕观察喵",
+    )
+    consumers = (
+        ROOT / "meapet" / "desktop" / "app.py",
+        ROOT / "meapet" / "desktop" / "config_bridge.py",
+        ROOT / "meapet" / "desktop" / "render_host.py",
+        ROOT / "meapet" / "desktop" / "watch_ctrl.py",
+        ROOT / "meapet" / "desktop" / "window_chrome.py",
+    )
+    for path in consumers:
+        source = path.read_text(encoding="utf-8")
+        for copy in raw_copy:
+            assert copy not in source, f"{path.relative_to(ROOT)}: {copy}"
+
+
+def test_bubble_duration_helper_honors_config_and_safe_fallbacks():
+    from meapet.config.defaults import bubble_duration_ms
+
+    assert bubble_duration_ms(
+        {"bubble_duration_ms": {"interaction": 1234}},
+        "interaction",
+    ) == 1234
+    assert bubble_duration_ms(
+        {"bubble_duration_ms": {"interaction": "broken"}},
+        "interaction",
+    ) == 3000
+    assert bubble_duration_ms({}, "watch") == 7000
