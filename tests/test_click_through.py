@@ -260,9 +260,6 @@ class StandbyHostWiringTests(unittest.TestCase):
         )
         host._position_bubble = lambda *a, **k: None
 
-        def _apply_hit():
-            host.hit_region_updates += 1
-
         def _start_watcher():
             host.watcher_starts += 1
 
@@ -275,11 +272,15 @@ class StandbyHostWiringTests(unittest.TestCase):
         def _clear_bubbles():
             host.bubbles_shown.append(("__clear__", None))
 
-        host._apply_hit_region = _apply_hit
         host._start_watcher_timer = _start_watcher
         host._refresh_tray_state = _refresh_tray
         host._show_context_menu = _show_menu
         host._clear_bubbles = _clear_bubbles
+
+        # No-op stubs for methods removed in the ellipse-free refactor:
+        # _apply_hit_region is no longer part of PetRenderHostMixin.
+        host._apply_hit_region = lambda: None
+
         return host
 
     def test_enter_standby_enables_click_through_and_timer(self) -> None:
@@ -338,7 +339,9 @@ class StandbyHostWiringTests(unittest.TestCase):
             host._open_standby_context_menu(QPoint(10, 20))
             self.assertEqual(len(host.menu_positions), 1)
             self.assertFalse(host._standby_menu_open)
+            # Should have disabled (via _set_standby_click_through(False))
             self.assertGreaterEqual(len(disable_calls), 1)
+            # And re-enabled (via _set_standby_click_through(True) in finally)
             self.assertGreaterEqual(len(enable_calls), 1)
 
     def test_open_standby_menu_does_not_reenable_after_leave(self) -> None:
@@ -364,6 +367,8 @@ class StandbyHostWiringTests(unittest.TestCase):
             mock.patch("meapet.desktop.render_host.QTimer", _FakeTimer),
         ):
             host._open_standby_context_menu(QPoint(1, 1))
+            # standby was set to False inside the menu; finally block should
+            # NOT re-enable click-through.
             self.assertEqual(enable_calls, [])
 
     def test_poll_fires_menu_on_edge(self) -> None:
@@ -416,3 +421,4 @@ class DialoguePassthroughTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
