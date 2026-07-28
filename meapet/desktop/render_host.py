@@ -1130,7 +1130,7 @@ class PetRenderHostMixin:
         finally:
             self._standby_menu_open = False
             if getattr(self, "_standby", False):
-                self._ensure_standby_click_through(True)
+                self._set_standby_click_through(True)
 
     def _set_bubbles_mouse_passthrough(self, enabled: bool) -> None:
         stack = getattr(self, "_bubble_stack", None)
