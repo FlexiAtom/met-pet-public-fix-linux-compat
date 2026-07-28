@@ -247,3 +247,20 @@ def test_bubble_duration_helper_honors_config_and_safe_fallbacks():
         "interaction",
     ) == 3000
     assert bubble_duration_ms({}, "watch") == 7000
+
+
+def test_python_package_index_is_overridable_and_not_repeated_in_ui():
+    from meapet.dependencies import resolve_pip_index_url
+
+    custom = "https://packages.example.invalid/simple"
+    assert resolve_pip_index_url(
+        {"MEAPET_PIP_INDEX_URL": custom}
+    ) == custom
+    assert resolve_pip_index_url(
+        {"PIP_INDEX_URL": custom}
+    ) == custom
+
+    source = (
+        ROOT / "wizard" / "page_tts_vits.py"
+    ).read_text(encoding="utf-8")
+    assert "pypi.tuna.tsinghua.edu.cn" not in source
