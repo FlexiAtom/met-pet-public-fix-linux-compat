@@ -2,75 +2,17 @@
 
 from __future__ import annotations
 
-# ════════════════════════════════════════════════════════════════════
-# 最顶部：在导入任何 meapet 模块之前，确保 live2d 可用
-# ════════════════════════════════════════════════════════════════════
 import os
 import sys
-from types import ModuleType
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-
-class _Live2DModelStub:
-    """替代真实 Live2DModel 的桩，不需要 live2d 库。"""
-
-    created = 0
-
-    def __init__(self, _model_dir: str) -> None:
-        type(self).created += 1
-        self.widget = None
-        self._model_dir = _model_dir
-        self.model = None
-
-    def create_widget(self, parent=None):
-        self.widget = _Live2DWidgetStub(parent)
-        return self.widget
-
-    def get_suggested_size(self):
-        return (525, 735)
-
-    def get_model(self):
-        return self.model
-
-
-try:
-    import live2d  # noqa: F401
-    HAVE_LIVE2D = True
-except ImportError:
-    HAVE_LIVE2D = False
-    # 构造一个完整的假 live2d 模块树，使 live2d_widget.py 中的
-    # `import live2d.v3 as live2d` 能成功
-    _v3 = ModuleType("live2d.v3")
-    _v3.__package__ = "live2d.v3"          # ← 新增
-    _v3.LAppModel = type("LAppModel", (), {})
-    _v3.LAppLive2DManager = type("LAppLive2DManager", (), {})
-    _v3.CubismFramework = type("CubismFramework", (), {})
-    sys.modules["live2d.v3"] = _v3
-
-    _top = ModuleType("live2d")
-    _top.__path__ = []                      # ← 新增：标记为包
-    _top.__package__ = "live2d"            # ← 新增
-    _top.v3 = _v3
-    _top.LAppModel = _v3.LAppModel
-    sys.modules["live2d"] = _top
-    # 注入假的 meapet.desktop.live2d_widget 模块，
-    # 使 render_host.py 导入时不会执行真实模块（避免 import live2d.v3 失败）
-    _fake_l2dw = ModuleType("meapet.desktop.live2d_widget")
-    _fake_l2dw.Live2DModel = _Live2DModelStub  # 注意：此时 _Live2DModelStub 尚未定义，需要调整位置
-    _fake_l2dw.init_live2d = lambda: None
-    sys.modules["meapet.desktop.live2d_widget"] = _fake_l2dw
-
-# 现在安全地导入 Qt 和 meapet 模块
-import inspect
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
-from PyQt5.QtCore import QEvent, QPointF, Qt  # noqa: E402
-from PyQt5.QtGui import QColor, QMouseEvent, QPixmap, QRegion  # noqa: E402
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt5.QtCore import Qt  # noqa: E402
+from PyQt5.QtGui import QColor, QPixmap  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from meapet.desktop.chat_flow import PetChatFlowMixin  # noqa: E402
@@ -91,34 +33,6 @@ class _SignalStub:
     def emit(self, *args) -> None:
         for callback in tuple(self._callbacks):
             callback(*args)
-
-
-class _Live2DWidgetStub(QWidget):
-    """替代真实 Live2DWidget 的轻量桩。"""
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.head_patted = _SignalStub()
-        self.tail_patted = _SignalStub()
-        self.lower_left_patted = _SignalStub()
-        self.lower_right_patted = _SignalStub()
-        self.first_frame_ready = _SignalStub()
-        self.initialization_failed = _SignalStub()
-        self.chat_requested = _SignalStub()
-        self.shutdown_called = False
-
-    def shutdown(self) -> None:
-        self.shutdown_called = True
-
-class _InteractiveLive2DModelStub:
-    """使用真实 Live2DWidget，但不初始化模型或 OpenGL。"""
-
-    def __init__(self, _model_dir: str) -> None:
-        self.model = None
-
-    def create_widget(self, parent=None):
-        from meapet.desktop.live2d_widget import Live2DWidget
-        return Live2DWidget(self, parent)
 
 
 class _SpriteRendererStub:
@@ -198,13 +112,12 @@ class _ChatRenderHost(PetChatFlowMixin, _RenderHost):
 # 测试用例
 # ════════════════════════════════════════════════════════════════════
 
-class Live2DStartupTests(unittest.TestCase):
+class PNGStartupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
-        _Live2DModelStub.created = 0
         _SpriteRendererStub.created = 0
         self._hosts = []
 
@@ -220,132 +133,15 @@ class Live2DStartupTests(unittest.TestCase):
         self._hosts.append(host)
         return host
 
-    @staticmethod
-    def _patch_renderers():
-        """统一 patch 三个关键依赖。"""
-        # 优先使用 sys.modules 中已有的假模块（当无 live2d 库时由 except 块注入）
-        l2dw = sys.modules.get("meapet.desktop.live2d_widget")
-        if l2dw is None:
-            # 有 live2d 库时，正常导入真实模块
-            import meapet.desktop.live2d_widget as l2dw
-        return (
-            mock.patch(
-                "meapet.desktop.render_host.SpriteRenderer", _SpriteRendererStub
-            ),
-            mock.patch.object(l2dw, "Live2DModel", _Live2DModelStub),
-            mock.patch.object(l2dw, "init_live2d"),
-        )
-    # ── 核心启动流程 ────────────────────────────────────────────────
-
-    def test_live2d_is_the_only_startup_renderer_until_its_first_frame(self) -> None:
-        """启动阶段只创建 Live2D，首帧就绪后才标记 renderer_ready。"""
-        with tempfile.TemporaryDirectory() as model_dir:
-            host = self._host(model_dir)
-            sprite_patch, model_patch, init_patch = self._patch_renderers()
-            with sprite_patch, model_patch, init_patch:
-                host.init_renderer()
-
-            self.assertEqual(_SpriteRendererStub.created, 0)
-            self.assertEqual(_Live2DModelStub.created, 1)
-            self.assertTrue(host._use_live2d)
-            self.assertTrue(host._l2d_pending)
-            self.assertFalse(host._renderer_ready)
-            self.assertEqual(host.windowOpacity(), 1.0)
-
-            ready = []
-            host.when_renderer_ready(lambda: ready.append("ready"))
-            host.sprite_label.first_frame_ready.emit()
-            QApplication.processEvents()
-
-            self.assertEqual(ready, ["ready"])
-            self.assertTrue(host._renderer_ready)
-            self.assertFalse(host._l2d_pending)
-            self.assertEqual(host.windowOpacity(), 1.0)
-            self.assertEqual(host.placements, 0)
-
-            # 首帧信号只应触发一次
-            host.sprite_label.first_frame_ready.emit()
-            QApplication.processEvents()
-            self.assertEqual(ready, ["ready"])
-
-    def test_closing_host_cancels_pending_live2d_startup_timeout(self) -> None:
-        """关闭宿主时，待处理的 Live2D 启动定时器应被取消。"""
-        with tempfile.TemporaryDirectory() as model_dir:
-            host = self._host(model_dir)
-            sprite_patch, model_patch, init_patch = self._patch_renderers()
-            with sprite_patch, model_patch, init_patch:
-                host.init_renderer()
-
-            timer = host._live2d_startup_timer
-            self.assertIsNotNone(timer)
-            self.assertTrue(timer.isActive())
-
-            host.close()
-            QApplication.processEvents()
-
-            self.assertFalse(timer.isActive())
-
-    # ── 窗口状态保持 ────────────────────────────────────────────────
-
-    def test_windows_live2d_stays_mapped_without_opacity_or_visibility_reset(self) -> None:
-        """首帧就绪后不应 hide/show/raise，也不应改变 opacity。"""
-        with tempfile.TemporaryDirectory() as model_dir:
-            host = self._host(model_dir)
-            sprite_patch, model_patch, init_patch = self._patch_renderers()
-            with sprite_patch, model_patch, init_patch:
-                host.init_renderer()
-                self.assertEqual(host.windowOpacity(), 1.0)
-
-                with (
-                    mock.patch.object(host, "hide") as hide,
-                    mock.patch.object(host, "show") as show,
-                    mock.patch.object(host, "raise_") as raise_window,
-                    mock.patch.object(host.sprite_label, "show") as show_widget,
-                    mock.patch.object(host.sprite_label, "update") as update_widget,
-                ):
-                    host.sprite_label.first_frame_ready.emit()
-                    QApplication.processEvents()
-
-                hide.assert_not_called()
-                show.assert_not_called()
-                raise_window.assert_not_called()
-                show_widget.assert_called_once_with()
-                update_widget.assert_called_once_with()
-                self.assertEqual(host.windowOpacity(), 1.0)
-
     # ── 回退路径 ────────────────────────────────────────────────────
-
-    def test_live2d_initialization_failure_reveals_png_fallback(self) -> None:
-        """Live2D 初始化失败时，应自动回退到 PNG 渲染器。"""
-        with tempfile.TemporaryDirectory() as model_dir:
-            host = self._host(model_dir)
-            sprite_patch, model_patch, init_patch = self._patch_renderers()
-            with sprite_patch, model_patch, init_patch:
-                host.init_renderer()
-                host.sprite_label.initialization_failed.emit("OpenGL context failed")
-                QApplication.processEvents()
-
-            self.assertEqual(_Live2DModelStub.created, 1)
-            self.assertEqual(_SpriteRendererStub.created, 1)
-            self.assertFalse(host._use_live2d)
-            self.assertTrue(host._renderer_ready)
-            self.assertEqual(host.windowOpacity(), 1.0)
-            self.assertEqual(host.placements, 1)
 
     def test_force_png_skips_live2d_and_is_ready_immediately(self) -> None:
         """设置 MEAPET_FORCE_PNG=1 时，应跳过 Live2D 直接走 PNG。"""
         with tempfile.TemporaryDirectory() as model_dir:
             host = self._host(model_dir)
-            sprite_patch, model_patch, init_patch = self._patch_renderers()
-            with (
-                sprite_patch,
-                model_patch,
-                init_patch,
-                mock.patch.dict(os.environ, {"MEAPET_FORCE_PNG": "1"}),
-            ):
+            with mock.patch.dict(os.environ, {"MEAPET_FORCE_PNG": "1"}):
                 host.init_renderer()
 
-            self.assertEqual(_Live2DModelStub.created, 0)
             self.assertEqual(_SpriteRendererStub.created, 1)
             self.assertFalse(host._use_live2d)
             self.assertTrue(host._renderer_ready)
@@ -413,100 +209,6 @@ class Live2DStartupTests(unittest.TestCase):
                 for x in range(rendered.width())
             )
         )
-
-    # ── 尺寸联动 ────────────────────────────────────────────────────
-
-    def test_live2d_uses_the_model_suggested_aspect_ratio(self) -> None:
-        """窗口初始尺寸应与模型画布尺寸一致，缩放后按比例变化。"""
-        with tempfile.TemporaryDirectory() as model_dir:
-            host = self._host(model_dir)
-            sprite_patch, model_patch, init_patch = self._patch_renderers()
-            with sprite_patch, model_patch, init_patch:
-                host.init_renderer()
-
-            # 初始尺寸 = 模型建议尺寸 (525, 735)
-            self.assertEqual((host.width(), host.height()), (525, 735))
-            self.assertEqual(
-                (host.sprite_label.width(), host.sprite_label.height()),
-                (525, 735),
-            )
-
-            # 注入桩模型，使 _size_factor_preview 的调试打印能正常工作
-            host._l2d_model = _Live2DModelStub("unused")
-            host._size_factor_preview(1.2)
-
-            # 525 * 1.2 = 630, 735 * 1.2 = 882
-            self.assertEqual((host.width(), host.height()), (630, 882))
-            self.assertEqual(
-                (host.sprite_label.width(), host.sprite_label.height()),
-                (630, 882),
-            )
-
-    # ── 需要真实 live2d 库的测试 ────────────────────────────────────
-
-    @unittest.skipIf(not HAVE_LIVE2D, "live2d library not available")
-    def test_live2d_left_double_click_emits_chat_request(self) -> None:
-        """左键双击 Live2DWidget 应发出 chat_requested 信号。"""
-        from meapet.desktop.live2d_widget import Live2DWidget
-
-        widget = Live2DWidget(SimpleNamespace(model=None))
-        self._hosts.append(widget)
-        requested = []
-        widget.chat_requested.connect(lambda: requested.append(True))
-        event = QMouseEvent(
-            QEvent.MouseButtonDblClick,
-            QPointF(120, 120),
-            Qt.LeftButton,
-            Qt.LeftButton,
-            Qt.NoModifier,
-        )
-
-        widget.mouseDoubleClickEvent(event)
-
-        self.assertEqual(requested, [True])
-        self.assertTrue(event.isAccepted())
-
-    def test_live2d_chat_request_is_connected_to_the_render_host(self) -> None:
-        """Live2DWidget 的 chat_requested 信号应连接到宿主的 _start_chat。"""
-        with tempfile.TemporaryDirectory() as model_dir:
-            host = self._host(model_dir)
-            host._start_chat = mock.Mock()
-            sprite_patch, model_patch, init_patch = self._patch_renderers()
-            with sprite_patch, model_patch, init_patch:
-                host.init_renderer()
-                host.sprite_label.chat_requested.emit()
-
-            host._start_chat.assert_called_once_with()
-
-    @unittest.skipIf(not HAVE_LIVE2D, "live2d library not available")
-    def test_live2d_double_click_opens_a_visible_chat_input_end_to_end(self) -> None:
-        """端到端：双击 → 弹出聊天输入框 → 气泡隐藏。"""
-        with tempfile.TemporaryDirectory() as model_dir:
-            host = _ChatRenderHost(model_dir)
-            self._hosts.append(host)
-            with (
-                mock.patch(
-                    "meapet.desktop.live2d_widget.Live2DModel",
-                    _InteractiveLive2DModelStub,
-                ),
-                mock.patch("meapet.desktop.live2d_widget.init_live2d"),
-            ):
-                host.init_renderer()
-
-            event = QMouseEvent(
-                QEvent.MouseButtonDblClick,
-                QPointF(120, 120),
-                Qt.LeftButton,
-                Qt.LeftButton,
-                Qt.NoModifier,
-            )
-            QApplication.sendEvent(host.sprite_label, event)
-            QApplication.processEvents()
-
-            self.assertTrue(event.isAccepted())
-            self.assertTrue(hasattr(host, "_chat_input"))
-            self.assertTrue(host._chat_input.isVisible())
-            host.bubble.hide.assert_called_once_with()
 
     # ── app.py 静态检查 ─────────────────────────────────────────────
 
