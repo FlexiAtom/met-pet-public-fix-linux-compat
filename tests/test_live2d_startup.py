@@ -14,6 +14,27 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 try:
     import live2d  # noqa: F401
     HAVE_LIVE2D = True
+
+class _Live2DModelStub:
+    """替代真实 Live2DModel 的桩，不需要 live2d 库。"""
+
+    created = 0
+
+    def __init__(self, _model_dir: str) -> None:
+        type(self).created += 1
+        self.widget = None
+        self._model_dir = _model_dir
+        self.model = None
+    def create_widget(self, parent=None):
+        self.widget = _Live2DWidgetStub(parent)
+    return self.widget
+
+    def get_suggested_size(self):
+        return (525, 735)
+
+    def get_model(self):
+        return self.model
+
 except ImportError:
     HAVE_LIVE2D = False
     # 构造一个完整的假 live2d 模块树，使 live2d_widget.py 中的
@@ -31,6 +52,12 @@ except ImportError:
     _top.v3 = _v3
     _top.LAppModel = _v3.LAppModel
     sys.modules["live2d"] = _top
+    # 注入假的 meapet.desktop.live2d_widget 模块，
+    # 使 render_host.py 导入时不会执行真实模块（避免 import live2d.v3 失败）
+    _fake_l2dw = ModuleType("meapet.desktop.live2d_widget")
+    _fake_l2dw.Live2DModel = _Live2DModelStub  # 注意：此时 _Live2DModelStub 尚未定义，需要调整位置
+    _fake_l2dw.init_live2d = lambda: None
+    sys.modules["meapet.desktop.live2d_widget"] = _fake_l2dw
 
 # 现在安全地导入 Qt 和 meapet 模块
 import inspect
@@ -80,29 +107,6 @@ class _Live2DWidgetStub(QWidget):
 
     def shutdown(self) -> None:
         self.shutdown_called = True
-
-
-class _Live2DModelStub:
-    """替代真实 Live2DModel 的桩，不需要 live2d 库。"""
-
-    created = 0
-
-    def __init__(self, _model_dir: str) -> None:
-        type(self).created += 1
-        self.widget = None
-        self._model_dir = _model_dir
-        self.model = None
-
-    def create_widget(self, parent=None):
-        self.widget = _Live2DWidgetStub(parent)
-        return self.widget
-
-    def get_suggested_size(self):
-        return (525, 735)
-
-    def get_model(self):
-        return self.model
-
 
 class _InteractiveLive2DModelStub:
     """使用真实 Live2DWidget，但不初始化模型或 OpenGL。"""
@@ -217,15 +221,13 @@ class Live2DStartupTests(unittest.TestCase):
     @staticmethod
     def _patch_renderers():
         """统一 patch 三个关键依赖。"""
+        import meapet.desktop.live2d_widget as l2dw  # 此时拿到的是假模块
         return (
             mock.patch(
                 "meapet.desktop.render_host.SpriteRenderer", _SpriteRendererStub
             ),
-            mock.patch(
-                "meapet.desktop.live2d_widget.Live2DModel",
-                _Live2DModelStub,
-            ),
-            mock.patch("meapet.desktop.live2d_widget.init_live2d"),
+            mock.patch.object(l2dw, "Live2DModel", _Live2DModelStub),
+            mock.patch.object(l2dw, "init_live2d"),
         )
 
     # ── 核心启动流程 ────────────────────────────────────────────────
