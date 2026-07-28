@@ -580,7 +580,7 @@ class PetWindowChromeMixin:
 
         dialog = getattr(self, "_timeline_dialog", None)
         if dialog is None:
-            dialog = TimelineDialog(timeline, self)
+            dialog = TimelineDialog(timeline, None)
             self._timeline_dialog = dialog
             self._place_dialog_near_pet(dialog)
         else:
@@ -598,7 +598,7 @@ class PetWindowChromeMixin:
             return
         from meapet.desktop.timeline_viewer import TurnDetailDialog
 
-        dialog = TurnDetailDialog(turn, self)
+        dialog = TurnDetailDialog(turn, None)
         self._timeline_turn_dialog = dialog
         self._place_dialog_near_pet(dialog)
         dialog.show()
