@@ -11,9 +11,6 @@ from types import ModuleType
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-try:
-    import live2d  # noqa: F401
-    HAVE_LIVE2D = True
 
 class _Live2DModelStub:
     """替代真实 Live2DModel 的桩，不需要 live2d 库。"""
@@ -25,9 +22,10 @@ class _Live2DModelStub:
         self.widget = None
         self._model_dir = _model_dir
         self.model = None
+
     def create_widget(self, parent=None):
         self.widget = _Live2DWidgetStub(parent)
-    return self.widget
+        return self.widget
 
     def get_suggested_size(self):
         return (525, 735)
@@ -35,6 +33,10 @@ class _Live2DModelStub:
     def get_model(self):
         return self.model
 
+
+try:
+    import live2d  # noqa: F401
+    HAVE_LIVE2D = True
 except ImportError:
     HAVE_LIVE2D = False
     # 构造一个完整的假 live2d 模块树，使 live2d_widget.py 中的
