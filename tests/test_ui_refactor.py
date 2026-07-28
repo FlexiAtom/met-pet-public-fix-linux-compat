@@ -1297,7 +1297,7 @@ class UiRefactorTests(unittest.TestCase):
             screen.right() - host.width() - 40,
             screen.top() + 100,
         )
-        visible_local = QRect(72, 32, 180, 320)
+        visible_local = QRect(host_rect.x() + 72, host_rect.y() + 32, 180, 320)
         host.setMask(QRegion(visible_local, QRegion.Ellipse))
         bubble = BubbleStub()
         host.bubble = bubble
