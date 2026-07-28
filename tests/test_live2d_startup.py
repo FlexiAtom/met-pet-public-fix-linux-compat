@@ -223,7 +223,11 @@ class Live2DStartupTests(unittest.TestCase):
     @staticmethod
     def _patch_renderers():
         """统一 patch 三个关键依赖。"""
-        import meapet.desktop.live2d_widget as l2dw  # 此时拿到的是假模块
+        # 优先使用 sys.modules 中已有的假模块（当无 live2d 库时由 except 块注入）
+        l2dw = sys.modules.get("meapet.desktop.live2d_widget")
+        if l2dw is None:
+            # 有 live2d 库时，正常导入真实模块
+            import meapet.desktop.live2d_widget as l2dw
         return (
             mock.patch(
                 "meapet.desktop.render_host.SpriteRenderer", _SpriteRendererStub
@@ -231,7 +235,6 @@ class Live2DStartupTests(unittest.TestCase):
             mock.patch.object(l2dw, "Live2DModel", _Live2DModelStub),
             mock.patch.object(l2dw, "init_live2d"),
         )
-
     # ── 核心启动流程 ────────────────────────────────────────────────
 
     def test_live2d_is_the_only_startup_renderer_until_its_first_frame(self) -> None:
