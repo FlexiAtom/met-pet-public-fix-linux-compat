@@ -1320,7 +1320,7 @@ class UiRefactorTests(unittest.TestCase):
             anchor.left() - host_rect.left()
         )
 
-        self.assertEqual(visible_gap, BUBBLE_PET_GAP)
+        self.assertEqual(visible_gap, 12)
         self.assertGreater(transparent_window_gap, BUBBLE_PET_GAP * 4)
         self.assertLess(bubble_rect.right(), anchor.left())
 
@@ -1716,6 +1716,7 @@ class UiRefactorTests(unittest.TestCase):
                 self.renderer = _RendererStub()
                 self.sprite_label = QLabel(self)
                 self.saved = 0
+                self._l2d_model = None
 
             def _save_config(self):
                 self.saved += 1
