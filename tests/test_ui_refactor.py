@@ -1311,7 +1311,7 @@ class UiRefactorTests(unittest.TestCase):
             host.width(),
             host.height(),
         )
-        anchor = QRect(host_rect.right() - 1, host_rect.top(), 1, 1)
+        anchor = QRect(host_rect.right() + 1, host_rect.top(), 1, 1)
         visible_gap = anchor.left() - bubble_rect.right() - 1
         transparent_window_gap = (
             anchor.left() - host_rect.left()

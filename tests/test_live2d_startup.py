@@ -139,7 +139,10 @@ class PNGStartupTests(unittest.TestCase):
         """设置 MEAPET_FORCE_PNG=1 时，应跳过 Live2D 直接走 PNG。"""
         with tempfile.TemporaryDirectory() as model_dir:
             host = self._host(model_dir)
-            with mock.patch.dict(os.environ, {"MEAPET_FORCE_PNG": "1"}):
+            with (
+                mock.patch.dict(os.environ, {"MEAPET_FORCE_PNG": "1"}),
+                mock.patch("meapet.desktop.render_host.SpriteRenderer", _SpriteRendererStub),  # ← 新增
+            ):
                 host.init_renderer()
 
             self.assertEqual(_SpriteRendererStub.created, 1)
