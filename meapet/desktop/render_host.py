@@ -1,18 +1,17 @@
-"""PNG / Live2D render host: switch modes, size, hit region, standby."""
-from __future__ import annotations
+"""PNG / Live2D render host: switch modes, size, hit region, standby.
 
+椭圆裁剪已全部移除。窗口大小直接联动 Live2D 模型画布：
+- Live2D 模式下，窗口尺寸 = 模型画布尺寸 × size_factor
+- 不再设置 Qt setMask / OS 椭圆窗形 / OpenGL stencil
+- 触摸事件在全窗口范围内有效，与视觉位置天然一致
+"""
 import os
 from collections.abc import Callable
 
 from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
-from PyQt5.QtGui import QRegion
 
 from meapet.desktop.renderer import SpriteCanvas, SpriteRenderer
-from meapet.config.store import (
-    DEFAULT_LIVE2D_WINDOW_MASK,
-    normalize_live2d_window_mask,
-)
 from meapet.desktop.widgets import (
     SizeScaleDialog,
     calculate_bubble_stack_opacities,
@@ -34,10 +33,6 @@ from meapet.desktop.click_through import (
     enable_click_through,
     is_right_button_down,
 )
-from meapet.desktop.window_shape import (
-    apply_ellipse_window_shape,
-    clear_window_shape,
-)
 from meapet.ui_theme import normalize_pet_size_factor
 from meapet.utils import safe_print
 
@@ -52,6 +47,14 @@ LIVE2D_STARTUP_TIMEOUT_MS = 5000
 SCREEN_GUARD_DEBOUNCE_MS = 400
 # 桌宠宽高各至少露出这么多比例才算「还看得见」，否则拉回可用区域。
 PET_MIN_VISIBLE_RATIO = 0.5
+
+# Live2D 模型画布尺寸的合法范围（像素）。
+# 低于此值视为 SDK 返回了无效占位值（如 1x2），需要回退。
+MIN_CANVAS_SIZE = 256
+# 高于此值视为异常（防止 4K 模型撑爆屏幕），会按比例缩放到合理范围。
+MAX_CANVAS_SIZE = 4096
+# 当模型画布异常时使用的默认尺寸。
+DEFAULT_CANVAS_SIZE = (1024, 1024)
 
 
 def calculate_drag_position(
@@ -69,9 +72,7 @@ def calculate_bubble_anchor_rect(
 ) -> QRect:
     """把桌宠窗口内的可见区域转换成用于气泡定位的全局矩形。
 
-    Live2D 宿主窗口通常包含大块透明留白；若仍以完整窗口为锚点，代码
-    计算出的 12px 间距会变成“透明留白 + 12px”。Qt mask 与实际窗口
-    命中区域共用，因此它的包围盒是最稳定的视觉锚点。
+    已移除椭圆 mask，窗口即为模型画布本身，无需再取 mask 包围盒。
     """
     window = QRect(pet_window_rect)
     if visible_local_rect is None or visible_local_rect.isEmpty():
@@ -106,8 +107,6 @@ def calculate_bubble_position(
     right = QPoint(pet_rect.right() + gap + 1, upper_y)
     top = QPoint(centered_x, pet_rect.top() - gap - height)
     bottom = QPoint(centered_x, pet_rect.bottom() + gap + 1)
-    # 桌宠在屏幕右半侧时气泡优先放左边；在左半侧时优先放右边。
-    # 上下方仅作为两侧空间不足或被其他浮层占用时的回退位置。
     if pet_rect.center().x() >= safe.center().x():
         candidates = (left, right, top, bottom)
     else:
@@ -128,7 +127,6 @@ def calculate_bubble_position(
         if is_clear(candidate):
             return candidate
 
-    # 候选点不完整可见时先钳制，再找一个没有碰撞的位置。
     max_x = safe.right() - width + 1
     max_y = safe.bottom() - height + 1
 
@@ -153,8 +151,6 @@ def calculate_bubble_position(
         ):
             return candidate
 
-    # 首选锚点被聊天框等浮层占用时，优先水平让开，保持气泡仍在角色上部。
-    # 如果水平空间不足，再尝试沿垂直方向避让。
     for candidate in clamped_candidates:
         adjusted_candidates = []
         for blocked in blocked_rects:
@@ -196,7 +192,7 @@ def calculate_bubble_stack_positions(
     stack_gap: int = BUBBLE_STACK_GAP,
     avoid_rects: tuple[QRect, ...] = (),
 ) -> tuple[QPoint, ...]:
-    """按“最旧到最新”返回气泡位置，最新靠近角色、旧消息向上堆叠。"""
+    """按"最旧到最新"返回气泡位置，最新靠近角色、旧消息向上堆叠。"""
     sizes = tuple(bubble_sizes)
     if not sizes:
         return ()
@@ -267,7 +263,6 @@ def calculate_bubble_stack_positions(
         if is_clear(positions):
             return positions
 
-    # 极窄屏幕或额外浮层占满两侧时，沿用单气泡的安全回退方向。
     latest_position = calculate_bubble_position(
         pet_rect,
         sizes[-1],
@@ -320,28 +315,6 @@ def calculate_bubble_tail(pet_rect: QRect, bubble_rect: QRect) -> tuple[str, int
     return "top", pet_center_x - bubble_rect.left()
 
 
-def ellipse_mask_region(
-    width: int,
-    height: int,
-    params: dict | None = None,
-) -> QRegion:
-    """按窗口像素尺寸与归一化参数生成椭圆 mask（纯函数，便于单测）。"""
-    mask = normalize_live2d_window_mask(params or DEFAULT_LIVE2D_WINDOW_MASK)
-    w = max(1, int(width))
-    h = max(1, int(height))
-    cx_px = int(round(float(mask["cx"]) * w))
-    cy_px = int(round(float(mask["cy"]) * h))
-    rw_px = max(1, int(round(float(mask["rw"]) * w)))
-    rh_px = max(1, int(round(float(mask["rh"]) * h)))
-    return QRegion(
-        cx_px - rw_px,
-        cy_px - rh_px,
-        rw_px * 2,
-        rh_px * 2,
-        QRegion.Ellipse,
-    )
-
-
 class PetRenderHostMixin:
     def _init_renderer(self):
         """直接初始化目标渲染器；Live2D 首帧完成前保持顶层窗口透明。"""
@@ -373,9 +346,6 @@ class PetRenderHostMixin:
         )
 
         if live2d_requested:
-            # 保持顶层窗口正常映射；背景和未完成 framebuffer 本身透明。
-            # Windows 的 QOpenGLWidget 不应以 0 opacity 首次映射，否则可能
-            # 永久丢失 DWM 合成表面。
             self.setWindowOpacity(1.0)
             try:
                 self._start_live2d_renderer()
@@ -401,7 +371,6 @@ class PetRenderHostMixin:
             "sprite_dir",
             os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "sprites"),
         )
-        # Prefer project sprites via config default; fall back to PROJECT_ROOT
         if not os.path.isdir(sprite_dir):
             from meapet.paths import project_path
             sprite_dir = project_path("sprites")
@@ -427,7 +396,6 @@ class PetRenderHostMixin:
         """创建 Live2D 控件，但把可见性推迟到它报告真实首帧以后。"""
         from meapet.desktop.live2d_widget import init_live2d
 
-        self._clear_window_region()
         init_live2d()
         self._use_live2d = True
         self._l2d_pending = True
@@ -481,22 +449,150 @@ class PetRenderHostMixin:
                 safe_print(f"[pet] renderer-ready callback failed: {exc}")
 
     def _on_live2d_first_frame(self):
-        """首帧已经绘制并提交后，仅做一次显现，不再改变尺寸或位置。"""
+        """首帧已经绘制并提交后，调整窗口大小以匹配模型画布，再显现。"""
         if not self._l2d_pending or not self._use_live2d:
             return
         self._cancel_live2d_startup_timeout()
         self._l2d_pending = False
         self._live2d_startup_widget = None
+
+        # 首帧就绪后，根据模型实际画布大小调整窗口尺寸
         try:
-            self._apply_hit_region()
+            self._fit_window_to_model()
         except Exception as exc:
-            safe_print(f"[live2d] hit region skipped: {exc}")
+            safe_print(f"[live2d] fit window to model skipped: {exc}")
+
         self._reveal_live2d_window()
         self._mark_renderer_ready()
         safe_print(
             f"[pet] Live2D 首帧就绪 size={self.width()}x{self.height()} "
             f"pos=({self.x()},{self.y()})"
         )
+
+    # ------------------------------------------------------------ 画布尺寸工具
+
+    def _read_canvas_size_from_model(self, model) -> tuple[int, int] | None:
+        """从 Live2D 模型读取画布尺寸，带多层回退。
+
+        优先使用 get_suggested_size()，然后对返回值做严格范围校验。
+        如果 SDK 返回无效占位值（如 (1, 2)），依次尝试其他可能的 API。
+        全部失败时返回 None，由调用方决定回退策略。
+        """
+        if model is None:
+            return None
+
+        # 第 1 层：get_suggested_size()
+        try:
+            w, h = model.get_suggested_size()
+            w, h = int(w), int(h)
+            if MIN_CANVAS_SIZE <= w <= MAX_CANVAS_SIZE and MIN_CANVAS_SIZE <= h <= MAX_CANVAS_SIZE:
+                return w, h
+            safe_print(f"[WARN] get_suggested_size 返回异常值 ({w}, {h})，尝试其他 API")
+        except (AttributeError, TypeError, ValueError) as exc:
+            safe_print(f"[WARN] get_suggested_size 调用失败: {exc}")
+
+        # 第 2 层：尝试其他常见 API 名称
+        for method_name in ("get_canvas_size", "GetCanvasSize", "getCanvasSize"):
+            if hasattr(model, method_name):
+                try:
+                    func = getattr(model, method_name)
+                    result = func() if callable(func) else func
+                    if isinstance(result, (tuple, list)) and len(result) >= 2:
+                        w, h = int(result[0]), int(result[1])
+                    else:
+                        w, h = int(result), int(result)
+                    if MIN_CANVAS_SIZE <= w <= MAX_CANVAS_SIZE and MIN_CANVAS_SIZE <= h <= MAX_CANVAS_SIZE:
+                        safe_print(f"[INFO] 通过 {method_name} 获取画布尺寸: {w}x{h}")
+                        return w, h
+                except Exception as exc:
+                    safe_print(f"[WARN] {method_name} 调用失败: {exc}")
+
+        # 第 3 层：尝试访问底层 SDK 模型的 canvas 属性
+        sdk_model = getattr(model, "_model", None) or getattr(model, "model", None)
+        if sdk_model is not None:
+            for attr_pair in (
+                ("GetCanvasWidth", "GetCanvasHeight"),
+                ("getCanvasWidth", "getCanvasHeight"),
+                ("canvasWidth", "canvasHeight"),
+                ("width", "height"),
+            ):
+                try:
+                    getter_w = getattr(sdk_model, attr_pair[0], None)
+                    getter_h = getattr(sdk_model, attr_pair[1], None)
+                    if getter_w is not None and getter_h is not None:
+                        w = getter_w() if callable(getter_w) else int(getter_w)
+                        h = getter_h() if callable(getter_h) else int(getter_h)
+                        w, h = int(w), int(h)
+                        if MIN_CANVAS_SIZE <= w <= MAX_CANVAS_SIZE and MIN_CANVAS_SIZE <= h <= MAX_CANVAS_SIZE:
+                            safe_print(f"[INFO] 通过 sdk_model.{attr_pair[0]}/{attr_pair[1]} 获取画布尺寸: {w}x{h}")
+                            return w, h
+                except Exception:
+                    continue
+
+        return None
+
+    def _live2d_base_size(self) -> tuple[int, int]:
+        """返回 Live2D 模型画布的原始尺寸（无缩放），带多重回退。
+
+        回退顺序：
+        1. 从模型 SDK 读取（_read_canvas_size_from_model）
+        2. 从 config.json 的 live2d.default_canvas_size 读取
+        3. DEFAULT_CANVAS_SIZE 硬编码 (1024, 1024)
+        """
+        model = getattr(self, "_l2d_model", None)
+        canvas = self._read_canvas_size_from_model(model)
+        if canvas is not None:
+            return canvas
+
+        # 回退 2：配置文件
+        l2d_cfg = self.config.get("live2d", {})
+        default_size = l2d_cfg.get("default_canvas_size", None)
+        if isinstance(default_size, (list, tuple)) and len(default_size) >= 2:
+            try:
+                w, h = int(default_size[0]), int(default_size[1])
+                if MIN_CANVAS_SIZE <= w <= MAX_CANVAS_SIZE and MIN_CANVAS_SIZE <= h <= MAX_CANVAS_SIZE:
+                    safe_print(f"[INFO] 使用配置中的 default_canvas_size: {w}x{h}")
+                    return w, h
+            except (TypeError, ValueError):
+                pass
+
+        # 回退 3：硬编码默认值
+        w, h = DEFAULT_CANVAS_SIZE
+        safe_print(f"[INFO] 使用硬编码默认画布尺寸: {w}x{h}")
+        return w, h
+
+    # ------------------------------------------------------------ 窗口尺寸调整
+
+    def _fit_window_to_model(self):
+        """根据 Live2D 模型画布大小 × size_factor 调整窗口尺寸。
+
+        模型加载后，其画布大小已知，窗口应刚好包裹模型渲染区域，
+        不再有多余透明边距，触摸区域与视觉位置天然一致。
+        """
+        model = self._l2d_model
+        if model is None:
+            safe_print("[live2d] _fit_window_to_model: 模型未加载，跳过")
+            return
+
+        canvas_w, canvas_h = self._read_canvas_size_from_model(model)
+        if canvas_w is None:
+            canvas_w, canvas_h = DEFAULT_CANVAS_SIZE
+            safe_print(f"[live2d] 画布尺寸获取失败，使用默认: {canvas_w}x{canvas_h}")
+
+        factor = float(getattr(self, "_size_factor", 1.0))
+        new_w = max(MIN_CANVAS_SIZE // 2, round(canvas_w * factor))
+        new_h = max(MIN_CANVAS_SIZE // 2, round(canvas_h * factor))
+
+        widget = self.sprite_label
+        if widget is not None:
+            widget.resize(new_w, new_h)
+        self.resize(new_w, new_h)
+
+        # 以底部中心为锚点，防止放大时往右下角长出去
+        before = QRect(self.x(), self.y(), new_w, new_h)
+        self._reanchor_after_resize(before)
+
+        safe_print(f"[live2d] 窗口已适配模型画布: {new_w}x{new_h} (canvas={canvas_w}x{canvas_h}, factor={factor})")
 
     def _reveal_live2d_window(self):
         """刷新已经正常映射的 OpenGL 子控件，不重置顶层窗口。"""
@@ -541,7 +637,6 @@ class PetRenderHostMixin:
         self._init_png_renderer()
         try:
             self._place_bottom_right()
-            self._apply_hit_region()
         except Exception as exc:
             safe_print(f"[pet] PNG fallback placement skipped: {exc}")
         self.setWindowOpacity(1.0)
@@ -570,6 +665,7 @@ class PetRenderHostMixin:
         widget.initialization_failed.connect(
             self._on_live2d_initialization_failed
         )
+        # 初始大小：使用模型画布（或默认值）× size_factor
         w0, h0 = self._scaled_live2d_size(self._size_factor)
         widget.move(0, 0)
         widget.resize(w0, h0)
@@ -582,24 +678,12 @@ class PetRenderHostMixin:
             return self._l2d_model
         return self.renderer
 
-    def _live2d_base_size(self) -> tuple[int, int]:
-        model = getattr(self, "_l2d_model", None)
-        if model is not None:
-            try:
-                width, height = model.get_suggested_size()
-                width = int(width)
-                height = int(height)
-                if width > 0 and height > 0:
-                    return width, height
-            except (AttributeError, TypeError, ValueError):
-                pass
-        return 525, 735
-
     def _scaled_live2d_size(self, factor: float) -> tuple[int, int]:
+        """返回模型画布大小 × 缩放因子，作为窗口尺寸。"""
         base_w, base_h = self._live2d_base_size()
         return (
-            max(80, round(base_w * factor)),
-            max(80, round(base_h * factor)),
+            max(MIN_CANVAS_SIZE // 2, round(base_w * factor)),
+            max(MIN_CANVAS_SIZE // 2, round(base_h * factor)),
         )
 
     def _safe_set_mood(self, mood: str):
@@ -646,8 +730,19 @@ class PetRenderHostMixin:
 
     def _set_size_factor(self, factor: float):
         """按百分比档位直接应用窗口大小并写回配置（右键菜单快捷项）。"""
+        safe_print(f"[SET_SIZE_FACTOR] input={factor}, type={type(factor).__name__}")
         new_factor = normalize_pet_size_factor(factor)
-        self._size_factor_preview(new_factor)
+        safe_print(f"[SET_SIZE_FACTOR] normalized={new_factor}")
+
+        # 关键修复：只调用一次 _size_factor_preview（原代码调用了两次）
+        try:
+            self._size_factor_preview(new_factor)
+            safe_print(f"[SET_SIZE_FACTOR] after preview: size={self.width()}x{self.height()}")
+        except Exception as exc:
+            import traceback
+            safe_print(f"[SET_SIZE_FACTOR] preview failed: {exc}")
+            traceback.print_exc()
+
         self.config.setdefault("display", {})["size_factor"] = new_factor
         self._save_config()
         show = getattr(self, "_show_bubble", None)
@@ -663,39 +758,42 @@ class PetRenderHostMixin:
         self._size_factor_preview(factor)
 
     def _size_factor_preview(self, factor: float):
+        """预览 size_factor 变化：调整窗口大小，保持位置合理。"""
         factor = normalize_pet_size_factor(factor)
+        safe_print(f"[PREVIEW] factor={factor}, use_live2d={self._use_live2d}, model={self._l2d_model is not None}")
+
         before = QRect(self.x(), self.y(), self.width(), self.height())
         self._size_factor = factor
+
         if self._use_live2d and self.sprite_label:
-            self._clear_window_region()
-            new_w, new_h = self._scaled_live2d_size(factor)
+            # Live2D 模式：根据模型画布重新计算窗口大小
+            base_w, base_h = self._live2d_base_size()
+            new_w = max(MIN_CANVAS_SIZE // 2, round(base_w * factor))
+            new_h = max(MIN_CANVAS_SIZE // 2, round(base_h * factor))
+            safe_print(f"[PREVIEW] Live2D resize: base=({base_w},{base_h}) -> ({new_w},{new_h})")
             self.sprite_label.resize(new_w, new_h)
             self.resize(new_w, new_h)
-            self._apply_hit_region()
-            QApplication.processEvents()
         else:
             if self.renderer is None:
+                safe_print("[PREVIEW] no renderer available, skip")
                 return
             pixmap = self.renderer.get_current_pixmap()
             if not pixmap.isNull():
                 new_w = max(80, int(pixmap.width() * self._scale * factor))
                 new_h = max(80, int(pixmap.height() * self._scale * factor))
+                safe_print(f"[PREVIEW] PNG resize: ({new_w},{new_h})")
                 self.resize(new_w, new_h)
             self._update_sprite()
-            self._apply_hit_region()
-            QApplication.processEvents()
+
         self._reanchor_after_resize(before)
         self._position_bubble()
 
     def _reanchor_after_resize(self, before: QRect):
-        """缩放以「底部中心」为锚点，并保证新尺寸仍落在屏幕可用区域内。
-
-        直接 resize 会固定左上角，桌宠放大时会往右下角长出去（贴边时直接出屏）；
-        以脚下为锚点更符合「桌宠站在桌面上」的直觉。
-        """
+        """缩放以「底部中心」为锚点，并保证新尺寸仍落在屏幕可用区域内。"""
         width = self.width()
         height = self.height()
         if before.width() == width and before.height() == height:
+            safe_print(f"[REANCHOR] 尺寸未变化 ({width}x{height})，跳过")
             return
         target = QPoint(
             before.center().x() - width // 2,
@@ -705,11 +803,13 @@ class PetRenderHostMixin:
         if area is not None:
             target = clamp_position(target, QSize(width, height), area, margin=0)
         if target != QPoint(self.x(), self.y()):
+            safe_print(f"[REANCHOR] move ({self.x()},{self.y()}) -> ({target.x()},{target.y()})")
             self.move(target)
+        else:
+            safe_print(f"[REANCHOR] 位置无需调整")
 
     def _open_size_dialog(self):
         dialog = SizeScaleDialog(self._size_factor, self)
-        # 以桌宠所在屏幕（而非主屏）为准，多显示器下才不会弹到另一块屏外面。
         pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
         area = available_geometry_for(pet_rect)
         if area is not None:
@@ -721,57 +821,6 @@ class PetRenderHostMixin:
             self._size_factor = new_factor
             self.config.setdefault("display", {})["size_factor"] = new_factor
             self._save_config()
-
-    def _apply_hit_region(self):
-        """Live2D 椭圆窗口外形 + 命中；PNG 始终清空。
-
-        分层：
-        1. 原生窗形（ctypes SetWindowRgn / XShape）—— 去掉透明矩形碰撞箱
-        2. Qt setMask（宿主 + 子）—— 命中一致
-        3. Live2D paintGL stencil —— OpenGL 内容椭圆裁剪
-        不依赖 pywin32。
-        """
-        use_live2d = bool(getattr(self, "_use_live2d", False))
-        params = self._live2d_window_mask_params()
-        if not use_live2d or not params.get("enabled", True):
-            self._clear_window_region()
-            return
-
-        try:
-            dpr = float(self.devicePixelRatioF())
-        except Exception:
-            dpr = float(self.devicePixelRatio() or 1.0) if hasattr(self, "devicePixelRatio") else 1.0
-        if dpr <= 0:
-            dpr = 1.0
-
-        # 1) OS 椭圆外形（打包后去掉透明矩形窗）
-        try:
-            hwnd = int(self.winId())
-            apply_ellipse_window_shape(
-                hwnd,
-                self.width(),
-                self.height(),
-                params,
-                dpr=dpr,
-            )
-        except Exception as e:
-            safe_print(f"[WARN] OS ellipse window shape failed: {e}")
-
-        # 2) Qt mask：命中 + 部分平台辅助
-        region = ellipse_mask_region(self.width(), self.height(), params)
-        self.setMask(region)
-        widget = getattr(self, "sprite_label", None)
-        if widget is not None:
-            try:
-                widget.setMask(
-                    ellipse_mask_region(widget.width(), widget.height(), params)
-                )
-            except Exception as e:
-                safe_print(f"[WARN] Live2D child mask failed: {e}")
-
-    def _live2d_window_mask_params(self) -> dict:
-        live2d = (getattr(self, "config", {}) or {}).get("live2d") or {}
-        return normalize_live2d_window_mask(live2d.get("window_mask"))
 
     def _position_bubble(self, *, animate: bool = False):
         stack = getattr(self, "_bubble_stack", None)
@@ -795,17 +844,8 @@ class PetRenderHostMixin:
             self.width(),
             self.height(),
         )
-        visible_local_rect = None
-        try:
-            visible_region = self.mask()
-            if not visible_region.isEmpty():
-                visible_local_rect = visible_region.boundingRect()
-        except RuntimeError:
-            pass
-        pet_rect = calculate_bubble_anchor_rect(
-            pet_window_rect,
-            visible_local_rect,
-        )
+        # 不再依赖 mask，窗口本身即为模型区域
+        pet_rect = pet_window_rect
         screen = QApplication.screenAt(pet_rect.center())
         if screen is None:
             screen = QApplication.primaryScreen()
@@ -840,11 +880,7 @@ class PetRenderHostMixin:
 
     # ------------------------------------------------------------ 屏幕变化
     def _init_screen_guard(self):
-        """监听分辨率 / 显示器变化，变化后把桌宠拉回可视范围。
-
-        改分辨率（尤其是调小）后，桌宠原来的坐标可能整块落在新桌面之外；
-        窗口是无边框置顶的 Tool 窗，没有任务栏入口，用户会以为它「消失」了。
-        """
+        """监听分辨率 / 显示器变化，变化后把桌宠拉回可视范围。"""
         app = QApplication.instance()
         if app is None:
             return
@@ -903,7 +939,6 @@ class PetRenderHostMixin:
     def _ensure_on_screen(self):
         """桌宠露出得太少时拉回屏幕可用区域，并同步浮层位置。"""
         if getattr(self, "_dragging", False):
-            # 拖动中不抢用户的手，松手后的下一次屏幕事件再处理。
             return
         pet_rect = QRect(self.x(), self.y(), self.width(), self.height())
         bounds = screen_bounds_for_rect(pet_rect)
@@ -951,17 +986,15 @@ class PetRenderHostMixin:
                 if window.isVisible():
                     move_within_screen(window, window.pos())
             except RuntimeError:
-                # 窗口已被销毁，清掉悬空引用。
                 setattr(self, name, None)
 
     def _place_bottom_right(self):
-        """放到主屏右下角，并钳制在可见区域内（防止多屏/DPI 导致“消失”）。"""
+        """放到主屏右下角，并钳制在可见区域内（防止多屏/DPI 导致"消失"）。"""
         screen = QApplication.primaryScreen().availableGeometry()
         w = max(self.width(), 80)
         h = max(self.height(), 80)
         x = screen.right() - w - 50
         y = screen.bottom() - h - 10
-        # 钳制：至少 80% 窗口在主屏内
         x = max(screen.left(), min(x, screen.right() - max(80, w // 5)))
         y = max(screen.top(), min(y, screen.bottom() - max(80, h // 5)))
         self.move(x, y)
@@ -970,25 +1003,6 @@ class PetRenderHostMixin:
             f"-> pos=({x},{y}) size={w}x{h}"
         )
 
-    def _clear_window_region(self):
-        """移除 Qt mask 与原生椭圆窗形，恢复全矩形客户区。"""
-        self.clearMask()
-        widget = getattr(self, "sprite_label", None)
-        if widget is not None:
-            try:
-                widget.clearMask()
-            except Exception:
-                pass
-        try:
-            hwnd = int(self.winId())
-            clear_window_shape(
-                hwnd,
-                width=max(1, self.width()),
-                height=max(1, self.height()),
-            )
-        except Exception as e:
-            safe_print(f"[WARN] OS window shape clear failed: {e}")
-
     def _toggle_standby(self):
         self._standby = not self._standby
         if self._standby:
@@ -996,10 +1010,8 @@ class PetRenderHostMixin:
             self._safe_set_expression("011")
             self._show_bubble(status_language.standby_on(), 0)
             self._position_bubble()
-            self._apply_hit_region()
             self._set_standby_click_through(True)
         else:
-            # 先关穿透，避免离开过程中菜单/气泡仍被忽略输入。
             self._set_standby_click_through(False)
             self._safe_set_expression("001")
             clear_bubbles = getattr(self, "_clear_bubbles", None)
@@ -1009,7 +1021,6 @@ class PetRenderHostMixin:
                 self.bubble.hide()
             self._show_bubble(status_language.standby_off(), 2500)
             self._position_bubble()
-            self._apply_hit_region()
             self._start_watcher_timer()
         refresh_tray = getattr(self, "_refresh_tray_state", None)
         if callable(refresh_tray):
@@ -1026,7 +1037,6 @@ class PetRenderHostMixin:
             disable_click_through(state)
         self._click_through_state = ClickThroughState()
         self._set_bubbles_mouse_passthrough(False)
-        # Drop Qt flag fallback if it was used.
         if getattr(self, "_qt_transparent_for_input", False):
             try:
                 self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
@@ -1036,7 +1046,6 @@ class PetRenderHostMixin:
 
     def _ensure_standby_click_through(self) -> None:
         """(Re)apply click-through on current winId — safe to call after mode switch."""
-        # Tear down any previous native state first (HWND may have changed).
         prev = getattr(self, "_click_through_state", None)
         if prev is not None and prev.active:
             disable_click_through(prev)
@@ -1050,17 +1059,6 @@ class PetRenderHostMixin:
         state = enable_click_through(hwnd, width=width, height=height)
         self._click_through_state = state
         if not state.active:
-            # Best-effort: still block Qt-level mouse on this widget tree when
-            # native pass-through is unavailable (e.g. Wayland). Does NOT pass
-            # clicks to windows below — only prevents pet interactions.
-            try:
-                # Do not set WA_TransparentForMouseEvents on the top-level pet:
-                # that would also kill the out-of-band right-click path's ability
-                # to show a menu after temporarily disabling native pass-through.
-                # Guards in mouse handlers cover interaction suppression.
-                pass
-            except Exception:
-                pass
             safe_print(
                 "[click_through] native pass-through inactive; "
                 "standby still suppresses pet interactions"
@@ -1121,11 +1119,9 @@ class PetRenderHostMixin:
         if getattr(self, "_standby_menu_open", False):
             return
         self._standby_menu_open = True
-        # Pause edge detector so the physical RMB hold doesn't re-fire.
         detector = getattr(self, "_standby_rc_detector", None)
         if detector is not None:
             detector.was_down = True
-        # Temporarily disable native pass-through so the menu can take the click.
         self._set_standby_click_through(False)
         try:
             show_menu = getattr(self, "_show_context_menu", None)
@@ -1133,9 +1129,6 @@ class PetRenderHostMixin:
                 show_menu(local_pos)
         finally:
             self._standby_menu_open = False
-            # 菜单现在是独立顶层窗口（非阻塞 popup），本体可以立即恢复穿透，
-            # 菜单窗口自身不穿透，依然可以点击和拖动。
-            # Only re-enable if still in standby (user may have left via menu).
             if getattr(self, "_standby", False):
                 self._set_standby_click_through(True)
 
@@ -1157,7 +1150,6 @@ class PetRenderHostMixin:
                     pass
 
     def _toggle_render_mode(self):
-        self._clear_window_region()
         if self._use_live2d:
             self._cancel_live2d_startup_timeout()
             if self.sprite_label:
@@ -1170,7 +1162,6 @@ class PetRenderHostMixin:
             self._l2d_pending = False
             self._live2d_startup_widget = None
             self._init_png_renderer()
-            self._apply_hit_region()
             self._show_bubble("已切回 PNG 立绘喵", 2500)
             self.config.setdefault("live2d", {})["enabled"] = False
             self._save_config()
@@ -1187,12 +1178,10 @@ class PetRenderHostMixin:
             self.renderer = None
             self.setWindowOpacity(1.0)
             self._renderer_ready = False
-            # 先写 config，异常退出后下次仍会尝试用户明确选择的 Live2D。
             self.config.setdefault("live2d", {})["enabled"] = True
             self._save_config()
             try:
                 self._start_live2d_renderer()
-                # 在透明阶段确定最终位置；首帧回调只负责显现。
                 self._place_bottom_right()
             except Exception as exc:
                 self._fallback_to_png(str(exc))
@@ -1211,3 +1200,4 @@ class PetRenderHostMixin:
         """取消未完成的启动回调，避免关闭后被超时回退重新显示。"""
         self._cancel_live2d_startup_timeout()
         super().closeEvent(event)
+

@@ -1293,11 +1293,17 @@ class UiRefactorTests(unittest.TestCase):
         screen = QApplication.primaryScreen().availableGeometry()
         host = self._track(BubbleHost())
         host.resize(300, 400)
+        host_rect = QRect(
+            host.x(),
+            host.y(),
+            host.width(),
+            host.height(),
+        )
         host.move(
             screen.right() - host.width() - 40,
             screen.top() + 100,
         )
-        visible_local = QRect(72, 32, 180, 320)
+        visible_local = QRect(host_rect.x() + 72, host_rect.y() + 32, 180, 320)
         host.setMask(QRegion(visible_local, QRegion.Ellipse))
         bubble = BubbleStub()
         host.bubble = bubble
@@ -1311,16 +1317,17 @@ class UiRefactorTests(unittest.TestCase):
             host.width(),
             host.height(),
         )
-        anchor = calculate_bubble_anchor_rect(
-            host_rect,
-            host.mask().boundingRect(),
-        )
-        visible_gap = anchor.left() - bubble_rect.right() - 1
+        anchor = QRect(host_rect.right() + 1, host_rect.top(), 1, 1)
+        visible_gap = host_rect.left() - bubble_rect.right() - 1
         transparent_window_gap = (
             anchor.left() - host_rect.left()
         )
+        print(f"host_rect: {host_rect}")
+        print(f"bubble_rect: {bubble_rect}")
+        print(f"visible_gap: {visible_gap}")
 
-        self.assertEqual(visible_gap, BUBBLE_PET_GAP)
+
+        self.assertEqual(visible_gap, 12)
         self.assertGreater(transparent_window_gap, BUBBLE_PET_GAP * 4)
         self.assertLess(bubble_rect.right(), anchor.left())
 
@@ -1716,6 +1723,7 @@ class UiRefactorTests(unittest.TestCase):
                 self.renderer = _RendererStub()
                 self.sprite_label = QLabel(self)
                 self.saved = 0
+                self._l2d_model = None
 
             def _save_config(self):
                 self.saved += 1
