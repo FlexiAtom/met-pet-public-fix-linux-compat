@@ -24,6 +24,10 @@ def _example_config() -> dict:
 def test_public_defaults_are_canonical_and_match_the_example_config():
     from meapet.config.defaults import (
         DEFAULT_DIRECT_MODEL,
+        DEFAULT_GSV_GPT_MODEL,
+        DEFAULT_GSV_GPT_WEIGHTS_DIR,
+        DEFAULT_GSV_SOVITS_MODEL,
+        DEFAULT_GSV_SOVITS_WEIGHTS_DIR,
         DEFAULT_HERMES_WS_URL,
         DEFAULT_LIVE2D_WINDOW_MASK,
         DEFAULT_MIMO_API_BASE,
@@ -43,6 +47,16 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
     assert example["llm"]["agent"]["base_url"] == DEFAULT_HERMES_WS_URL
     assert example["tts"]["api_base"] == DEFAULT_MIMO_API_BASE
     assert example["tts"]["model"] == DEFAULT_MIMO_TTS_MODEL
+    assert example["tts"]["gpt_model"] == DEFAULT_GSV_GPT_MODEL
+    assert example["tts"]["sovits_model"] == DEFAULT_GSV_SOVITS_MODEL
+    assert (
+        example["tts"]["gpt_weights_dir"]
+        == DEFAULT_GSV_GPT_WEIGHTS_DIR
+    )
+    assert (
+        example["tts"]["sovits_weights_dir"]
+        == DEFAULT_GSV_SOVITS_WEIGHTS_DIR
+    )
     assert example["watcher"]["interval"] == dict(DEFAULT_WATCHER_INTERVAL)
     assert example["live2d"]["window_mask"] == dict(
         DEFAULT_LIVE2D_WINDOW_MASK
@@ -124,6 +138,7 @@ def test_runtime_dependency_specs_have_one_python_source_of_truth():
     from meapet.bootstrap import all_runtime_dependencies
     from meapet.dependencies import (
         CRYPTOGRAPHY_REQUIREMENT,
+        PYQT_REQUIREMENT,
         WEBSOCKETS_REQUIREMENT,
     )
     from wizard.agent_setup_help import _AGENT_DEPENDENCY_SPECS
@@ -139,6 +154,45 @@ def test_runtime_dependency_specs_have_one_python_source_of_truth():
         _AGENT_DEPENDENCY_SPECS["openclaw"][1][2]
         == CRYPTOGRAPHY_REQUIREMENT
     )
+    assert PYQT_REQUIREMENT in (
+        ROOT / "pyproject.toml"
+    ).read_text(encoding="utf-8")
+    assert PYQT_REQUIREMENT in (
+        ROOT / "linux_requirements.txt"
+    ).read_text(encoding="utf-8")
+
+
+def test_agent_numeric_defaults_have_one_python_source_of_truth():
+    from meapet.config.defaults import (
+        DEFAULT_AGENT_HISTORY_TURNS,
+        DEFAULT_AGENT_TIMEOUT_SECONDS,
+        DEFAULT_CONTROL_PORT,
+    )
+
+    example = _example_config()
+    agent = example["llm"]["agent"]
+    assert agent["timeout_seconds"] == DEFAULT_AGENT_TIMEOUT_SECONDS
+    assert agent["history_turns"] == DEFAULT_AGENT_HISTORY_TURNS
+    assert example["agent_control"]["port"] == DEFAULT_CONTROL_PORT
+
+    consumers = (
+        ROOT / "meapet" / "config" / "store.py",
+        ROOT / "meapet" / "agent" / "hermes.py",
+        ROOT / "meapet" / "agent" / "openclaw.py",
+    )
+    for path in consumers:
+        source = path.read_text(encoding="utf-8")
+        assert "120.0" not in source, path.relative_to(ROOT)
+
+    hermes_source = consumers[1].read_text(encoding="utf-8")
+    assert "history_turns = 5" not in hermes_source
+
+    backend_source = (
+        ROOT / "wizard" / "page_backend.py"
+    ).read_text(encoding="utf-8")
+    assert 'agent.get("history_turns", 5)' not in backend_source
+    assert "setValue(8765)" not in backend_source
+    assert 'control.get("port", 8765)' not in backend_source
 
 
 def test_llm_page_does_not_embed_a_second_legacy_palette():
