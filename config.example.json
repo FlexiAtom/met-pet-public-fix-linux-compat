@@ -101,6 +101,7 @@
     "reduced_motion": false
   },
   "character": {
+    "name": "梅尔",
     "default_outfit": "01",
     "default_direction": "A"
   },
@@ -138,5 +139,11 @@
     "watch": 7000,
     "interaction": 3000,
     "thinking": 0
+  },
+  "voice_input": {
+    "enabled": false,
+    "engine": "sherpa_onnx",
+    "language": "zh",
+    "auto_send": false
   }
 }

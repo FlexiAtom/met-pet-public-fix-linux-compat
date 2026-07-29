@@ -69,6 +69,7 @@ class ChatInputBox(QWidget):
         self._opacity = 0.0
         self._fade_step = 0.08
         self._closing = False
+        self.voice_host = None
         self._reduced_motion = os.environ.get("MEAPET_REDUCED_MOTION", "").lower() in {
             "1",
             "true",
@@ -116,6 +117,20 @@ class ChatInputBox(QWidget):
         self.feedback_label.hide()
         header.addWidget(self.feedback_label)
         header.addStretch()
+
+        self.voice_button = QPushButton("mic")
+        self.voice_button.setObjectName("VoiceButton")
+        self.voice_button.setFixedSize(MIN_TARGET_SIZE, MIN_TARGET_SIZE)
+        self.voice_button.setAccessibleName("语音输入")
+        self.voice_button.setToolTip("点击开始录音，再点停止并转文字")
+        self.voice_button.clicked.connect(self._toggle_voice)
+        self.voice_button.hide()
+        header.addWidget(self.voice_button)
+
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(self._pulse_recording)
+        self._pulse_state = False
+        self._voice_state = "idle"
 
         self.close_button = QPushButton("×")
         self.close_button.setObjectName("ComposerCloseButton")
@@ -180,6 +195,64 @@ class ChatInputBox(QWidget):
         self.setWindowOpacity(self._opacity)
         if self._opacity >= 1.0:
             self._anim_timer.stop()
+
+    def _toggle_voice(self) -> None:
+        """点击麦克风按钮，委托给 MeaPet 处理。"""
+        host = self.voice_host
+        if host and hasattr(host, "_voice_toggle_recording"):
+            state = host._voice_toggle_recording()
+        else:
+            self.voice_button.setToolTip("语音输入未就绪")
+
+    def _on_voice_state_changed(self, state: str) -> None:
+        """接收 VoiceEngine 状态更新，更新按钮样式和提示文字。"""
+        self._voice_state = state
+        self._pulse_timer.stop()
+
+        if state == "recording":
+            self.voice_button.setText("●")
+            self.voice_button.setObjectName("VoiceButtonRecording")
+            self.voice_button.setAccessibleName("录音中，点击停止")
+            self.voice_button.setToolTip("录音中…点击停止")
+            self.voice_button.setEnabled(True)
+            self._pulse_timer.start(500)
+            self._pulse_state = False
+            self.hint_label.setText("录音中…再次点击停止并转文字")
+        elif state == "processing":
+            self.voice_button.setText("...")
+            self.voice_button.setObjectName("VoiceButtonProcessing")
+            self.voice_button.setAccessibleName("识别中，请稍候")
+            self.voice_button.setToolTip("正在转文字…")
+            self.voice_button.setEnabled(False)
+            self.hint_label.setText("正在转文字…")
+        elif state == "done":
+            self.voice_button.setText("mic")
+            self.voice_button.setObjectName("VoiceButton")
+            self.voice_button.setAccessibleName("语音输入")
+            self.voice_button.setToolTip("点击开始录音，再点停止并转文字")
+            self.voice_button.setEnabled(True)
+            self.hint_label.setText("Enter 发送 · Esc 关闭")
+        elif state == "error":
+            self.voice_button.setText("!")
+            self.voice_button.setObjectName("VoiceButtonError")
+            self.voice_button.setAccessibleName("语音识别失败，点击重试")
+            self.voice_button.setToolTip("识别失败，点击重试")
+            self.voice_button.setEnabled(True)
+            self.hint_label.setText("识别失败，点击重试 · Esc 关闭")
+
+    def _pulse_recording(self):
+        """录音中闪烁红点。"""
+        self._pulse_state = not self._pulse_state
+        if self._pulse_state:
+            self.voice_button.setObjectName("VoiceButtonRecordingBright")
+        else:
+            self.voice_button.setObjectName("VoiceButtonRecording")
+        # force style refresh
+        self.voice_button.style().unpolish(self.voice_button)
+        self.voice_button.style().polish(self.voice_button)
+
+    def show_voice_button(self, visible: bool) -> None:
+        self.voice_button.setVisible(visible)
 
     def _submit(self) -> None:
         if getattr(self, "_busy", False):

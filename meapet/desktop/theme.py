@@ -669,6 +669,60 @@ CHAT_COMPOSER_STYLE = f"""
         color: {COLOR_ERR};
         border-color: {rgba(COLOR_ERR, 110)};
     }}
+    QPushButton#VoiceButton {{
+        background: {rgba(COLOR_ACCENT, 40)};
+        color: {COLOR_ACCENT};
+        border-color: {rgba(COLOR_ACCENT, 120)};
+        border-width: 1px;
+        border-style: solid;
+        padding: 0;
+        font-size: 16px;
+        border-radius: 4px;
+    }}
+    QPushButton#VoiceButton:hover {{
+        background: {rgba(COLOR_ACCENT, 30)};
+        color: {COLOR_ACCENT};
+    }}
+    QPushButton#VoiceButtonRecording {{
+        background: {rgba(COLOR_ERR, 60)};
+        color: {COLOR_ERR};
+        border-color: {rgba(COLOR_ERR, 130)};
+        border-width: 2px;
+        border-style: solid;
+        padding: 0;
+        font-size: 14px;
+        border-radius: 4px;
+    }}
+    QPushButton#VoiceButtonRecordingBright {{
+        background: {rgba(COLOR_ERR, 30)};
+        color: {COLOR_ERR};
+        border-color: {rgba(COLOR_ERR, 60)};
+        border-width: 2px;
+        border-style: solid;
+        padding: 0;
+        font-size: 14px;
+        border-radius: 4px;
+    }}
+    QPushButton#VoiceButtonProcessing {{
+        background: {rgba(COLOR_ACCENT_2, 50)};
+        color: {COLOR_MUTED};
+        border-color: {rgba(COLOR_ACCENT_2, 80)};
+        border-width: 1px;
+        border-style: solid;
+        padding: 0;
+        font-size: 14px;
+        border-radius: 4px;
+    }}
+    QPushButton#VoiceButtonError {{
+        background: {rgba(COLOR_ERR, 40)};
+        color: {COLOR_ERR};
+        border-color: {rgba(COLOR_ERR, 100)};
+        border-width: 1px;
+        border-style: solid;
+        padding: 0;
+        font-size: 14px;
+        border-radius: 4px;
+    }}
 """
 
 

@@ -47,12 +47,6 @@ from wizard.styles import (
     set_status,
     styled_message_box,
 )
-from meapet.config.defaults import (
-    DEFAULT_MIMO_API_BASE,
-    DEFAULT_MIMO_TTS_CLONE_MODEL,
-    DEFAULT_MIMO_TTS_MODEL,
-    DEFAULT_WATCHER_INTERVAL,
-)
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
     PALETTE,
@@ -75,6 +69,7 @@ from wizard.pages import (
     LLMPage,
     TTSPage,
     VisionPage,
+    VoiceInputPage,
 )
 
 
@@ -85,6 +80,7 @@ class SetupWizard(QWidget):
     TAB_CHAT = 1
     TAB_VOICE = 2
     TAB_VISION = 3
+    TAB_VOICE_INPUT = 4
 
     @staticmethod
     def _read_initial_font_scale(
@@ -224,6 +220,7 @@ class SetupWizard(QWidget):
         self.llm_page = LLMPage()
         self.tts_page = TTSPage()
         self.vision_page = VisionPage()
+        self.voice_input_page = VoiceInputPage()
 
         for page in (
             self.env_page,
@@ -232,6 +229,7 @@ class SetupWizard(QWidget):
             self.llm_page,
             self.tts_page,
             self.vision_page,
+            self.voice_input_page,
         ):
             prepare_accessible_page(page)
 
@@ -271,6 +269,7 @@ class SetupWizard(QWidget):
         )
         self.tabs.addTab(self._make_scroll_tab(self.tts_page), "语音")
         self.tabs.addTab(self._make_scroll_tab(self.vision_page), "屏幕识图")
+        self.tabs.addTab(self._make_scroll_tab(self.voice_input_page), "语音输入")
         main.addWidget(self.tabs, 1)
 
         # 底部按钮
@@ -760,6 +759,7 @@ class SetupWizard(QWidget):
             self.TAB_CHAT: [],
             self.TAB_VOICE: [],
             self.TAB_VISION: [],
+            self.TAB_VOICE_INPUT: [],
         }
         issues[self.TAB_ENV].extend(self.env_page.required_missing())
 
@@ -970,22 +970,19 @@ class SetupWizard(QWidget):
                 ):
                     watcher = dict(watcher)
                     watcher["interval"] = {
-                        "min_ms": int(
-                            watcher.get(
-                                "min_ms",
-                                DEFAULT_WATCHER_INTERVAL["min_ms"],
-                            )
-                        ),
-                        "max_ms": int(
-                            watcher.get(
-                                "max_ms",
-                                DEFAULT_WATCHER_INTERVAL["max_ms"],
-                            )
-                        ),
+                        "min_ms": int(watcher.get("min_ms", 180000)),
+                        "max_ms": int(watcher.get("max_ms", 360000)),
                     }
                 self.vision_page.apply_config(vision, watcher)
             except Exception as exc:
                 self.env_page.log(f"恢复识图配置失败: {exc}")
+
+            try:
+                self.voice_input_page.apply_config(
+                    config.get("voice_input") or {},
+                )
+            except Exception as exc:
+                self.env_page.log(f"恢复语音输入配置失败: {exc}")
 
             eng = (tts.get("engine") or "?").lower()
             tts_on = "开" if tts.get("enabled", True) else "关"
@@ -1127,7 +1124,7 @@ class SetupWizard(QWidget):
         if not tts_base:
             if llm_is_mimo:
                 tts_base = str(direct.get("api_base") or "")
-            tts_base = tts_base or DEFAULT_MIMO_API_BASE
+            tts_base = tts_base or "https://api.xiaomimimo.com/v1"
 
         gsv_python = self.tts_page.gsv_dir_input.text().strip()
         if gsv_python and os.path.isdir(gsv_python):
@@ -1160,11 +1157,11 @@ class SetupWizard(QWidget):
             "voice_clone": use_clone,
             "clone_ref": self.tts_page.mimo_clone_ref_input.text().strip(),
         }
-        model = str(tts.get("model") or DEFAULT_MIMO_TTS_MODEL)
+        model = str(tts.get("model") or "mimo-v2.5-tts")
         if use_clone:
-            patch["model"] = DEFAULT_MIMO_TTS_CLONE_MODEL
+            patch["model"] = "mimo-v2.5-tts-voiceclone"
         elif "voiceclone" in model.lower():
-            patch["model"] = DEFAULT_MIMO_TTS_MODEL
+            patch["model"] = "mimo-v2.5-tts"
         tts.update(patch)
 
     def _collect_conversation_fields(self, config: dict) -> None:
@@ -1236,6 +1233,17 @@ class SetupWizard(QWidget):
             fragments.get("watcher") or {},
         )
 
+    def _collect_voice_input_fields(self, config: dict) -> None:
+        try:
+            fragments = self.voice_input_page.collect()
+        except Exception as exc:
+            self.env_page.log(f"收集语音输入配置失败: {type(exc).__name__}")
+            return
+        config["voice_input"] = self._deep_merge(
+            config.get("voice_input") or {},
+            fragments.get("voice_input") or {},
+        )
+
     def collect_config(self, base_config: dict | None = None) -> dict:
         """把 UI 作为字段补丁应用到现有配置，而不是重建整份配置。"""
         config = self._config_base(base_config)
@@ -1243,6 +1251,7 @@ class SetupWizard(QWidget):
         self._collect_conversation_fields(config)
         self._collect_tts_fields(config)
         self._collect_vision_fields(config)
+        self._collect_voice_input_fields(config)
         return config
 
     def _save(self):
