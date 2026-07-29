@@ -698,12 +698,12 @@ def _normalize_llm_contract(value: object) -> dict:
     # 8642 是 Hermes HTTP API Server，原生 WS 由 ``hermes serve`` 默认在
     # 9119 的 /api/ws 提供。精确识别旧本机默认，避免生成不存在的 :8642/ws。
     if raw_kind == "hermes":
-        default_url = "ws://127.0.0.1:9119/api/ws"
+        default_url = DEFAULT_HERMES_WS_URL
         lowered = raw_base.lower().rstrip("/")
         if lowered in {
             "http://127.0.0.1:8642",
             "http://localhost:8642",
-            "https://api.openai.com/v1",
+            DEFAULT_OPENAI_API_BASE,
         }:
             raw_base = default_url
         elif lowered.startswith(("http://", "https://")):
@@ -720,7 +720,7 @@ def _normalize_llm_contract(value: object) -> dict:
         elif not lowered.startswith(("ws://", "wss://")):
             raw_base = default_url
     else:
-        default_url = "ws://127.0.0.1:18789"
+        default_url = DEFAULT_OPENCLAW_WS_URL
         if not raw_base.lower().startswith(("ws://", "wss://")):
             raw_base = default_url
     agent["base_url"] = raw_base or default_url
@@ -747,11 +747,11 @@ def _normalize_llm_contract(value: object) -> dict:
         or ""
     ).strip()
     try:
-        timeout_seconds = float(agent.get("timeout_seconds", 120.0))
+        timeout_seconds = float(agent.get("timeout_seconds", DEFAULT_AGENT_TIMEOUT_SECONDS))
     except (TypeError, ValueError):
-        timeout_seconds = 120.0
+        timeout_seconds = DEFAULT_AGENT_TIMEOUT_SECONDS
     agent["timeout_seconds"] = (
-        timeout_seconds if timeout_seconds > 0 else 120.0
+        timeout_seconds if timeout_seconds > 0 else DEFAULT_AGENT_TIMEOUT_SECONDS
     )
     try:
         history_turns = int(agent.get("history_turns", 5))
