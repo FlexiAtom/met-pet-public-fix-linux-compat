@@ -101,7 +101,6 @@ def test_watcher_timer_uses_the_same_default_interval_as_normalization():
 def test_example_config_does_not_advertise_an_ignored_character_name():
     character = _example_config()["character"]
 
-    assert "name" not in character
     assert set(character) == {"default_outfit", "default_direction"}
 
 

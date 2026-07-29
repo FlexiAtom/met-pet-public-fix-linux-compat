@@ -1880,6 +1880,10 @@ class UiRefactorTests(unittest.TestCase):
             def _quit(self):
                 pass
 
+            def _toggle_voice_input(self):
+                pass
+
+
         return self._track(MenuHost())
 
     def test_context_menu_groups_secondary_actions_into_submenus(self) -> None:
