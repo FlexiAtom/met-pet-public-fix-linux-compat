@@ -1,7 +1,10 @@
 """供应商预设注册表与向导预设选择器的测试。"""
 from __future__ import annotations
 
+import os
 import unittest
+
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from meapet.config.providers import (
     CUSTOM_ID,
@@ -132,8 +135,6 @@ class WizardPresetSelectorTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import os
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PyQt5.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
@@ -195,8 +196,6 @@ class ModelFetchRequestTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import os
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PyQt5.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 
@@ -273,8 +272,6 @@ class AdvancedSectionTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import os
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PyQt5.QtWidgets import QApplication
         cls.app = QApplication.instance() or QApplication([])
 

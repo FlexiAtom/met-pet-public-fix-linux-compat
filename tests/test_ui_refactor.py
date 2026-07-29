@@ -7,7 +7,7 @@ import re
 import unittest
 from unittest.mock import patch
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt5.QtCore import (  # noqa: E402
     QAbstractAnimation,
@@ -78,9 +78,13 @@ class UiRefactorTests(unittest.TestCase):
     def tearDown(self) -> None:
         for widget in reversed(self._widgets):
             try:
+                for timer in widget.findChildren(QTimer):
+                    timer.stop()
                 widget.close()
+                widget.deleteLater()
             except RuntimeError:
                 pass
+        QApplication.processEvents()
 
     def _track(self, widget):
         self._widgets.append(widget)

@@ -289,6 +289,7 @@ class MeaPet(
             previous_scope = (
                 str(agent_config.get("session_id") or ""),
                 str(agent_config.get("session_key") or ""),
+                str(agent_config.get("device_id") or ""),
             )
             self.chat_engine = None
             self.agent_adapter = create_agent_adapter_from_config(self.config)
@@ -296,6 +297,7 @@ class MeaPet(
             current_scope = (
                 str(current_agent_config.get("session_id") or ""),
                 str(current_agent_config.get("session_key") or ""),
+                str(current_agent_config.get("device_id") or ""),
             )
             if current_scope != previous_scope:
                 self._save_config()

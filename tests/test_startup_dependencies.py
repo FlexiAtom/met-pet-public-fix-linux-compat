@@ -73,6 +73,28 @@ def test_hermes_does_not_require_openclaw_cryptography():
     assert "cryptography" not in modules
 
 
+def test_agent_link_requires_tool_schema_but_not_http_mcp_server():
+    from meapet.bootstrap import required_runtime_dependencies
+
+    dependencies = required_runtime_dependencies(
+        {
+            "llm": {
+                "mode": "agent",
+                "agent": {"kind": "agent_link"},
+            },
+            # 旧版本可能残留 enabled=true；Agent Link 仍只复用当前 WebSocket，
+            # 不应因此要求或启动 Companion MCP 的 uvicorn。
+            "agent_control": {"enabled": True},
+        }
+    )
+
+    modules = _dependency_modules(dependencies)
+    assert "websockets" in modules
+    assert "mcp" in modules
+    assert "uvicorn" not in modules
+    assert "cryptography" not in modules
+
+
 def test_legacy_agent_config_is_detected_before_normalization():
     from meapet.bootstrap import required_runtime_dependencies
 

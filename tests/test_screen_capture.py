@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from PIL import Image
+
+
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 
 class _Image:
@@ -42,6 +46,9 @@ class TestScreenCapture(unittest.TestCase):
         selector = ScreenRegionSelector(
             desktop_geometry=QRect(-100, -50, 400, 300),
         )
+        self.addCleanup(app.processEvents)
+        self.addCleanup(selector.deleteLater)
+        self.addCleanup(selector.close)
         selector.show()
         app.processEvents()
         QTest.mousePress(selector, Qt.LeftButton, pos=QPoint(10, 20))
@@ -53,7 +60,6 @@ class TestScreenCapture(unittest.TestCase):
             selector.selected_region,
             {"x": -90, "y": -30, "width": 101, "height": 81},
         )
-        selector.close()
 
     def test_visible_windows_are_listed_with_process_names_and_filtered(self):
         from meapet.watcher.capture import list_capture_windows

@@ -26,6 +26,7 @@ from meapet.config.normalizers import (
     normalize_gsv_ref_language,
 )
 from meapet.config.defaults import (
+    DEFAULT_AGENT_LINK_WS_URL,
     DEFAULT_AGENT_CONTROL,
     DEFAULT_AGENT_HISTORY_TURNS,
     DEFAULT_AGENT_TIMEOUT_SECONDS,
@@ -82,7 +83,7 @@ for _preset in _providers.all_presets():
 
 _DIRECT_PROVIDERS = frozenset({"custom"})
 # 旧顶层 backend 属于 Agent 类时，无 mode 配置迁去 agent。
-_AGENT_KINDS = frozenset({"hermes", "openclaw"})
+_AGENT_KINDS = frozenset({"hermes", "openclaw", "agent_link"})
 # 支持独立识图解析的视觉后端（vision.backend，不是 llm.provider）。
 _VISION_BACKENDS = frozenset({"ollama", "mimo"})
 
@@ -716,8 +717,12 @@ def _normalize_llm_contract(value: object) -> dict:
             raw_base = urlunsplit((scheme, parsed.netloc, path, "", ""))
         elif not lowered.startswith(("ws://", "wss://")):
             raw_base = default_url
-    else:
+    elif raw_kind == "openclaw":
         default_url = DEFAULT_OPENCLAW_WS_URL
+        if not raw_base.lower().startswith(("ws://", "wss://")):
+            raw_base = default_url
+    else:
+        default_url = DEFAULT_AGENT_LINK_WS_URL
         if not raw_base.lower().startswith(("ws://", "wss://")):
             raw_base = default_url
     agent["base_url"] = raw_base or default_url
@@ -729,8 +734,14 @@ def _normalize_llm_contract(value: object) -> dict:
         or ""
     ).strip()
     agent["auth_token"] = auth_token
+    agent["device_id"] = str(agent.get("device_id") or "").strip()
     agent["session_id"] = str(agent.get("session_id") or "").strip()
     agent["session_key"] = str(agent.get("session_key") or "").strip()
+    agent["extensions"] = (
+        copy.deepcopy(agent.get("extensions"))
+        if isinstance(agent.get("extensions"), dict)
+        else {}
+    )
     remote_session_id = str(
         agent.get("remote_session_id") or ""
     ).strip()

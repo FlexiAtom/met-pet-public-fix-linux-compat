@@ -690,6 +690,9 @@ class SetupWizard(QWidget):
         self.backend_page.agent_base_url.textChanged.connect(
             self._refresh_required_tabs
         )
+        self.backend_page.agent_kind.currentIndexChanged.connect(
+            self._refresh_required_tabs
+        )
         self.llm_page.endpoint_input.textChanged.connect(
             self._refresh_required_tabs
         )
@@ -792,7 +795,10 @@ class SetupWizard(QWidget):
                     )
             if not self.backend_page.agent_auth_token.text().strip():
                 issues[self.TAB_CHAT].append("Agent WebSocket 访问令牌")
-            if self.backend_page.control_enabled.isChecked():
+            if (
+                self.backend_page.agent_kind.currentData() != "agent_link"
+                and self.backend_page.control_enabled.isChecked()
+            ):
                 listen = self.backend_page.control_listen_host.text().strip()
                 loopback = listen in {"127.0.0.1", "::1"}
                 cert = self.backend_page.control_cert_file.text().strip()

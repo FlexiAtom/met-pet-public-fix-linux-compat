@@ -23,11 +23,13 @@
       "base_url": "ws://127.0.0.1:9119/api/ws",
       "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
       "model": "",
+      "device_id": "",
       "session_id": "",
       "session_key": "",
       "timeout_seconds": 120,
       "history_turns": 5,
       "allow_insecure_ws": false,
+      "extensions": {},
       "tls": {
         "verify": true,
         "ca_file": ""

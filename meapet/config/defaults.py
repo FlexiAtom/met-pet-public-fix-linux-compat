@@ -16,6 +16,7 @@ DEFAULT_MIMO_API_BASE = "https://api.xiaomimimo.com/v1"
 
 DEFAULT_HERMES_WS_URL = "ws://127.0.0.1:9119/api/ws"
 DEFAULT_OPENCLAW_WS_URL = "ws://127.0.0.1:18789"
+DEFAULT_AGENT_LINK_WS_URL = "ws://127.0.0.1:8766/agent-link"
 
 DEFAULT_DIRECT_MODEL = "gpt-4o-mini"
 DEFAULT_OLLAMA_VISION_MODEL = "qwen3.5:4b"
@@ -78,12 +79,13 @@ DEFAULT_LIVE2D_WINDOW_MASK = MappingProxyType(
 
 
 def default_agent_url(kind: object) -> str:
-    """按 Agent 类型返回本地 Gateway 默认地址。"""
-    return (
-        DEFAULT_OPENCLAW_WS_URL
-        if str(kind or "").strip().lower() == "openclaw"
-        else DEFAULT_HERMES_WS_URL
-    )
+    """按 Agent 类型返回本地 WebSocket 默认地址。"""
+    normalized = str(kind or "").strip().lower()
+    if normalized == "openclaw":
+        return DEFAULT_OPENCLAW_WS_URL
+    if normalized == "agent_link":
+        return DEFAULT_AGENT_LINK_WS_URL
+    return DEFAULT_HERMES_WS_URL
 
 
 def bubble_duration_ms(

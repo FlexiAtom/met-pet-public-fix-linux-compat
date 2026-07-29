@@ -1,4 +1,4 @@
-# 回复后端、呈现协议与 Companion MCP
+# 回复后端、呈现协议、Agent Link 与 Companion MCP
 
 本文描述 MeaPet 当前实现的后端边界和配置契约。面向普通用户的入口见项目根目录 `README.md`；字段默认值以 `config.example.json` 与 `meapet/config/store.py` 为准。
 
@@ -84,6 +84,7 @@ HTTP 认证、权限、限流、服务不可用和协议错误会转换成中性
       "kind": "hermes",
       "base_url": "ws://127.0.0.1:9119/api/ws",
       "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
+      "device_id": "",
       "session_id": "",
       "session_key": "",
       "remote_session_id": "",
@@ -91,6 +92,7 @@ HTTP 认证、权限、限流、服务不可用和协议错误会转换成中性
       "timeout_seconds": 120,
       "allow_insecure_ws": false,
       "identity_path": "",
+      "extensions": {},
       "tls": {
         "verify": true,
         "ca_file": ""
@@ -108,13 +110,15 @@ Agent 段只接受 `ws://` 或 `wss://`。OpenAI、Ollama、Anthropic 等 HTTP �
 配置加载时会迁移旧结构：本机 Hermes `http://127.0.0.1:8642` 改为原生 `ws://127.0.0.1:9119/api/ws`；旧 OpenClaw bridge 改为 Gateway WS；曾放在 `llm.agent` 的普通 OpenAI-compatible HTTP 模型地址则迁入 `llm.direct`，不会被拼成虚假的 WebSocket 路径。
 
 - `session_id`：MeaPet 本机时间线的当前会话作用域；空值首次构造时自动生成并保存。
+- `device_id`：自定义 Agent Link 使用的稳定桌面实例 ID；空值首次构造时自动生成并保存。
 - `session_key`：OpenClaw 的 Gateway 会话路由键；空值首次构造 OpenClaw 时自动生成。
 - `remote_session_id`：Hermes 返回的持久 `stored_session_id`。它由适配器写回，用户通常不需要手工填写。
 - `history_turns`：创建新的 Hermes 会话时用于播种的最近本地对话轮数，范围 0–100。恢复已有 Hermes/OpenClaw 会话时由 Agent 自己维护上下文。
 - `ui.timeline_turns`：本机时间线缓存，范围 0–100，默认 5；按后端和 Agent 会话隔离。
 - `allow_insecure_ws`：只允许用户显式放行非回环明文 WS；远程连接默认要求 WSS。
+- `extensions`：Agent Link 的命名空间自定义数据；不能改名或替换核心协议字段。
 
-两个适配器复用同一条连接，并启用 WebSocket ping/pong、单写者队列、100 MiB 收帧安全上限、请求 ID 关联和连接代际隔离。OpenClaw 还会执行握手返回的 `policy.maxPayload`，在本机拒绝超过 Gateway 上限的发送帧。取消当前生成分别调用 Hermes `session.interrupt` 或 OpenClaw `chat.abort`。
+三个适配器都会跨轮次复用 WebSocket，并启用 ping/pong、单写者队列、100 MiB 收帧安全上限、请求 ID 关联和连接代际隔离。OpenClaw 还会执行握手返回的 `policy.maxPayload`，在本机拒绝超过 Gateway 上限的发送帧。取消当前生成分别调用 Hermes `session.interrupt`、OpenClaw `chat.abort` 或 Agent Link `chat.cancel`。
 
 ### 3.2 Hermes
 
@@ -172,6 +176,39 @@ OpenClaw 使用 Gateway WebSocket v4，连接后执行 `connect.challenge` / `co
 每轮通过 `chat.send` 发送 MeaPet 输出约束、当前请求和可选图片附件，`idempotencyKey` 固定为 MeaPet `turn_id`；流式接收 `chat` 的 `delta/final/error/aborted` 状态。连接中断时重新完成挑战握手并用相同幂等键重发，Gateway 可安全地返回正在进行或已经完成的同一回合；若终态事件恰好在断线期间丢失，则通过 `chat.history` 对账恢复。取消使用 `chat.abort`，并在已知时携带 `runId`。
 
 OpenClaw 配对、认证、权限、限流、超时和服务不可用会映射为稳定错误类别。设备配对仍需在 OpenClaw 侧批准，MeaPet 不绕过其权限模型。
+
+### 3.4 自定义 Agent Link
+
+```json
+{
+  "llm": {
+    "mode": "agent",
+    "agent": {
+      "kind": "agent_link",
+      "base_url": "wss://192.0.2.10:8766/agent-link",
+      "auth_token": "$AGENT_LINK_TOKEN",
+      "device_id": "",
+      "session_id": "",
+      "history_turns": 5,
+      "allow_insecure_ws": false,
+      "extensions": {},
+      "tls": {
+        "verify": true,
+        "ca_file": ""
+      }
+    }
+  }
+}
+```
+
+Agent Link 是 MeaPet 主动建立的一条通用双向 WebSocket。聊天、流式回复、取消、
+Agent 主动消息和前端工具调用均走这条连接；选择它时不会再启动 Companion MCP
+HTTP 监听。握手后 MeaPet 会公布当前工具 Schema，第三方必须把它们注册进自己
+的 Agent Loop。Agent 主动说话就是调用 `meapet.say`，不需要另建消息通道。
+
+仅支持任意 WebSocket JSON 收发并不足够；第三方必须实现固定信封、握手、工具
+快照、请求关联、幂等、取消、离线丢弃和重连约定。完整字段与逐帧示例见
+[`agent-link-v1.md`](agent-link-v1.md)。
 
 ## 4. 最终回复协议
 
@@ -279,6 +316,9 @@ GPT-SoVITS 的固定参考音频按规范化语言查找：
 
 ## 8. Companion MCP
 
+本节是 Hermes / OpenClaw 等原生后端的兼容控制通道。自定义 Agent Link 已在
+同一条 WebSocket 上自动交换相同的前端能力，不使用本节的第二个 HTTP 监听。
+
 ### 8.1 服务配置
 
 ```json
@@ -315,6 +355,11 @@ GPT-SoVITS 的固定参考音频按规范化语言查找：
 Token 少于 32 个字符时服务拒绝启动。空 Token 会自动生成高熵随机值并写回本机配置；手工轮换会先停止旧监听，再以新 Token 重启。
 
 ### 8.3 工具输入输出
+
+工具定义来自统一 `CapabilityRegistry`。新增 MeaPet 可执行能力时应在该注册表
+注册一次，由 Companion MCP 和 Agent Link 共用函数签名、Schema 生成源、校验与
+错误契约，不应分别维护两份协议定义。Agent Link 投影会隐藏仅供传输层注入的
+`request_id`，避免第三方模型覆盖幂等键。
 
 #### `meapet.say`
 

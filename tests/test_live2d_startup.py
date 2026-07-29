@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt5.QtCore import Qt  # noqa: E402
+from PyQt5.QtCore import Qt, QTimer  # noqa: E402
 from PyQt5.QtGui import QColor, QPixmap  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
 
@@ -123,10 +123,15 @@ class PNGStartupTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         for host in self._hosts:
+            for timer in host.findChildren(QTimer):
+                timer.stop()
             chat_input = getattr(host, "_chat_input", None)
             if chat_input is not None:
                 chat_input.close()
+                chat_input.deleteLater()
             host.close()
+            host.deleteLater()
+        QApplication.processEvents()
 
     def _host(self, model_dir: str) -> _RenderHost:
         host = _RenderHost(model_dir)
@@ -228,4 +233,3 @@ class PNGStartupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

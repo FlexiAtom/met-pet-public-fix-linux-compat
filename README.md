@@ -12,12 +12,12 @@ MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screen
 |------------|-------------|
 | Reply backends | Direct model API or Agent — one active at a time, no automatic fallback |
 | Direct protocol | Ollama Chat, OpenAI Chat/Responses, Anthropic Messages over HTTP streaming |
-| Agent | Hermes TUI Gateway JSON-RPC WebSocket, OpenClaw Gateway WebSocket v4 |
+| Agent | Hermes TUI Gateway, OpenClaw Gateway v4, or custom Agent Link v1 over WebSocket |
 | Display | Streaming text bubble without TTS; waits for audio then shows bubble + plays in sync |
 | Multi-segment replies | Each segment has its own bubble, mood, voice text, language, and TTS style |
 | Speech | MiMo cloud TTS, local GPT-SoVITS, local VITS; GPT-SoVITS supports per-language reference audio |
 | Vision | Disabled, inherit main model, or relay via independent vision model |
-| Reverse control | Limited Companion MCP: speak, express, read-only state, per-shot screenshot confirmation |
+| Reverse control | Shared frontend tools over Companion MCP or the same Agent Link connection |
 | Local data | SQLite memory, affection, per-backend/per-session conversation timeline |
 | Rendering | Live2D dynamic model and PNG diff sprites, switchable at runtime |
 
@@ -97,11 +97,14 @@ Agent mode treats MeaPet as a pure desktop frontend:
 - MeaPet calls the Agent to generate replies, providing mood, action, TTS language, and character state as context.
 - The Agent uses its own model, memory, and internal tools; MeaPet does not require the Agent to implement additional "memory query" capabilities.
 - Internal tool names and raw parameters are not displayed in character bubbles. Safe status (start, complete, failure) enters the timeline; diagnostic details go to logs only.
-- Agent mode uses WebSocket only. Hermes connects to the native TUI Gateway exposed by `hermes serve`; OpenClaw connects to Gateway v4. HTTP/SSE model endpoints belong exclusively to direct mode.
+- Agent mode uses WebSocket only. Hermes connects to the native TUI Gateway exposed by `hermes serve`; OpenClaw connects to Gateway v4; a custom backend can implement Agent Link v1. HTTP/SSE model endpoints belong exclusively to direct mode.
 - Connections are reused across turns and carry bidirectional streaming, cancellation, ping/pong, and protocol-specific reconnect recovery. OpenClaw retries with the same idempotency key; Hermes resumes the stored session and reconciles history instead of blindly resubmitting a possibly executed tool turn.
+- Agent Link uses one outbound connection for chat and frontend tool calls. MeaPet publishes typed tool schemas after the handshake, so the third-party connector can register them in its own Agent loop and can proactively call `meapet.say`.
 - Agent responses must follow the MeaPet segmented output format. Malformed output raises an explicit format-repair state; no Agent path silently falls back to an HTTP model endpoint.
 
 The local `session_id` identifies MeaPet's timeline scope. OpenClaw additionally persists its Gateway `session_key`; Hermes persists the server-returned `remote_session_id` and uses `session.resume` after restart or reconnect. "Clear memory" in Agent mode explicitly starts a new upstream Agent session. Old timelines remain readable.
+
+The complete custom backend contract is documented in [`docs/agent-link-v1.md`](docs/agent-link-v1.md). A generic WebSocket endpoint is not sufficient: the backend must implement its envelope, handshake, tool snapshot, request correlation, idempotency, cancellation, offline, and reconnect semantics.
 
 ## Reply, Bubble, and TTS Timing
 
@@ -161,7 +164,7 @@ Privacy rules are enforced: screen observation is off by default; each screensho
 
 ## Companion MCP: Agent Control over MeaPet
 
-When Agent mode is active, an optional standard MCP Streamable HTTP endpoint can be enabled:
+For Hermes and OpenClaw, Agent mode can expose an optional standard MCP Streamable HTTP endpoint:
 
 ```text
 http(s)://<listen_host>:<port>/mcp
@@ -183,6 +186,8 @@ Security constraints:
 - LAN listening requires HTTPS by default. Plain HTTP can be explicitly allowed on trusted networks; the UI shows a persistent risk warning. When a client CA is configured, the Agent must present a client certificate signed by that CA (mTLS).
 - Does not modify Windows Firewall; remote access requires manually opening the chosen port.
 - The service also validates source IP, Host, Origin, request size, and rate.
+
+Custom Agent Link does not start this second listener. It projects the same capability registry over the existing WebSocket, so chat, proactive messages, and tool calls remain on one connection.
 
 ## Configuration
 
@@ -216,7 +221,7 @@ Minimal example:
 }
 ```
 
-See `config.example.json` and `docs/backend-and-control.md` for the full schema, Agent, and MCP examples.
+See `config.example.json`, `docs/backend-and-control.md`, and `docs/agent-link-v1.md` for the full schema, Agent, MCP, and custom Agent Link examples.
 
 ### Secrets and Environment Variables
 
@@ -229,6 +234,7 @@ Secret priority: environment variable > `config.json` plaintext. Config values a
 | `MEAPET_API_KEY` | Custom direct connection fallback |
 | `HERMES_DASHBOARD_SESSION_TOKEN` | Hermes `hermes serve` WebSocket token |
 | `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway token |
+| `AGENT_LINK_TOKEN` / `MEAPET_AGENT_TOKEN` | Custom Agent Link token |
 | `MEAPET_CONTROL_TOKEN` | Companion MCP Bearer Token |
 | `GSV_PYTHON` | GPT-SoVITS environment `python.exe` |
 | `MEAPET_FORCE_PNG` | Force PNG rendering when set to a non-empty value |
@@ -264,7 +270,7 @@ Closing the main window only hides it; use the tray menu to exit.
 mea-pet/
 ├── pet.py / meapet/__main__.py       Entry points
 ├── meapet/
-│   ├── agent/                         Hermes / OpenClaw and presentation state machine
+│   ├── agent/                         Hermes / OpenClaw / Agent Link and presentation state machine
 │   ├── direct/                        Direct protocol client with unified stream events
 │   ├── conversation/                  Segmented output protocol, session isolation, timeline
 │   ├── control/                       Companion MCP and security middleware
@@ -313,9 +319,9 @@ Check whether TTS is enabled, the engine health check passes, the reply's `voice
 </details>
 
 <details>
-<summary>Hermes, OpenClaw, or remote MCP cannot connect</summary>
+<summary>Hermes, OpenClaw, Agent Link, or remote MCP cannot connect</summary>
 
-For Hermes, start `hermes serve --host 127.0.0.1 --port 9119` with a fixed `HERMES_DASHBOARD_SESSION_TOKEN`, then configure `ws://127.0.0.1:9119/api/ws`; port 8642 is the separate HTTP API Server and is not the Agent WebSocket endpoint. Current Hermes public binds use short-lived login tickets rather than the static loopback token, so connect a remote Hermes through an SSH tunnel to its loopback port. Remote OpenClaw should use WSS; plain remote WS requires explicit opt-in. The Companion MCP listen IP must be a concrete local interface IP, and the allowed IP must match the Agent host. LAN HTTP also requires explicit opt-in; check Windows Firewall for the port.
+For Hermes, start `hermes serve --host 127.0.0.1 --port 9119` with a fixed `HERMES_DASHBOARD_SESSION_TOKEN`, then configure `ws://127.0.0.1:9119/api/ws`; port 8642 is the separate HTTP API Server and is not the Agent WebSocket endpoint. Current Hermes public binds use short-lived login tickets rather than the static loopback token, so connect a remote Hermes through an SSH tunnel to its loopback port. Remote OpenClaw and Agent Link should use WSS; plain remote WS requires explicit opt-in. An Agent Link server must return a matching `control.ready` and support dynamic tool calls as described in `docs/agent-link-v1.md`. The Companion MCP listen IP must be a concrete local interface IP, and the allowed IP must match the Agent host. LAN HTTP also requires explicit opt-in; check Windows Firewall for the port.
 </details>
 
 <details>
