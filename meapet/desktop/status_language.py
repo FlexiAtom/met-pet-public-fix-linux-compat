@@ -71,6 +71,22 @@ def watcher_disabled() -> str:
     return "屏幕观察已关闭"
 
 
+def watcher_not_enabled() -> str:
+    return "屏幕观察尚未开启"
+
+
+def watcher_uploading_cloud() -> str:
+    return "本次截图已确认，正在上传识别…"
+
+
+def watcher_uploading_local() -> str:
+    return "正在本地识别屏幕内容…"
+
+
+def watcher_silent() -> str:
+    return "这次没有需要提醒你的内容喵"
+
+
 def voice_input_enabled() -> str:
     return "语音输入已开启"
 
@@ -81,6 +97,18 @@ def voice_input_disabled() -> str:
 
 def voice_input_unavailable() -> str:
     return "语音输入依赖未安装，请在配置页下载"
+
+
+def vision_failed(_reason: object = None) -> str:
+    return "这次没看清，请稍后再试喵"
+
+
+def vision_backend_switched(backend: object) -> str:
+    return f"识图后端已切换为 {str(backend or '').strip() or '默认'}"
+
+
+def vision_model_switched(model: object) -> str:
+    return f"识图模型已切换为 {str(model or '').strip() or '默认'}"
 
 
 def tts_failed() -> str:
@@ -139,6 +167,78 @@ def first_run_hint() -> str:
 
 def reduced_motion_enabled_hint() -> str:
     return "已开启减少动画"
+
+
+def autostart_unsupported() -> str:
+    return "开机自启目前仅支持 Windows"
+
+
+def autostart_disabled() -> str:
+    return "开机自启已关闭"
+
+
+def autostart_enabled() -> str:
+    return "开机自启已开启"
+
+
+def timeline_empty() -> str:
+    return "还没有可查看的对话。"
+
+
+def recent_reply_missing() -> str:
+    return "这轮完整回复已不在最近缓存中。"
+
+
+def agent_session_failed() -> str:
+    return "新建 Agent 会话失败，请检查配置。"
+
+
+def agent_session_started() -> str:
+    return "已开始新的 Agent 会话。旧时间线仍可查看。"
+
+
+def control_token_missing() -> str:
+    return "当前没有可复制的 Agent 控制令牌。"
+
+
+def control_token_copied() -> str:
+    return "Agent 控制令牌已复制。"
+
+
+def control_token_regeneration_failed() -> str:
+    return "令牌重新生成失败。"
+
+
+def control_token_regenerated() -> str:
+    return "已重新生成 Agent 控制令牌，旧令牌已失效。"
+
+
+def config_open_failed(_reason: object = None) -> str:
+    return "打开配置页失败，请检查 Python 环境与项目路径。"
+
+
+def config_corrupt() -> str:
+    return "配置文件无法读取，请打开配置中心检查。"
+
+
+def config_apply_failed() -> str:
+    return "新配置未能启动，请检查配置。"
+
+
+def config_applied() -> str:
+    return "新配置已应用。"
+
+
+def render_png_enabled() -> str:
+    return "已切回 PNG 立绘喵"
+
+
+def render_live2d_enabled() -> str:
+    return "已切换到 Live2D 喵"
+
+
+def render_live2d_failed() -> str:
+    return "Live2D 加载失败，已切回 PNG 喵"
 
 
 def tray_recover_standby() -> str:
