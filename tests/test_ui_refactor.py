@@ -350,7 +350,7 @@ class UiRefactorTests(unittest.TestCase):
         self.assertIsInstance(wizard.tabs, QTabWidget)
         self.assertEqual(
             [wizard.tabs.tabText(index) for index in range(wizard.tabs.count())],
-            ["环境", "对话", "语音", "屏幕识图"],
+            ["环境", "对话", "语音", "屏幕识图", "语音输入"],
         )
         self.assertFalse(hasattr(wizard, "progress"))
         self.assertFalse(hasattr(wizard, "back_btn"))
@@ -1880,6 +1880,9 @@ class UiRefactorTests(unittest.TestCase):
             def _quit(self):
                 pass
 
+            def _toggle_voice_input(self):
+                pass
+
         return self._track(MenuHost())
 
     def test_context_menu_groups_secondary_actions_into_submenus(self) -> None:
@@ -1898,6 +1901,7 @@ class UiRefactorTests(unittest.TestCase):
                 "看看我在干嘛",
                 "切换表情",
                 "识图与观察",
+                "开启语音输入",
                 "显示与立绘",
                 "设置与数据",
                 "退出",
