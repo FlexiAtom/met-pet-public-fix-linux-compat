@@ -979,7 +979,7 @@ class SetupWizard(QWidget):
 
             try:
                 self.voice_input_page.apply_config(
-                    config.get("voice_input") or {},
+                    cfg.get("voice_input") or {},
                 )
             except Exception as exc:
                 self.env_page.log(f"恢复语音输入配置失败: {exc}")
