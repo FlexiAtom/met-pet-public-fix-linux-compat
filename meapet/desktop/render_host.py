@@ -4,7 +4,8 @@ Live2D 保留完整模型画布用于渲染动作，但顶层桌宠窗口只暴�
 - OpenGL 子控件尺寸 = 模型画布尺寸 × size_factor
 - 顶层窗口尺寸 = ``live2d.window_mask`` 外接矩形对应的视觉区域
 - 子控件通过负偏移放在顶层窗口后方，由普通父子窗口矩形裁剪透明留白
-- 不使用 Qt setMask / OS 椭圆窗形 / OpenGL stencil，避免裁断大幅动作
+- ``live2d.window_shape`` 可选地把多个保留/挖空多边形转换为静态 QRegion
+- 不恢复历史椭圆窗形，也不使用 OpenGL stencil；形状关闭时保留普通矩形窗口
 """
 import os
 from collections.abc import Callable

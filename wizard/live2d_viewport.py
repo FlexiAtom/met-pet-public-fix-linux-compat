@@ -577,7 +577,15 @@ class Live2DViewportEditor(QWidget):
             for point in self._draft_shape_points[1:]:
                 draft.lineTo(self._canvas_point(point))
             painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(color, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setPen(
+                QPen(
+                    color,
+                    3,
+                    Qt.SolidLine,
+                    Qt.RoundCap,
+                    Qt.RoundJoin,
+                )
+            )
             painter.drawPath(draft)
             if len(self._draft_shape_points) >= 3:
                 closing = QPainterPath()
@@ -780,7 +788,10 @@ class Live2DViewportEditor(QWidget):
             canvas = self._canvas_rect()
             if (
                 not self._new_selection_started
-                and (QPointF(event.pos()) - self._canvas_point(self._drag_origin)).manhattanLength()
+                and (
+                    QPointF(event.pos())
+                    - self._canvas_point(self._drag_origin)
+                ).manhattanLength()
                 < 4
             ):
                 return
@@ -1333,7 +1344,10 @@ class Live2DViewportSettings(QFrame):
         if not enabled:
             text = f"自定义形状已关闭；已保留 {counts}，重新启用后可继续编辑。"
         elif at_limit:
-            text = f"已达到 {MAX_LIVE2D_WINDOW_SHAPE_CONTOURS} 个轮廓上限；{counts}。"
+            text = (
+                f"已达到 {MAX_LIVE2D_WINDOW_SHAPE_CONTOURS} 个轮廓上限；"
+                f"{counts}。"
+            )
         elif tool is not None:
             operation = "保留区" if tool == "add" else "挖空区"
             text = (
