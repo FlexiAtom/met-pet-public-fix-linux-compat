@@ -278,6 +278,7 @@ class AgentLinkAdapter:
     def _hello_payload(self) -> dict[str, Any]:
         return {
             "client": {
+                "id": "meapet",
                 "name": "MeaPet",
                 "version": _package_version(),
             },

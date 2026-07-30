@@ -132,6 +132,7 @@ MeaPet 建连后首先发送：
   "reply_to": "",
   "payload": {
     "client": {
+      "id": "meapet",
       "name": "MeaPet",
       "version": "1.0.0"
     },
@@ -172,6 +173,13 @@ MeaPet 建连后首先发送：
   "extensions": {}
 }
 ```
+
+`client.id` 是客户端类型的稳定平台 ID，不是后端类型、设备 ID 或会话 ID。
+它必须匹配 `^[a-z][a-z0-9_-]{0,31}$`。服务端应按该 ID 自动登记当前连接，
+但不能让客户端借此选择内部 Prompt；Prompt 策略由服务端分配。Nanobot 当前
+会把 Agent Link 客户端分配到 `external_private`，并在
+`control.ready.payload.client_context` 中回传最终的 `platform_id`、
+`policy_profile` 和 `chat_type`。`device.id` 仍用于区分具体桌面实例。
 
 令牌位于第一条应用消息中，因此远程链路必须使用 WSS 才能避免明文泄露。
 

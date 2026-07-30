@@ -349,6 +349,10 @@ class TestAgentLinkAdapter(unittest.IsolatedAsyncioTestCase):
         async def handler(websocket) -> None:
             hello = json.loads(await websocket.recv())
             received_types.append(hello["type"])
+            self.assertEqual(
+                hello["payload"]["client"]["id"],
+                "meapet",
+            )
             await websocket.send(
                 json.dumps(_ready(hello), ensure_ascii=False)
             )
