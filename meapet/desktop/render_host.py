@@ -6,9 +6,9 @@ Live2D 保留完整模型画布用于渲染动作，但顶层桌宠窗口只暴�
 - 子控件通过负偏移放在顶层窗口后方，由普通父子窗口矩形裁剪透明留白
 - 不使用 Qt setMask / OS 椭圆窗形 / OpenGL stencil，避免裁断大幅动作
 """
-from dataclasses import dataclass
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
@@ -142,7 +142,8 @@ def calculate_bubble_anchor_rect(
 ) -> QRect:
     """把桌宠窗口内的可见区域转换成用于气泡定位的全局矩形。
 
-    已移除椭圆 mask，窗口即为模型画布本身，无需再取 mask 包围盒。
+    Live2D 顶层窗口已经是裁去透明留白后的视觉视口；PNG 顶层窗口则与
+    精灵帧一致，因此两种模式都可以直接使用窗口矩形作为默认锚点。
     """
     window = QRect(pet_window_rect)
     if visible_local_rect is None or visible_local_rect.isEmpty():
@@ -932,7 +933,7 @@ class PetRenderHostMixin:
             self.width(),
             self.height(),
         )
-        # 不再依赖 mask，窗口本身即为模型区域
+        # 顶层窗口已经是稳定视觉视口，不再查询动态 mask。
         pet_rect = pet_window_rect
         screen = QApplication.screenAt(pet_rect.center())
         if screen is None:

@@ -245,7 +245,7 @@ class Live2DWidget(QOpenGLWidget):
         )
 
     def _fit_model_to_window(self, model):
-        """让模型填满整个窗口区域（无椭圆裁剪，窗口大小 = 模型渲染区域）。"""
+        """把完整模型画布适配到 OpenGL 子控件；父窗口负责矩形视口裁剪。"""
         model.Resize(self.width(), self.height())
 
     def resizeGL(self, w, h):
@@ -475,4 +475,3 @@ def dispose_live2d():
             _LIVE2D_INITIALIZED = False
     except Exception:
         pass
-

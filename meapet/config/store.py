@@ -853,7 +853,7 @@ def _clamp_ratio(value: object, default: float, lo: float, hi: float) -> float:
 
 
 def normalize_live2d_window_mask(value: object) -> dict:
-    """规范化 Live2D 椭圆窗口 mask（比例 0–1）。"""
+    """规范化 Live2D 视觉视口的历史椭圆参数（比例 0–1）。"""
     raw = value if isinstance(value, dict) else {}
     defaults = DEFAULT_LIVE2D_WINDOW_MASK
     return {

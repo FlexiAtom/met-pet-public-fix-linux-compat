@@ -66,7 +66,8 @@ DEFAULT_AGENT_CONTROL = MappingProxyType(
     }
 )
 
-# Live2D 顶层窗椭圆 mask：比例相对当前窗口宽高，随 size_factor 自动缩放。
+# Live2D 视觉视口兼容键：保留历史椭圆参数，但运行时仅使用其外接矩形
+# 裁去画布透明留白，不再把椭圆形状应用到绘制或 OS 窗口区域。
 DEFAULT_LIVE2D_WINDOW_MASK = MappingProxyType(
     {
         "enabled": True,

@@ -303,6 +303,7 @@ Before editing the pet UI, read `design-system/MASTER.md`, `design-system/pages/
 - Expression mapping: `EXPRESSION_MAP` and `MOOD_TO_EXPRESSION` in `meapet/desktop/renderer.py`.
 - PNG resource naming: `sprites/mea{outfit_id}{direction}_{expression}.png`.
 - Live2D model directory: `live2d.model_dir` in `config.json`.
+- Live2D visual viewport: the legacy `live2d.window_mask` ellipse parameters define a rectangular outer bound used to crop transparent canvas margins; set `enabled` to `false` to expose the complete model canvas.
 
 ## FAQ
 
