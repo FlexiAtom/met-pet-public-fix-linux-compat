@@ -242,6 +242,7 @@ class WizardConfigurationExperienceTests(unittest.TestCase):
 
         wizard = self._track(SetupWizard())
         self._stop_startup_work(wizard)
+        wizard.backend_page.set_agent_kind("hermes")
         wizard.backend_page.agent_radio.setChecked(True)
         wizard.backend_page.agent_setup_help_btn.click()
         QApplication.processEvents()
