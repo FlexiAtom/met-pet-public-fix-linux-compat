@@ -12,10 +12,12 @@ from dataclasses import dataclass
 
 from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PyQt5.QtGui import QPolygon, QRegion
 
 from meapet.config.store import (
     normalize_live2d_placement_anchor,
     normalize_live2d_window_mask,
+    normalize_live2d_window_shape,
 )
 from meapet.config.defaults import bubble_duration_ms
 from meapet.desktop.renderer import SpriteCanvas, SpriteRenderer
@@ -76,6 +78,51 @@ class Live2DViewportLayout:
     widget_height: int
     window_width: int
     window_height: int
+
+
+def calculate_live2d_window_region(
+    layout: Live2DViewportLayout,
+    window_shape: object,
+) -> QRegion | None:
+    """把完整画布归一化多轮廓转换为裁剪窗口本地 ``QRegion``。"""
+    shape = normalize_live2d_window_shape(window_shape)
+    if not shape["enabled"]:
+        return None
+
+    additions = QRegion()
+    subtractions = []
+    has_addition = False
+    for contour in shape["contours"]:
+        polygon = QPolygon(
+            [
+                QPoint(
+                    layout.widget_x
+                    + round(layout.widget_width * float(point[0])),
+                    layout.widget_y
+                    + round(layout.widget_height * float(point[1])),
+                )
+                for point in contour["points"]
+            ]
+        )
+        contour_region = QRegion(polygon, Qt.OddEvenFill)
+        if contour_region.isEmpty():
+            continue
+        if contour["operation"] == "add":
+            additions = additions.united(contour_region)
+            has_addition = True
+        else:
+            subtractions.append(contour_region)
+
+    if not has_addition or additions.isEmpty():
+        return None
+    for subtraction in subtractions:
+        additions = additions.subtracted(subtraction)
+
+    window_bounds = QRegion(
+        QRect(0, 0, layout.window_width, layout.window_height)
+    )
+    region = additions.intersected(window_bounds)
+    return None if region.isEmpty() else region
 
 
 def calculate_live2d_viewport_layout(
@@ -462,6 +509,7 @@ class PetRenderHostMixin:
 
     def _init_png_renderer(self):
         """创建 PNG 渲染器；仅用于明确选择 PNG 或 Live2D 失败回退。"""
+        self.clearMask()
         char = self.config.get("character", {})
         sprite_dir = self.config.get(
             "sprite_dir",
@@ -802,7 +850,36 @@ class PetRenderHostMixin:
                 layout.widget_height,
             )
         self.resize(layout.window_width, layout.window_height)
+        self._apply_live2d_window_region(layout)
         return layout
+
+    def _apply_live2d_window_region(
+        self,
+        layout: Live2DViewportLayout | None = None,
+    ) -> bool:
+        """应用可选静态窗口形状；无有效形状时恢复普通矩形窗口。"""
+        if not getattr(self, "_use_live2d", False):
+            self.clearMask()
+            return False
+        if layout is None:
+            layout = self._live2d_viewport_layout(self._size_factor)
+        live2d = (getattr(self, "config", {}) or {}).get("live2d") or {}
+        region = calculate_live2d_window_region(
+            layout,
+            live2d.get("window_shape"),
+        )
+        if region is None:
+            self.clearMask()
+            return False
+        self.setMask(region)
+        return True
+
+    def _apply_hit_region(self) -> None:
+        """启动后或渲染模式变化时同步当前 Live2D 窗口形状。"""
+        if getattr(self, "_use_live2d", False) and self.sprite_label is not None:
+            self._apply_live2d_window_region()
+        else:
+            self.clearMask()
 
     def _apply_live2d_viewport_preference(self) -> bool:
         """热应用视觉视口与模型锚点，同时维持模型和气泡位置。"""

@@ -66,9 +66,11 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
     assert example["live2d"]["placement_anchor"] == dict(
         DEFAULT_LIVE2D_PLACEMENT_ANCHOR
     )
-    assert example["live2d"]["window_shape"] == dict(
-        DEFAULT_LIVE2D_WINDOW_SHAPE
-    )
+    expected_window_shape = {
+        "enabled": DEFAULT_LIVE2D_WINDOW_SHAPE["enabled"],
+        "contours": list(DEFAULT_LIVE2D_WINDOW_SHAPE["contours"]),
+    }
+    assert example["live2d"]["window_shape"] == expected_window_shape
 
     assert preset_by_id("openai").api_base == DEFAULT_OPENAI_API_BASE
     assert preset_by_id("ollama").api_base == DEFAULT_OLLAMA_HOST
@@ -79,9 +81,7 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
     assert normalize_config({})["live2d"]["placement_anchor"] == dict(
         DEFAULT_LIVE2D_PLACEMENT_ANCHOR
     )
-    assert normalize_config({})["live2d"]["window_shape"] == dict(
-        DEFAULT_LIVE2D_WINDOW_SHAPE
-    )
+    assert normalize_config({})["live2d"]["window_shape"] == expected_window_shape
 
 
 def test_watcher_timer_uses_the_same_default_interval_as_normalization():

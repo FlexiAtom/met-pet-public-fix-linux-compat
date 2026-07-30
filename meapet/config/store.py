@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import stat
 import sys
@@ -34,6 +35,7 @@ from meapet.config.defaults import (
     DEFAULT_CONTROL_PORT,
     DEFAULT_HERMES_WS_URL,
     DEFAULT_LIVE2D_WINDOW_MASK,
+    DEFAULT_LIVE2D_WINDOW_SHAPE,
     DEFAULT_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
     DEFAULT_OPENAI_API_BASE,
@@ -895,6 +897,64 @@ def normalize_live2d_placement_anchor(
     }
 
 
+MAX_LIVE2D_WINDOW_SHAPE_CONTOURS = 32
+MAX_LIVE2D_WINDOW_SHAPE_POINTS = 128
+
+
+def normalize_live2d_window_shape(value: object) -> dict:
+    """规范化静态 Live2D 窗口多边形，限制复杂度以保护 GUI 性能。"""
+    raw = value if isinstance(value, dict) else {}
+    raw_contours = raw.get("contours")
+    if not isinstance(raw_contours, (list, tuple)):
+        raw_contours = ()
+
+    contours = []
+    for raw_contour in raw_contours:
+        if len(contours) >= MAX_LIVE2D_WINDOW_SHAPE_CONTOURS:
+            break
+        if not isinstance(raw_contour, dict):
+            continue
+        operation = str(raw_contour.get("operation") or "add").strip().lower()
+        if operation not in ("add", "subtract"):
+            continue
+        raw_points = raw_contour.get("points")
+        if not isinstance(raw_points, (list, tuple)):
+            continue
+
+        points = []
+        for raw_point in raw_points:
+            if len(points) >= MAX_LIVE2D_WINDOW_SHAPE_POINTS:
+                break
+            if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+                continue
+            try:
+                x = float(raw_point[0])
+                y = float(raw_point[1])
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(x) or not math.isfinite(y):
+                continue
+            point = [
+                round(max(0.0, min(1.0, x)), 6),
+                round(max(0.0, min(1.0, y)), 6),
+            ]
+            if not points or point != points[-1]:
+                points.append(point)
+
+        if len(points) >= 2 and points[0] == points[-1]:
+            points.pop()
+        if len({tuple(point) for point in points}) < 3:
+            continue
+        contours.append({"operation": operation, "points": points})
+
+    return {
+        "enabled": bool(
+            raw.get("enabled", DEFAULT_LIVE2D_WINDOW_SHAPE["enabled"])
+        ),
+        "contours": contours,
+    }
+
+
 def _normalize_reference_audios(tts: dict) -> dict:
     """规范化每语言固定参考音频，并只读迁移旧单条 GSV 配置。"""
     raw_mapping = tts.get("reference_audios")
@@ -932,6 +992,9 @@ def normalize_config(config: dict) -> dict:
     live2d["placement_anchor"] = normalize_live2d_placement_anchor(
         live2d.get("placement_anchor"),
         live2d["window_mask"],
+    )
+    live2d["window_shape"] = normalize_live2d_window_shape(
+        live2d.get("window_shape")
     )
     cfg["live2d"] = live2d
     cfg["agent_control"] = _normalize_agent_control(cfg.get("agent_control"))

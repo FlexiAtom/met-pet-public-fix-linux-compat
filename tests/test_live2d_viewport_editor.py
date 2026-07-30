@@ -712,7 +712,7 @@ class Live2DViewportEditorTests(unittest.TestCase):
         layout = calculate_live2d_viewport_layout(
             1000,
             1000,
-            0.2,
+            0.3,
             {
                 "enabled": True,
                 "cx": 0.50,
@@ -738,9 +738,9 @@ class Live2DViewportEditorTests(unittest.TestCase):
         region = calculate_live2d_window_region(layout, shape)
 
         self.assertIsNotNone(region)
-        self.assertEqual(region.boundingRect(), QRect(0, 0, 120, 160))
+        self.assertEqual(region.boundingRect(), QRect(0, 0, 180, 240))
         self.assertTrue(region.contains(QPoint(10, 10)))
-        self.assertFalse(region.contains(QPoint(60, 80)))
+        self.assertFalse(region.contains(QPoint(90, 120)))
         self.assertIsNone(
             calculate_live2d_window_region(
                 layout,
@@ -795,10 +795,10 @@ class Live2DViewportEditorTests(unittest.TestCase):
         host._l2d_model = CanvasModel()
         host.sprite_label = QWidget(host)
 
-        host._apply_live2d_viewport_geometry(0.2)
+        host._apply_live2d_viewport_geometry(0.3)
 
         self.assertFalse(host.mask().isEmpty())
-        self.assertFalse(host.mask().contains(QPoint(60, 80)))
+        self.assertFalse(host.mask().contains(QPoint(90, 120)))
 
         host._use_live2d = False
         host._apply_hit_region()

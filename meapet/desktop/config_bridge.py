@@ -15,6 +15,7 @@ from meapet.config.store import (
     normalize_config,
     normalize_live2d_placement_anchor,
     normalize_live2d_window_mask,
+    normalize_live2d_window_shape,
     resolve_writable_config_path,
 )
 from meapet.log import get_color_logger
@@ -62,6 +63,11 @@ class PetConfigBridgeMixin:
             if isinstance(current_live2d, dict)
             else None,
             old_window_mask,
+        )
+        old_window_shape = normalize_live2d_window_shape(
+            current_live2d.get("window_shape")
+            if isinstance(current_live2d, dict)
+            else None
         )
 
         worker = getattr(self, "_chat_worker", None)
@@ -117,9 +123,15 @@ class PetConfigBridgeMixin:
             else None,
             new_window_mask,
         )
+        new_window_shape = normalize_live2d_window_shape(
+            new_live2d.get("window_shape")
+            if isinstance(new_live2d, dict)
+            else None
+        )
         viewport_changed = (
             old_window_mask != new_window_mask
             or old_placement_anchor != new_placement_anchor
+            or old_window_shape != new_window_shape
         )
         try:
             apply_motion = getattr(self, "_apply_motion_preference", None)

@@ -987,6 +987,9 @@ class SetupWizard(QWidget):
             self.live2d_viewport_settings.set_placement_anchor(
                 live2d.get("placement_anchor")
             )
+            self.live2d_viewport_settings.set_window_shape(
+                live2d.get("window_shape")
+            )
 
             self.apply_conversation_config(cfg)
             backend = self.llm_page.get_backend()
@@ -1098,7 +1101,7 @@ class SetupWizard(QWidget):
         display["reduced_motion"] = self.reduced_motion_cb.isChecked()
 
     def _collect_live2d_viewport_fields(self, config: dict) -> None:
-        """显示页补丁 Live2D 视觉视口与锚点，其余字段原样保留。"""
+        """显示页补丁 Live2D 视口、锚点和形状，其余字段原样保留。"""
         live2d = config.get("live2d")
         if not isinstance(live2d, dict):
             live2d = {}
@@ -1106,6 +1109,9 @@ class SetupWizard(QWidget):
         live2d["window_mask"] = self.live2d_viewport_settings.window_mask()
         live2d["placement_anchor"] = (
             self.live2d_viewport_settings.placement_anchor()
+        )
+        live2d["window_shape"] = (
+            self.live2d_viewport_settings.window_shape()
         )
 
     def _collect_reference_audios(

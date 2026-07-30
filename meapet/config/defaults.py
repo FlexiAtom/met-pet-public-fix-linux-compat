@@ -87,6 +87,15 @@ DEFAULT_LIVE2D_PLACEMENT_ANCHOR = MappingProxyType(
     }
 )
 
+# 可选的静态窗口形状。轮廓坐标属于完整 Live2D 画布；空轮廓默认关闭，
+# 继续使用普通矩形顶层窗口，保证旧配置和大幅动作不受影响。
+DEFAULT_LIVE2D_WINDOW_SHAPE = MappingProxyType(
+    {
+        "enabled": False,
+        "contours": (),
+    }
+)
+
 
 def default_agent_url(kind: object) -> str:
     """按 Agent 类型返回本地 WebSocket 默认地址。"""

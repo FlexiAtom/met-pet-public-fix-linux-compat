@@ -115,6 +115,10 @@
       "x": 0.54,
       "y": 0.80
     },
+    "window_shape": {
+      "enabled": false,
+      "contours": []
+    },
     "window_mask": {
       "enabled": true,
       "cx": 0.54,
