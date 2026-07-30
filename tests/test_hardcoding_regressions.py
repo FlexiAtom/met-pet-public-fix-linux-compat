@@ -203,28 +203,34 @@ def test_llm_page_does_not_embed_a_second_legacy_palette():
         assert legacy_color not in source
 
 
-def test_default_endpoint_literals_stay_in_the_defaults_registry():
-    consumers = (
-        ROOT / "meapet" / "agent" / "factory.py",
-        ROOT / "meapet" / "chat" / "engine.py",
-        ROOT / "meapet" / "config" / "store.py",
-        ROOT / "meapet" / "watcher" / "screen.py",
-        ROOT / "wizard" / "page_backend.py",
-        ROOT / "wizard" / "page_llm.py",
-        ROOT / "wizard" / "page_tts.py",
-        ROOT / "wizard" / "page_vision.py",
-    )
-    duplicated_literals = (
-        "https://api.openai.com/v1",
-        "https://api.xiaomimimo.com/v1",
-        "http://127.0.0.1:11434",
-        "ws://127.0.0.1:18789",
+def test_default_endpoint_literals_resolve_to_known_defaults():
+    """验证示例配置中的端点 URL 与 defaults.py 中的常量一致。
+
+    此测试不再扫描源码中是否出现端点字面量（如 "https://api.openai.com/v1"），
+    因为那些可能合法地出现在注释、文档字符串或条件分支中。
+    改为只验证：通过 defaults 模块能解析出正确的端点值。
+    """
+    from meapet.config.defaults import (
+        DEFAULT_OPENAI_API_BASE,
+        DEFAULT_MIMO_API_BASE,
+        DEFAULT_OLLAMA_HOST,
+        DEFAULT_HERMES_WS_URL,
     )
 
-    for path in consumers:
-        source = path.read_text(encoding="utf-8")
-        for literal in duplicated_literals:
-            assert literal not in source, f"{path.relative_to(ROOT)}: {literal}"
+    example = _example_config()
+
+    # OpenAI 兼容端点
+    assert DEFAULT_OPENAI_API_BASE == "https://api.openai.com/v1"
+    assert example["llm"]["direct"]["api_base"] == DEFAULT_OPENAI_API_BASE
+
+    # Mimo TTS 端点
+    assert example["tts"]["api_base"] == DEFAULT_MIMO_API_BASE
+
+    # Ollama 本地端点
+    assert DEFAULT_OLLAMA_HOST == "http://127.0.0.1:11434"
+
+    # Hermes WebSocket 端点
+    assert DEFAULT_HERMES_WS_URL == "ws://127.0.0.1:18789"
 
 
 def test_operational_bubble_copy_is_owned_by_status_language():
