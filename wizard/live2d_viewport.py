@@ -357,10 +357,17 @@ class Live2DViewportEditor(QWidget):
             painter.fillPath(outside, scrim)
 
             pen = QPen(border, 3 if self.hasFocus() else 2)
+            if self._edit_mode == "anchor":
+                pen.setStyle(Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(selection)
 
+        self._draw_placement_anchor(painter)
+
+        # 默认锚点可能正好落在选框下边手柄上；范围编辑模式让手柄最后绘制，
+        # 锚点编辑模式则隐藏手柄，避免两个 44px 命中目标相互遮挡。
+        if self._crop_enabled and self._edit_mode == "viewport":
             painter.setPen(QPen(QColor(PALETTE["canvas"]), 1))
             painter.setBrush(border)
             for point in self._handle_points(selection).values():
@@ -369,8 +376,6 @@ class Live2DViewportEditor(QWidget):
                     _HANDLE_VISUAL_RADIUS,
                     _HANDLE_VISUAL_RADIUS,
                 )
-
-        self._draw_placement_anchor(painter)
 
     def _draw_placement_anchor(self, painter: QPainter) -> None:
         """用高对比十字靶标显示模型在桌面上保持不动的画布点。"""

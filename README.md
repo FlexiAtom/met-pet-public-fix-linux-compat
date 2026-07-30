@@ -303,7 +303,7 @@ Before editing the pet UI, read `design-system/MASTER.md`, `design-system/pages/
 - Expression mapping: `EXPRESSION_MAP` and `MOOD_TO_EXPRESSION` in `meapet/desktop/renderer.py`.
 - PNG resource naming: `sprites/mea{outfit_id}{direction}_{expression}.png`.
 - Live2D model directory: `live2d.model_dir` in `config.json`.
-- Live2D visual viewport: the legacy `live2d.window_mask` ellipse parameters define a rectangular outer bound used to crop transparent canvas margins; set `enabled` to `false` to expose the complete model canvas. The configuration center can edit this bound by dragging a rectangle or entering its four edge percentages; saving keeps the complete model canvas and interaction zones unchanged while resizing the top-level window immediately.
+- Live2D visual viewport: the legacy `live2d.window_mask` ellipse parameters define a rectangular outer bound used to crop transparent canvas margins; set `enabled` to `false` to expose the complete model canvas. The configuration center can edit this bound by dragging a rectangle or entering its four edge percentages. A separate `live2d.placement_anchor` target can be placed between the model's feet so that the same full-canvas point stays fixed on screen while the viewport or model scale changes. Saving keeps the complete model canvas and interaction zones unchanged while applying both settings immediately.
 
 ## FAQ
 

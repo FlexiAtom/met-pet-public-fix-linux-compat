@@ -390,7 +390,7 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertEqual(settings.editor.viewport(), before)
         self.assertIn("完整画布", settings.status_label.text())
 
-    def test_wizard_patches_only_live2d_window_mask(self) -> None:
+    def test_wizard_patches_only_live2d_viewport_fields(self) -> None:
         from wizard.app import SetupWizard
 
         initial = {

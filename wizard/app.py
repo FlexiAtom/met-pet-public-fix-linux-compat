@@ -359,7 +359,7 @@ class SetupWizard(QWidget):
         layout.addWidget(title)
 
         description = QLabel(
-            "调整界面字体、桌宠尺寸和 Live2D 透明窗口范围。"
+            "调整界面字体、桌宠尺寸、Live2D 透明窗口范围和模型站立锚点。"
             "字体在配置页即时预览，桌宠重启后应用；"
             "其余项目保存后立即应用。"
         )
