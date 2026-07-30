@@ -794,10 +794,13 @@ class PetRenderHostMixin:
         try:
             width = max(0, int(widget.width()))
             height = max(0, int(widget.height()))
+            dpr_getter = getattr(widget, "devicePixelRatioF", None)
+            dpr = float(dpr_getter()) if callable(dpr_getter) else 1.0
+            source_pixels = width * height * max(1.0, dpr) ** 2
             if (
                 width <= 0
                 or height <= 0
-                or width * height > LIVE2D_PREVIEW_MAX_SOURCE_PIXELS
+                or source_pixels > LIVE2D_PREVIEW_MAX_SOURCE_PIXELS
             ):
                 return None
             image = grab()

@@ -41,7 +41,7 @@ def _clamp_unit(value: object) -> float:
     return max(0.0, min(1.0, number))
 
 
-def _constrain_span(start: float, end: float, minimum: float) -> tuple[float, float]:
+def _constrain_span(start: object, end: object, minimum: float) -> tuple[float, float]:
     start = _clamp_unit(start)
     end = _clamp_unit(end)
     if start > end:
@@ -72,13 +72,13 @@ def constrain_viewport_edges(
     """把任意四边收敛到完整画布内，并保留可操作的最小尺寸。"""
     minimum = max(0.01, min(1.0, float(minimum_span)))
     constrained_left, constrained_right = _constrain_span(
-        float(left),
-        float(right),
+        left,
+        right,
         minimum,
     )
     constrained_top, constrained_bottom = _constrain_span(
-        float(top),
-        float(bottom),
+        top,
+        bottom,
         minimum,
     )
     return tuple(
@@ -317,6 +317,8 @@ class Live2DViewportEditor(QWidget):
 
     @staticmethod
     def _draw_canvas_grid(painter: QPainter, canvas: QRectF) -> None:
+        painter.save()
+        painter.setClipRect(canvas)
         first = QColor(PALETTE["surface"])
         second = QColor(PALETTE["surface_elevated"])
         first.setAlpha(220)
@@ -334,6 +336,7 @@ class Live2DViewportEditor(QWidget):
                 column += 1
             y += cell
             row += 1
+        painter.restore()
 
     def _normalized_point(self, point: QPointF) -> QPointF:
         canvas = self._canvas_rect()
@@ -555,10 +558,10 @@ class Live2DViewportSettings(QFrame):
 
         actions = QHBoxLayout()
         actions.setSpacing(12)
-        self.reset_button = QPushButton("恢复推荐范围")
+        self.reset_button = QPushButton("恢复默认范围")
         self.reset_button.setObjectName("SecondaryButton")
         self.reset_button.setMinimumHeight(MIN_TARGET_SIZE)
-        self.reset_button.setAccessibleName("恢复推荐的 Live2D 窗口范围")
+        self.reset_button.setAccessibleName("恢复默认的 Live2D 窗口范围")
         actions.addWidget(self.reset_button)
 
         self.full_canvas_button = QPushButton("使用完整画布")

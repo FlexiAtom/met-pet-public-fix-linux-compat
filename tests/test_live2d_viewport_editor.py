@@ -9,8 +9,10 @@ from pathlib import Path
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt5.QtGui import QColor, QImage  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt5.QtGui import QColor, QImage, QMouseEvent  # noqa: E402
+from PyQt5.QtTest import QTest  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from meapet.desktop.config_bridge import PetConfigBridgeMixin  # noqa: E402
 from meapet.desktop.render_host import PetRenderHostMixin  # noqa: E402
@@ -96,6 +98,39 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self._widgets.append(widget)
         return widget
 
+    @staticmethod
+    def _drag(widget, start: QPoint, end: QPoint) -> None:
+        QApplication.sendEvent(
+            widget,
+            QMouseEvent(
+                QEvent.MouseButtonPress,
+                QPointF(start),
+                Qt.LeftButton,
+                Qt.LeftButton,
+                Qt.NoModifier,
+            ),
+        )
+        QApplication.sendEvent(
+            widget,
+            QMouseEvent(
+                QEvent.MouseMove,
+                QPointF(end),
+                Qt.NoButton,
+                Qt.LeftButton,
+                Qt.NoModifier,
+            ),
+        )
+        QApplication.sendEvent(
+            widget,
+            QMouseEvent(
+                QEvent.MouseButtonRelease,
+                QPointF(end),
+                Qt.LeftButton,
+                Qt.NoButton,
+                Qt.NoModifier,
+            ),
+        )
+
     def test_historical_mask_round_trips_through_rectangle_edges(self) -> None:
         mask = {
             "enabled": True,
@@ -127,6 +162,9 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertLessEqual(bottom, 1.0)
         self.assertGreaterEqual(right - left, 0.20 - 1e-9)
         self.assertGreaterEqual(bottom - top, 0.20 - 1e-9)
+
+        malformed = constrain_viewport_edges("bad", float("nan"), None, 4)
+        self.assertEqual(malformed, (0.0, 0.0, 0.2, 1.0))
 
     def test_settings_support_mouse_preview_and_keyboard_numeric_alternative(self) -> None:
         preview = QImage(320, 480, QImage.Format_ARGB32_Premultiplied)
@@ -183,6 +221,90 @@ class Live2DViewportEditorTests(unittest.TestCase):
                 "rh": 0.50,
             },
         )
+        self.assertIn("完整画布", settings.status_label.text())
+
+    def test_editor_supports_keyboard_movement_without_changing_size(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        editor = settings.editor
+        editor.setEnabled(True)
+        editor.setFocus()
+        before = editor.viewport()
+
+        QTest.keyClick(editor, Qt.Key_Right)
+        QTest.keyClick(editor, Qt.Key_Down, Qt.ShiftModifier)
+
+        after = editor.viewport()
+        self.assertAlmostEqual(after[0], before[0] + 0.01)
+        self.assertAlmostEqual(after[1], before[1] + 0.05)
+        self.assertAlmostEqual(after[2] - after[0], before[2] - before[0])
+        self.assertAlmostEqual(after[3] - after[1], before[3] - before[1])
+
+    def test_editor_drag_moves_the_window_rectangle_without_resizing_it(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        settings.resize(700, 620)
+        settings.show()
+        QApplication.processEvents()
+        editor = settings.editor
+        before = editor.viewport()
+        start = editor._selection_rect().center().toPoint()
+        self._drag(editor, start, start + QPoint(18, 14))
+
+        after = editor.viewport()
+        self.assertGreater(after[0], before[0])
+        self.assertGreater(after[1], before[1])
+        self.assertAlmostEqual(after[2] - after[0], before[2] - before[0])
+        self.assertAlmostEqual(after[3] - after[1], before[3] - before[1])
+
+    def test_editor_corner_handle_resizes_the_window_rectangle(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        settings.resize(700, 620)
+        settings.show()
+        QApplication.processEvents()
+        editor = settings.editor
+        before = editor.viewport()
+        start = editor._selection_rect().bottomRight().toPoint()
+
+        self._drag(editor, start, start + QPoint(14, 18))
+
+        after = editor.viewport()
+        self.assertEqual(after[:2], before[:2])
+        self.assertGreater(after[2], before[2])
+        self.assertGreater(after[3], before[3])
+
+    def test_editor_can_draw_a_new_rectangle_in_the_dimmed_canvas(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        settings.resize(700, 620)
+        settings.show()
+        QApplication.processEvents()
+        editor = settings.editor
+        canvas = editor._canvas_rect()
+        start = QPoint(
+            round(canvas.left() + canvas.width() * 0.05),
+            round(canvas.top() + canvas.height() * 0.95),
+        )
+        end = QPoint(
+            round(canvas.left() + canvas.width() * 0.45),
+            round(canvas.top() + canvas.height() * 0.55),
+        )
+
+        self._drag(editor, start, end)
+
+        left, top, right, bottom = editor.viewport()
+        self.assertAlmostEqual(left, 0.05, delta=0.02)
+        self.assertAlmostEqual(top, 0.55, delta=0.02)
+        self.assertAlmostEqual(right, 0.45, delta=0.02)
+        self.assertAlmostEqual(bottom, 0.95, delta=0.02)
+
+    def test_disabling_crop_retains_edges_but_uses_complete_canvas_at_runtime(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        before = settings.editor.viewport()
+
+        settings.crop_enabled.setChecked(False)
+
+        self.assertFalse(settings.editor.isEnabled())
+        self.assertFalse(settings.left_input.isEnabled())
+        self.assertFalse(settings.window_mask()["enabled"])
+        self.assertEqual(settings.editor.viewport(), before)
         self.assertIn("完整画布", settings.status_label.text())
 
     def test_wizard_patches_only_live2d_window_mask(self) -> None:
@@ -242,6 +364,60 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertTrue(host._apply_runtime_config(updated))
         self.assertEqual(host.viewport_apply_count, 1)
 
+    def test_runtime_does_not_reapply_an_unchanged_viewport(self) -> None:
+        host = _RuntimeConfigHost()
+
+        self.assertTrue(host._apply_runtime_config(host.config))
+        self.assertEqual(host.viewport_apply_count, 0)
+
+    def test_hot_apply_resizes_parent_but_keeps_complete_child_canvas(self) -> None:
+        class CanvasModel:
+            def get_suggested_size(self):
+                return 1000, 800
+
+        class Host(PetRenderHostMixin, QWidget):
+            def __init__(self):
+                super().__init__()
+                self.config = {
+                    "live2d": {
+                        "window_mask": {
+                            "enabled": True,
+                            "cx": 0.50,
+                            "cy": 0.50,
+                            "rw": 0.25,
+                            "rh": 0.40,
+                        }
+                    }
+                }
+                self._use_live2d = True
+                self._size_factor = 0.5
+                self._l2d_model = CanvasModel()
+                self.sprite_label = QWidget(self)
+                self.bubble_positions = 0
+
+            def _position_bubble(self, **_kwargs) -> None:
+                self.bubble_positions += 1
+
+        host = self._track(Host())
+        host.resize(500, 400)
+        host.move(200, 100)
+        old_bottom = host.frameGeometry().bottom()
+
+        self.assertTrue(host._apply_live2d_viewport_preference())
+
+        self.assertEqual(
+            (
+                host.sprite_label.x(),
+                host.sprite_label.y(),
+                host.sprite_label.width(),
+                host.sprite_label.height(),
+            ),
+            (-125, -40, 500, 400),
+        )
+        self.assertEqual((host.width(), host.height()), (250, 320))
+        self.assertEqual(host.frameGeometry().bottom(), old_bottom)
+        self.assertEqual(host.bubble_positions, 1)
+
     def test_render_host_captures_a_bounded_full_canvas_preview(self) -> None:
         frame = QImage(200, 300, QImage.Format_ARGB32_Premultiplied)
         frame.fill(QColor(255, 157, 190, 160))
@@ -267,6 +443,32 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertIsNotNone(captured)
         self.assertEqual((captured.width(), captured.height()), (200, 300))
         self.assertIsNot(captured, frame)
+
+    def test_render_host_skips_preview_when_full_canvas_is_too_large(self) -> None:
+        class WidgetStub:
+            grab_count = 0
+
+            def width(self) -> int:
+                return 4000
+
+            def height(self) -> int:
+                return 3000
+
+            def grabFramebuffer(self):
+                self.grab_count += 1
+                return QImage()
+
+        widget = WidgetStub()
+        host = type(
+            "PreviewHost",
+            (),
+            {"_use_live2d": True, "sprite_label": widget},
+        )()
+
+        self.assertIsNone(
+            PetRenderHostMixin._capture_live2d_viewport_preview(host)
+        )
+        self.assertEqual(widget.grab_count, 0)
 
 
 if __name__ == "__main__":

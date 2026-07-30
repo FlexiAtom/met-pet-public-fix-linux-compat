@@ -817,10 +817,14 @@ class PetWindowChromeMixin:
             )
             if callable(capture_preview):
                 preview = capture_preview()
+            wizard_args = {
+                "config_path": getattr(self, "_config_path", None),
+                "initial_config": getattr(self, "config", None),
+            }
+            if preview is not None:
+                wizard_args["live2d_preview"] = preview
             self._setup_wizard = SetupWizard(
-                config_path=getattr(self, "_config_path", None),
-                initial_config=getattr(self, "config", None),
-                live2d_preview=preview,
+                **wizard_args,
             )
             apply_config = getattr(self, "_apply_runtime_config", None)
             if callable(apply_config):

@@ -346,7 +346,7 @@ class SetupWizard(QWidget):
         *,
         live2d_preview=None,
     ) -> QFrame:
-        """创建独立的界面字号设置卡，并提供即时预览。"""
+        """创建字体、桌宠尺寸与 Live2D 视口设置卡。"""
         card = QFrame()
         card.setObjectName("PageCard")
         layout = QVBoxLayout(card)
@@ -359,8 +359,9 @@ class SetupWizard(QWidget):
         layout.addWidget(title)
 
         description = QLabel(
-            "调整配置页、聊天气泡、菜单和对话框的字体大小。"
-            "配置页会即时预览，桌宠重启后应用。"
+            "调整界面字体、桌宠尺寸和 Live2D 透明窗口范围。"
+            "字体在配置页即时预览，桌宠重启后应用；"
+            "其余项目保存后立即应用。"
         )
         description.setObjectName("PageDescription")
         description.setWordWrap(True)
