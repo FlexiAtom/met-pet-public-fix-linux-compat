@@ -125,6 +125,12 @@ class PetWindowChromeMixin:
     def _quit(self):
         safe_print("[pet] quitting by user/menu…")
         try:
+            save_position = getattr(self, "_save_pet_position", None)
+            if callable(save_position):
+                save_position()
+        except Exception:
+            pass
+        try:
             self._close_menu_window()
         except Exception:
             pass

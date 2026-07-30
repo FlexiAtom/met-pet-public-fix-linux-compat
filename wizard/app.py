@@ -19,7 +19,6 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizeGrip,
     QSizePolicy,
     QSlider,
     QSpinBox,
@@ -27,7 +26,16 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import QEvent, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import (
+    QEvent,
+    QPoint,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt5.QtGui import (
     QColor,
     QIcon,
@@ -77,15 +85,28 @@ from wizard.pages import (
     VisionPage,
 )
 from wizard.live2d_viewport import Live2DViewportSettings
+from meapet.desktop.screen_geometry import (
+    available_geometry_for,
+    clamp_position,
+)
+from meapet.window_state import (
+    load_wizard_geometry,
+    save_wizard_geometry,
+    state_path_for_config,
+)
 
 
 class SetupWizard(QWidget):
     config_saved = pyqtSignal(dict)
 
     TAB_ENV = 0
-    TAB_CHAT = 1
-    TAB_VOICE = 2
-    TAB_VISION = 3
+    TAB_LIVE2D = 1
+    TAB_CHAT = 2
+    TAB_VOICE = 3
+    TAB_VISION = 4
+
+    _WINDOW_RESIZE_MARGIN = 10
+    _WINDOW_STATE_SAVE_DELAY_MS = 250
 
     @staticmethod
     def _read_initial_font_scale(
@@ -119,6 +140,7 @@ class SetupWizard(QWidget):
         config_path: str | os.PathLike[str] | None = None,
         initial_config: dict | None = None,
         live2d_preview=None,
+        window_state_path: str | os.PathLike[str] | None = None,
     ):
         from meapet.config.store import resolve_writable_config_path
 
@@ -137,6 +159,25 @@ class SetupWizard(QWidget):
         )
         set_ui_font_scale(initial_font_scale)
         super().__init__()
+        self._window_state_path = (
+            os.fspath(window_state_path)
+            if window_state_path is not None
+            else state_path_for_config(
+                self.config_path,
+                "wizard_window_state.json",
+            )
+        )
+        self._window_state_ready = False
+        self._restored_window_position: QPoint | None = None
+        self._last_normal_geometry = QRect()
+        self._window_state_save_timer = QTimer(self)
+        self._window_state_save_timer.setSingleShot(True)
+        self._window_state_save_timer.setInterval(
+            self._WINDOW_STATE_SAVE_DELAY_MS
+        )
+        self._window_state_save_timer.timeout.connect(
+            self._save_window_state
+        )
         self._dirty = False
         self._suppress_dirty = False
         self._closing_after_save = False
@@ -175,7 +216,9 @@ class SetupWizard(QWidget):
             initial_font_scale,
         )
         self.setAccessibleName("MeaPet 配置")
-        self.setAccessibleDescription("使用标签页配置环境、对话、语音和屏幕识图功能")
+        self.setAccessibleDescription(
+            "使用标签页配置环境、Live2D、对话、语音和屏幕识图功能"
+        )
 
         outer = QVBoxLayout(self)
         # One pixel leaves room for the shell stroke without turning the
@@ -240,10 +283,11 @@ class SetupWizard(QWidget):
 
         # 页面内容保留原有控件和配置收集逻辑，只把导航改为普通标签页。
         self.env_page = EnvCheckPage()
-        self.display_page = self._build_display_settings(
-            initial_font_scale,
-            live2d_preview=live2d_preview,
+        self.display_page = self._build_display_settings(initial_font_scale)
+        self.live2d_viewport_settings = Live2DViewportSettings(
+            preview=live2d_preview,
         )
+        self.live2d_viewport_settings.changed.connect(self._mark_dirty)
         self.backend_page = BackendPage()
         self.llm_page = LLMPage()
         self.tts_page = TTSPage()
@@ -252,6 +296,7 @@ class SetupWizard(QWidget):
         for page in (
             self.env_page,
             self.display_page,
+            self.live2d_viewport_settings,
             self.backend_page,
             self.llm_page,
             self.tts_page,
@@ -278,13 +323,19 @@ class SetupWizard(QWidget):
         self.tabs.setIconSize(QSize(12, 12))
         self.tabs.setAccessibleName("配置分类")
         self.tabs.setAccessibleDescription("带红点的标签缺少必要配置，并有文字提示")
-        self.tabs.tabBar().setAccessibleName("环境、对话、语音和屏幕识图标签")
+        self.tabs.tabBar().setAccessibleName(
+            "环境、Live2D、对话、语音和屏幕识图标签"
+        )
         self.tabs.tabBar().setAccessibleDescription(
             "红点表示该标签仍缺少必要配置；具体原因显示在标签提示和顶部状态中"
         )
         self.tabs.addTab(
             self._make_scroll_tab(self.display_page, self.env_page),
             "环境",
+        )
+        self.tabs.addTab(
+            self._make_scroll_tab(self.live2d_viewport_settings),
+            "Live2D",
         )
         self.tabs.addTab(
             self._make_scroll_tab(
@@ -317,20 +368,6 @@ class SetupWizard(QWidget):
         self.save_btn.clicked.connect(self._save)
         btns.addWidget(self.save_btn)
 
-        self.size_grip = QSizeGrip(self.container)
-        self.size_grip.setObjectName("WizardSizeGrip")
-        self.size_grip.setFixedSize(28, 28)
-        self.size_grip.setCursor(Qt.SizeFDiagCursor)
-        self.size_grip.setToolTip("拖动调整配置窗口大小")
-        self.size_grip.setAccessibleName("调整配置窗口大小")
-        self.size_grip.setAccessibleDescription(
-            "按住并拖动右下角，可放大或缩小配置窗口"
-        )
-        btns.addWidget(
-            self.size_grip,
-            0,
-            Qt.AlignBottom | Qt.AlignRight,
-        )
         main.addWidget(footer)
 
         self._close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
@@ -362,6 +399,11 @@ class SetupWizard(QWidget):
             self,
             self.font_scale_slider.value() / 100.0,
         )
+        self._restore_window_state()
+        self._install_window_resize_filters()
+        self._window_state_ready = True
+        if not self.isMaximized() and not self.isFullScreen():
+            self._last_normal_geometry = QRect(self.pos(), self.size())
         self._apply_rounded_window_mask()
         self._sync_window_state_controls()
 
@@ -375,10 +417,8 @@ class SetupWizard(QWidget):
     def _build_display_settings(
         self,
         initial_scale: float,
-        *,
-        live2d_preview=None,
     ) -> QFrame:
-        """创建字体、桌宠尺寸与 Live2D 视口设置卡。"""
+        """创建字体、桌宠尺寸与动画偏好设置卡。"""
         card = QFrame()
         card.setObjectName("PageCard")
         layout = QVBoxLayout(card)
@@ -391,9 +431,8 @@ class SetupWizard(QWidget):
         layout.addWidget(title)
 
         description = QLabel(
-            "调整界面字体、桌宠尺寸、Live2D 透明窗口范围和模型站立锚点。"
-            "字体在配置页即时预览，桌宠重启后应用；"
-            "其余项目保存后立即应用。"
+            "调整配置界面字体和桌宠整体尺寸。字体在配置页即时预览，"
+            "并在桌宠重启后应用；尺寸与动画偏好保存后立即应用。"
         )
         description.setObjectName("PageDescription")
         description.setWordWrap(True)
@@ -472,12 +511,6 @@ class SetupWizard(QWidget):
         pet_hint.setWordWrap(True)
         layout.addWidget(pet_hint)
 
-        self.live2d_viewport_settings = Live2DViewportSettings(
-            preview=live2d_preview,
-        )
-        self.live2d_viewport_settings.changed.connect(self._mark_dirty)
-        layout.addWidget(self.live2d_viewport_settings)
-
         self.reduced_motion_cb = QCheckBox("减少动画（气泡与输入框淡入淡出）")
         self.reduced_motion_cb.setObjectName("ReducedMotionToggle")
         self.reduced_motion_cb.setAccessibleName("减少动画")
@@ -510,15 +543,190 @@ class SetupWizard(QWidget):
     def _on_pet_size_changed(self, value: int) -> None:
         self.pet_size_value.setText(f"{int(value)}%")
 
+    def _install_window_resize_filters(self) -> None:
+        """让顶层窗口及全部现有子控件都能命中四边和四角。"""
+        self._resize_cursor_widget: QWidget | None = None
+        for widget in (self, *self.findChildren(QWidget)):
+            widget.setMouseTracking(True)
+            widget.installEventFilter(self)
+
+    def _resize_edges_at(self, point: QPoint) -> Qt.Edges:
+        """返回窗口本地坐标命中的系统缩放边；中央区域返回空。"""
+        if self.isMaximized() or self.isFullScreen():
+            return Qt.Edges()
+        if not self.rect().contains(point):
+            return Qt.Edges()
+
+        margin = self._WINDOW_RESIZE_MARGIN
+        edges = Qt.Edges()
+        if point.x() < margin:
+            edges |= Qt.LeftEdge
+        elif point.x() >= self.width() - margin:
+            edges |= Qt.RightEdge
+        if point.y() < margin:
+            edges |= Qt.TopEdge
+        elif point.y() >= self.height() - margin:
+            edges |= Qt.BottomEdge
+        return edges
+
+    @staticmethod
+    def _cursor_for_resize_edges(edges: Qt.Edges):
+        if edges in (
+            Qt.LeftEdge | Qt.TopEdge,
+            Qt.RightEdge | Qt.BottomEdge,
+        ):
+            return Qt.SizeFDiagCursor
+        if edges in (
+            Qt.RightEdge | Qt.TopEdge,
+            Qt.LeftEdge | Qt.BottomEdge,
+        ):
+            return Qt.SizeBDiagCursor
+        if edges & (Qt.LeftEdge | Qt.RightEdge):
+            return Qt.SizeHorCursor
+        if edges & (Qt.TopEdge | Qt.BottomEdge):
+            return Qt.SizeVerCursor
+        return Qt.ArrowCursor
+
+    def _set_resize_cursor(
+        self,
+        widget: QWidget | None,
+        edges: Qt.Edges,
+    ) -> None:
+        previous = getattr(self, "_resize_cursor_widget", None)
+        if previous is not None and previous is not widget:
+            try:
+                previous.unsetCursor()
+            except RuntimeError:
+                pass
+            self._resize_cursor_widget = None
+
+        if widget is not None and edges:
+            widget.setCursor(self._cursor_for_resize_edges(edges))
+            self._resize_cursor_widget = widget
+        elif previous is widget and previous is not None:
+            try:
+                previous.unsetCursor()
+            except RuntimeError:
+                pass
+            self._resize_cursor_widget = None
+
+    def _start_system_resize(self, edges: Qt.Edges) -> bool:
+        """把拖动交给窗口系统，获得与普通窗口相同的缩放行为。"""
+        if not edges or self.isMaximized() or self.isFullScreen():
+            return False
+        handle = self.windowHandle()
+        if handle is None:
+            try:
+                self.winId()
+            except RuntimeError:
+                return False
+            handle = self.windowHandle()
+        if handle is None:
+            return False
+        try:
+            return bool(handle.startSystemResize(edges))
+        except (AttributeError, RuntimeError, TypeError):
+            return False
+
+    def eventFilter(self, watched, event) -> bool:
+        """优先识别窗口边缘，再把其余鼠标事件交还原控件。"""
+        event_type = event.type()
+        if event_type in (QEvent.MouseMove, QEvent.MouseButtonPress):
+            if isinstance(watched, QWidget):
+                local = QPoint(event.pos())
+                if watched is not self:
+                    local = watched.mapTo(self, local)
+                edges = self._resize_edges_at(local)
+                self._set_resize_cursor(watched, edges)
+                if (
+                    event_type == QEvent.MouseButtonPress
+                    and event.button() == Qt.LeftButton
+                    and edges
+                ):
+                    self._drag = None
+                    if self._start_system_resize(edges):
+                        event.accept()
+                        return True
+        elif event_type == QEvent.Leave and watched is getattr(
+            self,
+            "_resize_cursor_widget",
+            None,
+        ):
+            self._set_resize_cursor(watched, Qt.Edges())
+        return super().eventFilter(watched, event)
+
+    def _restore_window_state(self) -> bool:
+        """恢复上一次普通窗口几何，并记住是否处于最大化状态。"""
+        state = load_wizard_geometry(self._window_state_path)
+        if state is None:
+            return False
+
+        saved_position = QPoint(int(state["x"]), int(state["y"]))
+        self._restored_window_position = QPoint(saved_position)
+        self.resize(int(state["width"]), int(state["height"]))
+
+        area = available_geometry_for(
+            QRect(saved_position, QSize(self.width(), self.height()))
+        )
+        position = saved_position
+        if area is not None:
+            position = clamp_position(
+                saved_position,
+                self.size(),
+                area,
+                margin=0,
+            )
+        self.move(position)
+        self._last_normal_geometry = QRect(position, self.size())
+
+        if bool(state.get("maximized", False)):
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
+        return True
+
+    def _remember_normal_geometry(self) -> None:
+        if not self.isMaximized() and not self.isFullScreen():
+            # QWidget.geometry() may be offset by the platform frame even
+            # after move(x, y); pos() is the user-visible top-level position.
+            geometry = QRect(self.pos(), self.size())
+            if geometry.isValid():
+                self._last_normal_geometry = geometry
+
+    def _schedule_window_state_save(self) -> None:
+        if getattr(self, "_window_state_ready", False):
+            self._window_state_save_timer.start()
+
+    def _save_window_state(self) -> bool:
+        """保存普通几何；最大化尺寸不会覆盖用户调好的窗口尺寸。"""
+        maximized = self.isMaximized() or self.isFullScreen()
+        if not maximized:
+            self._remember_normal_geometry()
+        geometry = QRect(self._last_normal_geometry)
+        if not geometry.isValid():
+            geometry = QRect(self.normalGeometry())
+        if not geometry.isValid():
+            geometry = QRect(self.geometry())
+        return save_wizard_geometry(
+            self._window_state_path,
+            {
+                "x": geometry.x(),
+                "y": geometry.y(),
+                "width": geometry.width(),
+                "height": geometry.height(),
+                "maximized": maximized,
+            },
+        )
+
     def _toggle_maximized(self, _checked: bool = False) -> None:
         """在最大化与用户上一次设置的普通窗口大小之间切换。"""
         self._drag = None
         if self.isMaximized() or self.isFullScreen():
             self.showNormal()
         else:
+            self._remember_normal_geometry()
             self.showMaximized()
         self._sync_window_state_controls()
         self._apply_rounded_window_mask()
+        self._schedule_window_state_save()
 
     def _header_double_click(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -538,9 +746,6 @@ class SetupWizard(QWidget):
                 self.maximize_btn.setText("最大化")
                 self.maximize_btn.setToolTip("最大化配置窗口（也可双击顶栏）")
                 self.maximize_btn.setAccessibleName("最大化配置窗口")
-        if hasattr(self, "size_grip"):
-            self.size_grip.setVisible(not maximized)
-
     def _apply_rounded_window_mask(self) -> None:
         """让顶层无边框窗口的真实区域与圆角 Shell 一致。"""
         if (
@@ -563,12 +768,20 @@ class SetupWizard(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._apply_rounded_window_mask()
+        self._remember_normal_geometry()
+        self._schedule_window_state_save()
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._remember_normal_geometry()
+        self._schedule_window_state_save()
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
         if event.type() == QEvent.WindowStateChange:
             self._sync_window_state_controls()
             self._apply_rounded_window_mask()
+            self._schedule_window_state_save()
 
     def _fade_in(self) -> None:
         """Gradually restore opacity so the window doesn't flash from transparent."""
@@ -631,6 +844,8 @@ class SetupWizard(QWidget):
                 return
         self._dirty = False
         self._cancel_connection_tests()
+        self._window_state_save_timer.stop()
+        self._save_window_state()
         event.accept()
 
     def _connect_connection_tests(self) -> None:
@@ -851,6 +1066,7 @@ class SetupWizard(QWidget):
     def _configuration_issues(self) -> dict[int, list[str]]:
         issues = {
             self.TAB_ENV: [],
+            self.TAB_LIVE2D: [],
             self.TAB_CHAT: [],
             self.TAB_VOICE: [],
             self.TAB_VISION: [],
@@ -964,6 +1180,7 @@ class SetupWizard(QWidget):
         issues = self._configuration_issues()
         labels = {
             self.TAB_ENV: "环境",
+            self.TAB_LIVE2D: "Live2D",
             self.TAB_CHAT: "对话",
             self.TAB_VOICE: "语音",
             self.TAB_VISION: "屏幕识图",
@@ -1176,7 +1393,7 @@ class SetupWizard(QWidget):
         display["reduced_motion"] = self.reduced_motion_cb.isChecked()
 
     def _collect_live2d_viewport_fields(self, config: dict) -> None:
-        """显示页补丁 Live2D 视口、锚点和形状，其余字段原样保留。"""
+        """Live2D 页补丁视口、锚点和形状，其余字段原样保留。"""
         live2d = config.get("live2d")
         if not isinstance(live2d, dict):
             live2d = {}

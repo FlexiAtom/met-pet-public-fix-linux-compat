@@ -1236,13 +1236,13 @@ class Live2DWindowShapeDialog(QDialog):
 
 
 class Live2DViewportSettings(QFrame):
-    """同屏编辑视觉视口、站立锚点与可选窗口形状。"""
+    """在独立页面编辑视觉视口、站立锚点与可选窗口形状。"""
 
     changed = pyqtSignal()
 
     def __init__(self, preview: QImage | QPixmap | None = None, parent=None):
         super().__init__(parent)
-        self.setObjectName("SectionCard")
+        self.setObjectName("PageCard")
         self.setAccessibleName("Live2D 窗口范围")
         self.setAccessibleDescription(
             "裁去 Live2D 完整画布周围的透明空白，设置缩放时保持不动的"
@@ -1251,11 +1251,11 @@ class Live2DViewportSettings(QFrame):
         self._syncing = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(10)
 
         title = QLabel("Live2D 窗口范围")
-        title.setObjectName("SectionTitle")
+        title.setObjectName("PageTitle")
         layout.addWidget(title)
 
         description = QLabel(
@@ -1264,7 +1264,7 @@ class Live2DViewportSettings(QFrame):
             "缩放或改范围时留在桌面原位的模型位置。矩形和十字锚点可直接"
             "在同一预览中拖动，无需切换模式。"
         )
-        description.setObjectName("HelperText")
+        description.setObjectName("PageDescription")
         description.setWordWrap(True)
         layout.addWidget(description)
 

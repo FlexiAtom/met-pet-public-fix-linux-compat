@@ -45,6 +45,7 @@ from meapet.desktop.click_through import (
 )
 from meapet.ui_theme import normalize_pet_size_factor
 from meapet.utils import safe_print
+from meapet.window_state import load_pet_position, save_pet_position
 
 
 BUBBLE_SCREEN_MARGIN = 24
@@ -607,6 +608,10 @@ class PetRenderHostMixin:
         except Exception as exc:
             safe_print(f"[live2d] fit window to model skipped: {exc}")
 
+        # Live2D 的最终窗口尺寸要到首帧后才确定；此时再按保存坐标夹回
+        # 当前屏幕，避免先恢复位置、随后尺寸变化又把桌宠推出屏幕。
+        self._restore_pet_position()
+
         self._reveal_live2d_window()
         self._mark_renderer_ready()
         safe_print(
@@ -777,7 +782,7 @@ class PetRenderHostMixin:
         self.renderer = None
         self._init_png_renderer()
         try:
-            self._place_bottom_right()
+            self._place_initial_position()
         except Exception as exc:
             safe_print(f"[pet] PNG fallback placement skipped: {exc}")
         self.setWindowOpacity(1.0)
@@ -1269,6 +1274,38 @@ class PetRenderHostMixin:
             except RuntimeError:
                 setattr(self, name, None)
 
+    def _save_pet_position(self) -> bool:
+        """把当前桌宠左上角保存到独立本机状态文件。"""
+        path = str(getattr(self, "_window_state_path", "") or "")
+        if not path:
+            return False
+        return save_pet_position(path, self.x(), self.y())
+
+    def _restore_pet_position(self) -> bool:
+        """恢复桌宠位置；显示器变化后自动夹回可用区域。"""
+        path = str(getattr(self, "_window_state_path", "") or "")
+        if not path:
+            return False
+        saved = load_pet_position(path)
+        if saved is None:
+            return False
+        position = QPoint(saved["x"], saved["y"])
+        size = QSize(max(1, self.width()), max(1, self.height()))
+        area = available_geometry_for(QRect(position, size))
+        if area is not None:
+            position = clamp_position(position, size, area, margin=0)
+        self.move(position)
+        safe_print(
+            f"[place] restored pos=({position.x()},{position.y()}) "
+            f"size={size.width()}x{size.height()}"
+        )
+        return True
+
+    def _place_initial_position(self) -> None:
+        """优先恢复上次位置，首次运行才放到主屏右下角。"""
+        if not self._restore_pet_position():
+            self._place_bottom_right()
+
     def _place_bottom_right(self):
         """放到主屏右下角，并钳制在可见区域内（防止多屏/DPI 导致"消失"）。"""
         screen = QApplication.primaryScreen().availableGeometry()
@@ -1469,7 +1506,7 @@ class PetRenderHostMixin:
             self._save_config()
             try:
                 self._start_live2d_renderer()
-                self._place_bottom_right()
+                self._place_initial_position()
             except Exception as exc:
                 self._fallback_to_png(str(exc))
 
