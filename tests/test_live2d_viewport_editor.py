@@ -131,6 +131,35 @@ class Live2DViewportEditorTests(unittest.TestCase):
             ),
         )
 
+    @staticmethod
+    def _click(widget, point: QPoint) -> None:
+        QTest.mouseClick(
+            widget,
+            Qt.LeftButton,
+            Qt.NoModifier,
+            point,
+        )
+
+    def _draw_shape_contour(
+        self,
+        settings,
+        operation: str,
+        points: tuple[tuple[float, float], ...],
+    ) -> None:
+        button = (
+            settings.shape_add_button
+            if operation == "add"
+            else settings.shape_subtract_button
+        )
+        button.click()
+        for x, y in points:
+            self._click(
+                settings.editor,
+                settings.editor._canvas_point(QPointF(x, y)).toPoint(),
+            )
+        self.assertTrue(settings.shape_finish_button.isEnabled())
+        settings.shape_finish_button.click()
+
     def test_historical_mask_round_trips_through_rectangle_edges(self) -> None:
         mask = {
             "enabled": True,
@@ -184,6 +213,58 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertEqual(
             normalize_live2d_placement_anchor(None, full_canvas),
             {"x": 0.5, "y": 1.0},
+        )
+
+    def test_window_shape_normalization_keeps_safe_add_and_subtract_contours(
+        self,
+    ) -> None:
+        from meapet.config.store import normalize_live2d_window_shape
+
+        normalized = normalize_live2d_window_shape(
+            {
+                "enabled": True,
+                "contours": [
+                    {
+                        "operation": "add",
+                        "points": [
+                            [-1, 0.2],
+                            [1.4, 0.2],
+                            [0.5, 1.3],
+                            [-1, 0.2],
+                        ],
+                    },
+                    {
+                        "operation": "subtract",
+                        "points": [[0.4, 0.4], [0.6, 0.4], [0.5, 0.7]],
+                    },
+                    {
+                        "operation": "invalid",
+                        "points": [[0, 0], [1, 0], [0, 1]],
+                    },
+                    {"operation": "add", "points": [[0, 0], [1, 1]]},
+                ],
+            }
+        )
+
+        self.assertEqual(
+            normalized,
+            {
+                "enabled": True,
+                "contours": [
+                    {
+                        "operation": "add",
+                        "points": [[0.0, 0.2], [1.0, 0.2], [0.5, 1.0]],
+                    },
+                    {
+                        "operation": "subtract",
+                        "points": [[0.4, 0.4], [0.6, 0.4], [0.5, 0.7]],
+                    },
+                ],
+            },
+        )
+        self.assertEqual(
+            normalize_live2d_window_shape(None),
+            {"enabled": False, "contours": []},
         )
 
     def test_viewport_edges_stay_inside_canvas_with_a_safe_minimum_span(self) -> None:
@@ -251,7 +332,6 @@ class Live2DViewportEditorTests(unittest.TestCase):
         settings.show()
         QApplication.processEvents()
         settings.set_placement_anchor({"x": 0.50, "y": 0.80})
-        settings.anchor_edit_button.click()
         editor = settings.editor
         before_viewport = editor.viewport()
         start = editor._anchor_point().toPoint()
@@ -263,6 +343,12 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertLess(anchor["y"], 0.80)
         self.assertEqual(editor.viewport(), before_viewport)
         self.assertIn("站立锚点", settings.status_label.text())
+
+        # 不切换模式即可继续调整窗口边界；调整边界也不改写锚点。
+        corner = editor._selection_rect().bottomRight().toPoint()
+        self._drag(editor, corner, corner + QPoint(12, 12))
+        self.assertGreater(editor.viewport()[2], before_viewport[2])
+        self.assertEqual(settings.placement_anchor(), anchor)
 
     def test_anchor_remains_editable_when_viewport_crop_is_disabled(self) -> None:
         settings = self._track(Live2DViewportSettings())
@@ -278,6 +364,73 @@ class Live2DViewportEditorTests(unittest.TestCase):
             settings.placement_anchor(),
             {"x": 0.47, "y": 0.92},
         )
+
+    def test_editor_draws_disconnected_keep_regions_and_a_cutout(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        settings.resize(800, 1040)
+        settings.show()
+        QApplication.processEvents()
+        settings.shape_enabled.setChecked(True)
+
+        self._draw_shape_contour(
+            settings,
+            "add",
+            ((0.25, 0.18), (0.48, 0.18), (0.42, 0.52), (0.28, 0.48)),
+        )
+        self._draw_shape_contour(
+            settings,
+            "add",
+            ((0.58, 0.58), (0.72, 0.58), (0.66, 0.78)),
+        )
+        self._draw_shape_contour(
+            settings,
+            "subtract",
+            ((0.32, 0.27), (0.40, 0.27), (0.36, 0.38)),
+        )
+
+        shape = settings.window_shape()
+        self.assertTrue(shape["enabled"])
+        self.assertEqual(
+            [contour["operation"] for contour in shape["contours"]],
+            ["add", "add", "subtract"],
+        )
+        self.assertIn("2 个保留区", settings.shape_status_label.text())
+        self.assertIn("1 个挖空区", settings.shape_status_label.text())
+
+        settings.shape_undo_button.click()
+        self.assertEqual(
+            [
+                contour["operation"]
+                for contour in settings.window_shape()["contours"]
+            ],
+            ["add", "add"],
+        )
+
+        settings.shape_clear_button.click()
+        self.assertEqual(
+            settings.window_shape(),
+            {"enabled": True, "contours": []},
+        )
+
+    def test_shape_can_be_disabled_without_losing_drawn_contours(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        shape = {
+            "enabled": True,
+            "contours": [
+                {
+                    "operation": "add",
+                    "points": [[0.2, 0.1], [0.8, 0.1], [0.5, 0.9]],
+                }
+            ],
+        }
+
+        settings.set_window_shape(shape)
+        settings.shape_enabled.setChecked(False)
+
+        saved = settings.window_shape()
+        self.assertFalse(saved["enabled"])
+        self.assertEqual(saved["contours"], shape["contours"])
+        self.assertFalse(settings.shape_add_button.isEnabled())
 
     def test_full_canvas_action_is_explicit_and_reversible(self) -> None:
         settings = self._track(Live2DViewportSettings())
@@ -400,6 +553,7 @@ class Live2DViewportEditorTests(unittest.TestCase):
                 "model_dir": "D:/models/mea",
                 "custom_live2d_key": "keep-me",
                 "placement_anchor": {"x": 0.52, "y": 0.88},
+                "window_shape": {"enabled": False, "contours": []},
                 "window_mask": {
                     "enabled": True,
                     "cx": 0.54,
@@ -423,6 +577,22 @@ class Live2DViewportEditorTests(unittest.TestCase):
 
             wizard.live2d_viewport_settings.left_input.setValue(28.0)
             wizard.live2d_viewport_settings.anchor_x_input.setValue(57.0)
+            wizard.live2d_viewport_settings.set_window_shape(
+                {
+                    "enabled": True,
+                    "contours": [
+                        {
+                            "operation": "add",
+                            "points": [
+                                [0.28, 0.10],
+                                [0.82, 0.10],
+                                [0.76, 0.82],
+                                [0.32, 0.82],
+                            ],
+                        }
+                    ],
+                }
+            )
             config = wizard.collect_config()
 
         self.assertEqual(config["live2d"]["model_dir"], "D:/models/mea")
@@ -432,6 +602,23 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertEqual(
             config["live2d"]["placement_anchor"],
             {"x": 0.57, "y": 0.88},
+        )
+        self.assertEqual(
+            config["live2d"]["window_shape"],
+            {
+                "enabled": True,
+                "contours": [
+                    {
+                        "operation": "add",
+                        "points": [
+                            [0.28, 0.10],
+                            [0.82, 0.10],
+                            [0.76, 0.82],
+                            [0.32, 0.82],
+                        ],
+                    }
+                ],
+            },
         )
 
     def test_runtime_reapplies_viewport_when_only_mask_changes(self) -> None:
@@ -475,6 +662,31 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertTrue(host._apply_runtime_config(updated))
         self.assertEqual(host.viewport_apply_count, 1)
 
+    def test_runtime_reapplies_window_region_when_only_shape_changes(self) -> None:
+        host = _RuntimeConfigHost()
+        host.config["live2d"]["window_shape"] = {
+            "enabled": False,
+            "contours": [],
+        }
+        updated = {
+            **host.config,
+            "live2d": {
+                **host.config["live2d"],
+                "window_shape": {
+                    "enabled": True,
+                    "contours": [
+                        {
+                            "operation": "add",
+                            "points": [[0.2, 0.1], [0.8, 0.1], [0.5, 0.9]],
+                        }
+                    ],
+                },
+            },
+        }
+
+        self.assertTrue(host._apply_runtime_config(updated))
+        self.assertEqual(host.viewport_apply_count, 1)
+
     def test_anchor_reposition_keeps_a_canvas_point_fixed_across_geometry_changes(
         self,
     ) -> None:
@@ -490,6 +702,107 @@ class Live2DViewportEditorTests(unittest.TestCase):
         )
 
         self.assertEqual(target, QPoint(650, 520))
+
+    def test_custom_shape_builds_a_clipped_region_with_a_real_hole(self) -> None:
+        from meapet.desktop.render_host import (
+            calculate_live2d_viewport_layout,
+            calculate_live2d_window_region,
+        )
+
+        layout = calculate_live2d_viewport_layout(
+            1000,
+            1000,
+            0.2,
+            {
+                "enabled": True,
+                "cx": 0.50,
+                "cy": 0.50,
+                "rw": 0.30,
+                "rh": 0.40,
+            },
+        )
+        shape = {
+            "enabled": True,
+            "contours": [
+                {
+                    "operation": "add",
+                    "points": [[0.2, 0.1], [0.8, 0.1], [0.8, 0.9], [0.2, 0.9]],
+                },
+                {
+                    "operation": "subtract",
+                    "points": [[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]],
+                },
+            ],
+        }
+
+        region = calculate_live2d_window_region(layout, shape)
+
+        self.assertIsNotNone(region)
+        self.assertEqual(region.boundingRect(), QRect(0, 0, 120, 160))
+        self.assertTrue(region.contains(QPoint(10, 10)))
+        self.assertFalse(region.contains(QPoint(60, 80)))
+        self.assertIsNone(
+            calculate_live2d_window_region(
+                layout,
+                {**shape, "enabled": False},
+            )
+        )
+
+    def test_render_host_applies_custom_region_and_clears_it_for_png(self) -> None:
+        class CanvasModel:
+            def get_suggested_size(self):
+                return 1000, 1000
+
+        class Host(PetRenderHostMixin, QWidget):
+            pass
+
+        host = self._track(Host())
+        host.config = {
+            "live2d": {
+                "window_mask": {
+                    "enabled": True,
+                    "cx": 0.50,
+                    "cy": 0.50,
+                    "rw": 0.30,
+                    "rh": 0.40,
+                },
+                "window_shape": {
+                    "enabled": True,
+                    "contours": [
+                        {
+                            "operation": "add",
+                            "points": [
+                                [0.2, 0.1],
+                                [0.8, 0.1],
+                                [0.8, 0.9],
+                                [0.2, 0.9],
+                            ],
+                        },
+                        {
+                            "operation": "subtract",
+                            "points": [
+                                [0.4, 0.4],
+                                [0.6, 0.4],
+                                [0.6, 0.6],
+                                [0.4, 0.6],
+                            ],
+                        },
+                    ],
+                },
+            }
+        }
+        host._use_live2d = True
+        host._l2d_model = CanvasModel()
+        host.sprite_label = QWidget(host)
+
+        host._apply_live2d_viewport_geometry(0.2)
+
+        self.assertFalse(host.mask().isEmpty())
+        self.assertFalse(host.mask().contains(QPoint(60, 80)))
+
+        host._use_live2d = False
+        host._apply_hit_region()
+        self.assertTrue(host.mask().isEmpty())
 
     def test_hot_apply_resizes_parent_but_keeps_complete_child_canvas(self) -> None:
         class CanvasModel:

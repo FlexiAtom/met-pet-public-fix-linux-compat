@@ -31,6 +31,7 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
         DEFAULT_HERMES_WS_URL,
         DEFAULT_LIVE2D_PLACEMENT_ANCHOR,
         DEFAULT_LIVE2D_WINDOW_MASK,
+        DEFAULT_LIVE2D_WINDOW_SHAPE,
         DEFAULT_MIMO_API_BASE,
         DEFAULT_MIMO_TTS_MODEL,
         DEFAULT_OLLAMA_HOST,
@@ -65,6 +66,9 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
     assert example["live2d"]["placement_anchor"] == dict(
         DEFAULT_LIVE2D_PLACEMENT_ANCHOR
     )
+    assert example["live2d"]["window_shape"] == dict(
+        DEFAULT_LIVE2D_WINDOW_SHAPE
+    )
 
     assert preset_by_id("openai").api_base == DEFAULT_OPENAI_API_BASE
     assert preset_by_id("ollama").api_base == DEFAULT_OLLAMA_HOST
@@ -74,6 +78,9 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
     )
     assert normalize_config({})["live2d"]["placement_anchor"] == dict(
         DEFAULT_LIVE2D_PLACEMENT_ANCHOR
+    )
+    assert normalize_config({})["live2d"]["window_shape"] == dict(
+        DEFAULT_LIVE2D_WINDOW_SHAPE
     )
 
 
