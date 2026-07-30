@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QIcon,
@@ -154,8 +154,15 @@ class SetupWizard(QWidget):
         palette.setColor(self.backgroundRole(), QColor(PALETTE["canvas"]))
         self.setPalette(palette)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
-        #self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setWindowFlags(Qt.Window)
+        # 保留系统窗口能力，同时在自定义顶栏提供更易发现的最大化入口。
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint
+        )
         # Start invisible to avoid showing a blank frame before the
         # dark-themed UI is fully painted.  Fade in once the event loop runs.
         self.setWindowOpacity(0.0)
@@ -205,6 +212,18 @@ class SetupWizard(QWidget):
         section_label.setObjectName("StepLabel")
         section_label.setAccessibleName("当前页面")
         top.addWidget(section_label)
+
+        self.maximize_btn = QPushButton("最大化")
+        self.maximize_btn.setObjectName("SecondaryButton")
+        self.maximize_btn.setMinimumHeight(MIN_TARGET_SIZE)
+        self.maximize_btn.setToolTip("最大化配置窗口（也可双击顶栏）")
+        self.maximize_btn.setAccessibleName("最大化配置窗口")
+        self.maximize_btn.setAccessibleDescription(
+            "在最大化和上一次普通窗口大小之间切换"
+        )
+        self.maximize_btn.setProperty("doesNotModifyConfig", True)
+        self.maximize_btn.clicked.connect(self._toggle_maximized)
+        top.addWidget(self.maximize_btn)
 
         self.close_btn = QPushButton("×")
         self.close_btn.setObjectName("CloseButton")
@@ -298,16 +317,27 @@ class SetupWizard(QWidget):
         self.save_btn.clicked.connect(self._save)
         btns.addWidget(self.save_btn)
 
-        size_grip = QSizeGrip(self.container)
-        size_grip.setFixedSize(18, 18)
-        size_grip.setToolTip("拖动调整窗口大小")
-        btns.addWidget(size_grip, 0, Qt.AlignBottom | Qt.AlignRight)
+        self.size_grip = QSizeGrip(self.container)
+        self.size_grip.setObjectName("WizardSizeGrip")
+        self.size_grip.setFixedSize(28, 28)
+        self.size_grip.setCursor(Qt.SizeFDiagCursor)
+        self.size_grip.setToolTip("拖动调整配置窗口大小")
+        self.size_grip.setAccessibleName("调整配置窗口大小")
+        self.size_grip.setAccessibleDescription(
+            "按住并拖动右下角，可放大或缩小配置窗口"
+        )
+        btns.addWidget(
+            self.size_grip,
+            0,
+            Qt.AlignBottom | Qt.AlignRight,
+        )
         main.addWidget(footer)
 
         self._close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self._close_shortcut.activated.connect(self.close)
         self.setTabOrder(self.tabs, self.save_btn)
-        self.setTabOrder(self.save_btn, self.close_btn)
+        self.setTabOrder(self.save_btn, self.maximize_btn)
+        self.setTabOrder(self.maximize_btn, self.close_btn)
 
         # 窗口拖拽
         self._drag = None
@@ -315,6 +345,7 @@ class SetupWizard(QWidget):
             w.mousePressEvent = lambda e: self._drag_start(e)
             w.mouseMoveEvent = lambda e: self._drag_move(e)
             w.mouseReleaseEvent = lambda e: setattr(self, '_drag', None)
+            w.mouseDoubleClickEvent = lambda e: self._header_double_click(e)
 
         self._connect_required_field_updates()
         self._connect_connection_tests()
@@ -332,6 +363,7 @@ class SetupWizard(QWidget):
             self.font_scale_slider.value() / 100.0,
         )
         self._apply_rounded_window_mask()
+        self._sync_window_state_controls()
 
         # Use an owned QTimer to defer the fade-in until after the event
         # loop has painted the dark-themed UI once.
@@ -443,6 +475,7 @@ class SetupWizard(QWidget):
         self.live2d_viewport_settings = Live2DViewportSettings(
             preview=live2d_preview,
         )
+        self.live2d_viewport_settings.changed.connect(self._mark_dirty)
         layout.addWidget(self.live2d_viewport_settings)
 
         self.reduced_motion_cb = QCheckBox("减少动画（气泡与输入框淡入淡出）")
@@ -477,9 +510,45 @@ class SetupWizard(QWidget):
     def _on_pet_size_changed(self, value: int) -> None:
         self.pet_size_value.setText(f"{int(value)}%")
 
+    def _toggle_maximized(self, _checked: bool = False) -> None:
+        """在最大化与用户上一次设置的普通窗口大小之间切换。"""
+        self._drag = None
+        if self.isMaximized() or self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._sync_window_state_controls()
+        self._apply_rounded_window_mask()
+
+    def _header_double_click(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._toggle_maximized()
+            event.accept()
+            return
+        event.ignore()
+
+    def _sync_window_state_controls(self) -> None:
+        maximized = self.isMaximized() or self.isFullScreen()
+        if hasattr(self, "maximize_btn"):
+            if maximized:
+                self.maximize_btn.setText("还原窗口")
+                self.maximize_btn.setToolTip("还原到上一次配置窗口大小")
+                self.maximize_btn.setAccessibleName("还原配置窗口")
+            else:
+                self.maximize_btn.setText("最大化")
+                self.maximize_btn.setToolTip("最大化配置窗口（也可双击顶栏）")
+                self.maximize_btn.setAccessibleName("最大化配置窗口")
+        if hasattr(self, "size_grip"):
+            self.size_grip.setVisible(not maximized)
+
     def _apply_rounded_window_mask(self) -> None:
         """让顶层无边框窗口的真实区域与圆角 Shell 一致。"""
-        if self.width() <= 1 or self.height() <= 1:
+        if (
+            self.isMaximized()
+            or self.isFullScreen()
+            or self.width() <= 1
+            or self.height() <= 1
+        ):
             self.clearMask()
             return
         path = QPainterPath()
@@ -494,6 +563,12 @@ class SetupWizard(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._apply_rounded_window_mask()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            self._sync_window_state_controls()
+            self._apply_rounded_window_mask()
 
     def _fade_in(self) -> None:
         """Gradually restore opacity so the window doesn't flash from transparent."""
@@ -1074,11 +1149,11 @@ class SetupWizard(QWidget):
         return out
 
     def _drag_start(self, e):
-        if e.button() == Qt.LeftButton:
+        if e.button() == Qt.LeftButton and not self.isMaximized():
             self._drag = e.globalPos()
 
     def _drag_move(self, e):
-        if self._drag:
+        if self._drag and not self.isMaximized():
             self.move(self.pos() + e.globalPos() - self._drag)
             self._drag = e.globalPos()
 

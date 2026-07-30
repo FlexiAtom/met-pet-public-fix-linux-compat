@@ -8,6 +8,7 @@ from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QDialog,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -31,7 +32,7 @@ from meapet.config.store import (
     normalize_live2d_window_mask,
     normalize_live2d_window_shape,
 )
-from meapet.ui_theme import MIN_TARGET_SIZE, PALETTE
+from meapet.ui_theme import MIN_TARGET_SIZE, PALETTE, get_ui_font_scale
 
 
 MIN_VIEWPORT_SPAN = 0.20
@@ -39,6 +40,8 @@ _EDGE_PRECISION = 6
 _HANDLE_HIT_RADIUS = 22.0
 _HANDLE_VISUAL_RADIUS = 6.0
 _CANVAS_MARGIN = 18.0
+_LASSO_DRAG_THRESHOLD = 4.0
+_LASSO_SAMPLE_SPACING = 6.0
 
 
 def _clamp_unit(value: object) -> float:
@@ -176,7 +179,11 @@ class Live2DViewportEditor(QWidget):
             DEFAULT_LIVE2D_WINDOW_SHAPE
         )
         self._shape_tool: str | None = None
+        self._shape_tool_persistent = False
         self._draft_shape_points: list[QPointF] = []
+        self._shape_press_position = QPointF()
+        self._shape_freehand_active = False
+        self._geometry_editable = True
         self._anchor_drag_offset = QPointF()
         self._drag_mode: str | None = None
         self._drag_origin = QPointF()
@@ -192,6 +199,12 @@ class Live2DViewportEditor(QWidget):
 
     def has_preview(self) -> bool:
         return not self._preview.isNull()
+
+    def preview_pixmap(self) -> QPixmap:
+        return QPixmap(self._preview)
+
+    def fallback_canvas_size(self) -> QSize:
+        return QSize(self._fallback_canvas_size)
 
     def set_preview(self, preview: QImage | QPixmap | None) -> None:
         if isinstance(preview, QImage) and not preview.isNull():
@@ -254,6 +267,8 @@ class Live2DViewportEditor(QWidget):
         self._window_shape = shape
         self._draft_shape_points = []
         self._shape_tool = None
+        self._shape_freehand_active = False
+        self._drag_mode = None
         self.update()
         self.shapeStateChanged.emit()
         if emit:
@@ -267,6 +282,8 @@ class Live2DViewportEditor(QWidget):
         if not enabled:
             self._shape_tool = None
             self._draft_shape_points = []
+            self._shape_freehand_active = False
+            self._drag_mode = None
         self.update()
         self.shapeStateChanged.emit()
         if emit:
@@ -278,6 +295,20 @@ class Live2DViewportEditor(QWidget):
     def draft_shape_point_count(self) -> int:
         return len(self._draft_shape_points)
 
+    def set_shape_tool_persistent(self, enabled: bool) -> None:
+        """完成轮廓后是否保留当前工具，便于连续套索多个区域。"""
+        self._shape_tool_persistent = bool(enabled)
+
+    def set_geometry_editable(self, enabled: bool) -> None:
+        """控制矩形与锚点是否可编辑；形状对话框会关闭这组交互。"""
+        enabled = bool(enabled)
+        if enabled == self._geometry_editable:
+            return
+        self._geometry_editable = enabled
+        self._drag_mode = None
+        self._shape_freehand_active = False
+        self.update()
+
     def set_shape_tool(self, operation: str | None) -> None:
         normalized = (
             operation
@@ -286,6 +317,11 @@ class Live2DViewportEditor(QWidget):
             else None
         )
         if normalized == self._shape_tool:
+            if self._shape_tool_persistent:
+                # 独立编辑器把工具视为模式；重复点击只保持选中，取消草稿
+                # 使用 Escape，避免连续画多个区域时意外关掉工具。
+                self.shapeStateChanged.emit()
+                return
             normalized = None
         if normalized == self._shape_tool:
             return
@@ -294,6 +330,23 @@ class Live2DViewportEditor(QWidget):
         self._drag_mode = None
         self.update()
         self.shapeStateChanged.emit()
+
+    def _append_shape_point(self, point: QPointF) -> bool:
+        """加入一个归一化轮廓点，并过滤采样产生的连续重复点。"""
+        if len(self._draft_shape_points) >= MAX_LIVE2D_WINDOW_SHAPE_POINTS:
+            return False
+        normalized = QPointF(_clamp_unit(point.x()), _clamp_unit(point.y()))
+        if self._draft_shape_points:
+            previous = self._draft_shape_points[-1]
+            if (
+                abs(previous.x() - normalized.x()) <= 1e-6
+                and abs(previous.y() - normalized.y()) <= 1e-6
+            ):
+                return False
+        self._draft_shape_points.append(normalized)
+        self.update()
+        self.shapeStateChanged.emit()
+        return True
 
     def finish_shape_contour(self) -> bool:
         if (
@@ -322,7 +375,10 @@ class Live2DViewportEditor(QWidget):
         self._window_shape["contours"].append(candidate[0])
         self._window_shape = normalize_live2d_window_shape(self._window_shape)
         self._draft_shape_points = []
-        self._shape_tool = None
+        if not self._shape_tool_persistent:
+            self._shape_tool = None
+        self._shape_freehand_active = False
+        self._drag_mode = None
         self.update()
         self.shapeStateChanged.emit()
         self.windowShapeChanged.emit(self.window_shape())
@@ -347,7 +403,10 @@ class Live2DViewportEditor(QWidget):
             return False
         self._window_shape["contours"] = []
         self._draft_shape_points = []
-        self._shape_tool = None
+        if not self._shape_tool_persistent:
+            self._shape_tool = None
+        self._shape_freehand_active = False
+        self._drag_mode = None
         self.update()
         self.shapeStateChanged.emit()
         self.windowShapeChanged.emit(self.window_shape())
@@ -514,7 +573,7 @@ class Live2DViewportEditor(QWidget):
 
         self._draw_window_shape(painter, canvas, selection)
 
-        if self._crop_enabled:
+        if self._crop_enabled and self._geometry_editable:
             painter.setPen(QPen(QColor(PALETTE["canvas"]), 1))
             painter.setBrush(border)
             for point in self._handle_points(selection).values():
@@ -524,9 +583,10 @@ class Live2DViewportEditor(QWidget):
                     _HANDLE_VISUAL_RADIUS,
                 )
 
-        # 默认锚点与选框下边中点重叠时，十字最后绘制且优先命中；用户仍可
-        # 在下边界其余位置拖动边缘，两个对象无需切换模式。
-        self._draw_placement_anchor(painter)
+        if self._geometry_editable:
+            # 默认锚点与选框下边中点重叠时，十字最后绘制且优先命中；用户仍可
+            # 在下边界其余位置拖动边缘，两个对象无需切换模式。
+            self._draw_placement_anchor(painter)
 
     def _draw_window_shape(
         self,
@@ -662,6 +722,9 @@ class Live2DViewportEditor(QWidget):
         if self._shape_tool in ("add", "subtract"):
             return "shape_draw" if canvas.contains(point) else None
 
+        if not self._geometry_editable:
+            return None
+
         anchor = self._anchor_point()
         if (
             abs(point.x() - anchor.x()) <= _HANDLE_HIT_RADIUS
@@ -733,10 +796,10 @@ class Live2DViewportEditor(QWidget):
         self.setFocus(Qt.MouseFocusReason)
         normalized = self._normalized_point(QPointF(event.pos()))
         if mode == "shape_draw":
-            if len(self._draft_shape_points) < MAX_LIVE2D_WINDOW_SHAPE_POINTS:
-                self._draft_shape_points.append(normalized)
-                self.update()
-                self.shapeStateChanged.emit()
+            self._append_shape_point(normalized)
+            self._drag_mode = "shape_draw"
+            self._shape_press_position = QPointF(event.pos())
+            self._shape_freehand_active = False
             event.accept()
             return
         self._drag_mode = mode
@@ -759,6 +822,20 @@ class Live2DViewportEditor(QWidget):
         if self._drag_mode is None:
             self.setCursor(self._cursor_for_mode(self._hit_test(point)))
             super().mouseMoveEvent(event)
+            return
+
+        if self._drag_mode == "shape_draw":
+            if (
+                not self._shape_freehand_active
+                and (point - self._shape_press_position).manhattanLength()
+                >= _LASSO_DRAG_THRESHOLD
+            ):
+                self._shape_freehand_active = True
+            if self._shape_freehand_active and self._draft_shape_points:
+                previous = self._canvas_point(self._draft_shape_points[-1])
+                if (point - previous).manhattanLength() >= _LASSO_SAMPLE_SPACING:
+                    self._append_shape_point(self._normalized_point(point))
+            event.accept()
             return
 
         normalized = self._normalized_point(point)
@@ -821,6 +898,25 @@ class Live2DViewportEditor(QWidget):
         )
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.button() == Qt.LeftButton and self._drag_mode == "shape_draw":
+            if self._shape_freehand_active:
+                point = QPointF(event.pos())
+                if self._draft_shape_points:
+                    previous = self._canvas_point(self._draft_shape_points[-1])
+                    if (
+                        (point - previous).manhattanLength()
+                        >= _LASSO_SAMPLE_SPACING
+                    ):
+                        self._append_shape_point(self._normalized_point(point))
+                if len(self._draft_shape_points) >= 3:
+                    self.finish_shape_contour()
+            self._drag_mode = None
+            self._shape_freehand_active = False
+            self.setCursor(
+                self._cursor_for_mode(self._hit_test(QPointF(event.pos())))
+            )
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and self._drag_mode is not None:
             self._drag_mode = None
             self._new_selection_started = False
@@ -828,6 +924,22 @@ class Live2DViewportEditor(QWidget):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt API
+        """逐点模式可双击最后一点完成，不必再寻找工具栏按钮。"""
+        point = QPointF(event.pos())
+        if (
+            event.button() == Qt.LeftButton
+            and self.isEnabled()
+            and self._shape_tool in ("add", "subtract")
+            and self._canvas_rect().contains(point)
+        ):
+            self._append_shape_point(self._normalized_point(point))
+            if len(self._draft_shape_points) >= 3:
+                self.finish_shape_contour()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._drag_mode is None:
@@ -856,6 +968,10 @@ class Live2DViewportEditor(QWidget):
             Qt.Key_Down: (0.0, 1.0),
         }.get(event.key())
         if movement is None or not self.isEnabled():
+            super().keyPressEvent(event)
+            return
+
+        if not self._geometry_editable:
             super().keyPressEvent(event)
             return
 
@@ -888,6 +1004,235 @@ class Live2DViewportEditor(QWidget):
     def focusOutEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.update()
         super().focusOutEvent(event)
+
+
+class Live2DWindowShapeDialog(QDialog):
+    """在独立、可缩放画布中编辑 Live2D 精细窗口形状。"""
+
+    def __init__(self, preview: QImage | QPixmap | None = None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Live2DWindowShapeDialog")
+        self.setWindowTitle("编辑 Live2D 精细窗口形状")
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint
+        )
+        self.setModal(True)
+        self.setSizeGripEnabled(True)
+        font_scale = get_ui_font_scale()
+        scale_extra = max(0.0, font_scale - 1.0)
+        self.setMinimumSize(
+            round(720 + 160 * scale_extra),
+            round(640 + 180 * scale_extra),
+        )
+        self.resize(960, 720)
+        self.setAccessibleName("编辑 Live2D 精细窗口形状")
+        self.setAccessibleDescription(
+            "用套索或逐点多边形定义窗口保留区和挖空区；只有应用后才会"
+            "写回配置页"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(12)
+
+        title = QLabel("编辑精细窗口形状")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+
+        self.instructions_label = QLabel(
+            "先选择“保留套索”或“挖空套索”。按住鼠标沿轮廓描一圈，"
+            "松开即完成；也可以单击逐点放置，双击或按 Enter 完成。"
+        )
+        self.instructions_label.setObjectName("PageDescription")
+        self.instructions_label.setWordWrap(True)
+        self.instructions_label.setAccessibleName("精细形状编辑说明")
+        layout.addWidget(self.instructions_label)
+
+        tools = QHBoxLayout()
+        tools.setSpacing(10)
+        self.shape_add_button = self._make_button(
+            "保留套索",
+            "绘制需要保留并可接收鼠标操作的窗口区域",
+            checkable=True,
+            object_name="ShapeAddTool",
+        )
+        self.shape_subtract_button = self._make_button(
+            "挖空套索",
+            "从保留区中挖去透明孔洞或不需要响应鼠标的区域",
+            checkable=True,
+            object_name="ShapeSubtractTool",
+        )
+        self.shape_finish_button = self._make_button(
+            "完成轮廓",
+            "逐点绘制至少三个点后，完成当前轮廓",
+        )
+        self.shape_undo_button = self._make_button(
+            "撤销",
+            "优先撤销当前轮廓的最后一点，否则删除最后一个已完成轮廓",
+        )
+        self.shape_clear_button = self._make_button(
+            "清空",
+            "删除全部保留区和挖空区",
+        )
+        for button in (
+            self.shape_add_button,
+            self.shape_subtract_button,
+            self.shape_finish_button,
+            self.shape_undo_button,
+            self.shape_clear_button,
+        ):
+            tools.addWidget(button)
+        tools.addStretch()
+        layout.addLayout(tools)
+
+        self.editor = Live2DViewportEditor(preview=preview)
+        self.editor.setObjectName("Live2DWindowShapeEditor")
+        self.editor.set_shape_tool_persistent(True)
+        self.editor.set_geometry_editable(False)
+        self.editor.setAccessibleName("Live2D 精细窗口形状画布")
+        self.editor.setAccessibleDescription(
+            "选择保留或挖空套索后，可按住鼠标自由描边，或单击逐点绘制；"
+            "双击或回车完成，退格撤点，Escape 取消当前轮廓"
+        )
+        layout.addWidget(self.editor, 1)
+
+        self.shape_status_label = QLabel()
+        self.shape_status_label.setObjectName("HelperText")
+        self.shape_status_label.setWordWrap(True)
+        self.shape_status_label.setAccessibleName("当前精细窗口形状状态")
+        layout.addWidget(self.shape_status_label)
+
+        keyboard_hint = QLabel(
+            "键盘：Enter 完成当前轮廓 · Backspace 撤销一点 · "
+            "Esc 先取消当前草稿。取消对话框不会应用任何改动。"
+        )
+        keyboard_hint.setObjectName("HelperText")
+        keyboard_hint.setWordWrap(True)
+        layout.addWidget(keyboard_hint)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(12)
+        actions.addStretch()
+        self.cancel_button = self._make_button(
+            "取消",
+            "关闭编辑器并放弃本次形状改动",
+        )
+        self.apply_button = self._make_button(
+            "应用形状",
+            "把当前精细窗口形状应用到配置页",
+            object_name="PrimaryButton",
+        )
+        self.cancel_button.setMinimumWidth(104)
+        self.apply_button.setMinimumWidth(124)
+        actions.addWidget(self.cancel_button)
+        actions.addWidget(self.apply_button)
+        layout.addLayout(actions)
+
+        self.shape_add_button.clicked.connect(
+            lambda _checked=False: self.editor.set_shape_tool("add")
+        )
+        self.shape_subtract_button.clicked.connect(
+            lambda _checked=False: self.editor.set_shape_tool("subtract")
+        )
+        self.shape_finish_button.clicked.connect(
+            lambda _checked=False: self.editor.finish_shape_contour()
+        )
+        self.shape_undo_button.clicked.connect(
+            lambda _checked=False: self.editor.undo_shape_edit()
+        )
+        self.shape_clear_button.clicked.connect(
+            lambda _checked=False: self.editor.clear_window_shape()
+        )
+        self.cancel_button.clicked.connect(self.reject)
+        self.apply_button.clicked.connect(self.accept)
+        self.editor.shapeStateChanged.connect(self._update_shape_state)
+        self.editor.windowShapeChanged.connect(
+            lambda _shape: self._update_shape_state()
+        )
+        self.set_window_shape(DEFAULT_LIVE2D_WINDOW_SHAPE)
+
+    @staticmethod
+    def _make_button(
+        text: str,
+        description: str,
+        *,
+        checkable: bool = False,
+        object_name: str = "SecondaryButton",
+    ) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName(object_name)
+        button.setCheckable(checkable)
+        button.setMinimumHeight(MIN_TARGET_SIZE)
+        button.setAccessibleName(text)
+        button.setAccessibleDescription(description)
+        return button
+
+    def set_window_shape(self, value: object) -> None:
+        shape = normalize_live2d_window_shape(value)
+        # 打开编辑器本身就是编辑精细形状的明确意图；临时副本始终启用，
+        # 主配置只会在 accepted 信号发出后收到它。
+        shape["enabled"] = True
+        self.editor.set_window_shape(shape)
+        self.editor.set_shape_enabled(True)
+        self._update_shape_state()
+
+    def window_shape(self) -> dict:
+        shape = self.editor.window_shape()
+        shape["enabled"] = True
+        return normalize_live2d_window_shape(shape)
+
+    def _update_shape_state(self) -> None:
+        shape = self.editor.window_shape()
+        contours = shape["contours"]
+        tool = self.editor.shape_tool()
+        draft_points = self.editor.draft_shape_point_count()
+        at_limit = len(contours) >= MAX_LIVE2D_WINDOW_SHAPE_CONTOURS
+        has_edits = bool(contours or draft_points)
+
+        self.shape_add_button.setEnabled(not at_limit)
+        self.shape_subtract_button.setEnabled(not at_limit)
+        self.shape_finish_button.setEnabled(
+            tool is not None and draft_points >= 3 and not at_limit
+        )
+        self.shape_undo_button.setEnabled(has_edits)
+        self.shape_clear_button.setEnabled(has_edits)
+        self.shape_add_button.setChecked(tool == "add")
+        self.shape_subtract_button.setChecked(tool == "subtract")
+
+        additions = sum(
+            contour["operation"] == "add" for contour in contours
+        )
+        subtractions = len(contours) - additions
+        counts = f"{additions} 个保留区，{subtractions} 个挖空区"
+        if at_limit:
+            text = (
+                f"已达到 {MAX_LIVE2D_WINDOW_SHAPE_CONTOURS} 个轮廓上限；"
+                f"当前有 {counts}。"
+            )
+        elif tool is not None:
+            operation = "保留套索" if tool == "add" else "挖空套索"
+            if draft_points:
+                text = (
+                    f"当前工具：{operation}；当前轮廓已有 {draft_points} 个点。"
+                    f"已完成 {counts}。"
+                )
+            else:
+                text = (
+                    f"当前工具：{operation}；可直接按住鼠标描边或逐点单击。"
+                    f"已完成 {counts}。"
+                )
+        elif additions == 0:
+            text = (
+                f"尚未选择工具；当前有 {counts}。请先画至少一个保留区，"
+                "否则运行时仍使用普通矩形窗口。"
+            )
+        else:
+            text = f"尚未选择工具；当前有 {counts}。"
+        self.shape_status_label.setText(text)
+        self.shape_status_label.setAccessibleDescription(text)
 
 
 class Live2DViewportSettings(QFrame):
@@ -991,66 +1336,44 @@ class Live2DViewportSettings(QFrame):
         anchor_grid.setColumnStretch(3, 1)
         layout.addLayout(anchor_grid)
 
-        shape_title = QLabel("自定义窗口形状")
+        shape_title = QLabel("精细窗口形状")
         shape_title.setObjectName("InlineFieldLabel")
         layout.addWidget(shape_title)
 
         shape_hint = QLabel(
-            "可画多个保留区，并用挖空区形成孔洞或分离的小区域。形状只裁剪"
-            "静态窗口和鼠标命中范围，不会重新定义头部、左侧、右侧语音触发区；"
-            "请为头发和大幅动作留出余量。"
+            "复杂发型、配饰或分离区域可用套索精细描边。它只改变静态窗口和"
+            "鼠标命中范围，不会重新定义头部、左侧、右侧语音触发区；请为"
+            "头发与大幅动作留出余量。"
         )
         shape_hint.setObjectName("HelperText")
         shape_hint.setWordWrap(True)
         layout.addWidget(shape_hint)
 
-        self.shape_enabled = QCheckBox("启用自定义多边形窗口形状")
+        shape_row = QHBoxLayout()
+        shape_row.setSpacing(12)
+        self.shape_enabled = QCheckBox("使用精细窗口形状")
         self.shape_enabled.setObjectName("Live2DWindowShapeEnabled")
         self.shape_enabled.setAccessibleName("启用 Live2D 自定义窗口形状")
         self.shape_enabled.setAccessibleDescription(
             "关闭时保留已绘制轮廓，但桌宠恢复为普通矩形窗口"
         )
-        layout.addWidget(self.shape_enabled)
+        shape_row.addWidget(self.shape_enabled)
+        shape_row.addStretch()
+        self.shape_edit_button = QPushButton("编辑精细形状…")
+        self.shape_edit_button.setObjectName("SecondaryButton")
+        self.shape_edit_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.shape_edit_button.setAccessibleName("编辑 Live2D 精细窗口形状")
+        self.shape_edit_button.setAccessibleDescription(
+            "在可缩放的独立画布中绘制保留区和挖空区"
+        )
+        shape_row.addWidget(self.shape_edit_button)
+        layout.addLayout(shape_row)
 
-        shape_actions = QGridLayout()
-        shape_actions.setHorizontalSpacing(12)
-        shape_actions.setVerticalSpacing(8)
-        self.shape_add_button = self._make_shape_button(
-            "绘制保留区",
-            "逐点绘制一个需要保留的窗口区域",
-            checkable=True,
-        )
-        self.shape_subtract_button = self._make_shape_button(
-            "绘制挖空区",
-            "逐点绘制一个要从所有保留区中扣除的孔洞",
-            checkable=True,
-        )
-        self.shape_finish_button = self._make_shape_button(
-            "完成轮廓",
-            "至少放置三个点后完成当前多边形轮廓",
-        )
-        self.shape_undo_button = self._make_shape_button(
-            "撤销一步",
-            "优先撤销当前轮廓的最后一个点，否则删除最后一个已完成轮廓",
-        )
-        self.shape_clear_button = self._make_shape_button(
-            "清空形状",
-            "删除全部保留区和挖空区",
-        )
-        shape_actions.addWidget(self.shape_add_button, 0, 0)
-        shape_actions.addWidget(self.shape_subtract_button, 0, 1)
-        shape_actions.addWidget(self.shape_finish_button, 1, 0)
-        shape_actions.addWidget(self.shape_undo_button, 1, 1)
-        shape_actions.addWidget(self.shape_clear_button, 1, 2)
-        for column in range(3):
-            shape_actions.setColumnStretch(column, 1)
-        layout.addLayout(shape_actions)
-
-        self.shape_status_label = QLabel()
-        self.shape_status_label.setObjectName("HelperText")
-        self.shape_status_label.setWordWrap(True)
-        self.shape_status_label.setAccessibleName("当前 Live2D 窗口形状")
-        layout.addWidget(self.shape_status_label)
+        self.shape_summary_label = QLabel()
+        self.shape_summary_label.setObjectName("HelperText")
+        self.shape_summary_label.setWordWrap(True)
+        self.shape_summary_label.setAccessibleName("当前 Live2D 精细窗口形状")
+        layout.addWidget(self.shape_summary_label)
 
         actions = QHBoxLayout()
         actions.setSpacing(12)
@@ -1095,21 +1418,7 @@ class Live2DViewportSettings(QFrame):
         self.anchor_x_input.valueChanged.connect(self._on_anchor_input_changed)
         self.anchor_y_input.valueChanged.connect(self._on_anchor_input_changed)
         self.shape_enabled.toggled.connect(self._on_shape_enabled_changed)
-        self.shape_add_button.clicked.connect(
-            lambda _checked=False: self.editor.set_shape_tool("add")
-        )
-        self.shape_subtract_button.clicked.connect(
-            lambda _checked=False: self.editor.set_shape_tool("subtract")
-        )
-        self.shape_finish_button.clicked.connect(
-            lambda _checked=False: self.editor.finish_shape_contour()
-        )
-        self.shape_undo_button.clicked.connect(
-            lambda _checked=False: self.editor.undo_shape_edit()
-        )
-        self.shape_clear_button.clicked.connect(
-            lambda _checked=False: self.editor.clear_window_shape()
-        )
+        self.shape_edit_button.clicked.connect(self._open_shape_editor)
         self.reset_button.clicked.connect(self.restore_recommended)
         self.full_canvas_button.clicked.connect(self.use_full_canvas)
         self.anchor_reset_button.clicked.connect(self.reset_placement_anchor)
@@ -1144,21 +1453,6 @@ class Live2DViewportSettings(QFrame):
         control.setAccessibleName(f"Live2D 模型站立锚点{name}")
         control.setAccessibleDescription("相对于完整 Live2D 画布的百分比坐标")
         return control
-
-    @staticmethod
-    def _make_shape_button(
-        text: str,
-        description: str,
-        *,
-        checkable: bool = False,
-    ) -> QPushButton:
-        button = QPushButton(text)
-        button.setObjectName("SecondaryButton")
-        button.setCheckable(checkable)
-        button.setMinimumHeight(MIN_TARGET_SIZE)
-        button.setAccessibleName(text)
-        button.setAccessibleDescription(description)
-        return button
 
     def _edge_inputs(self) -> Iterable[tuple[str, QDoubleSpinBox]]:
         return (
@@ -1219,6 +1513,41 @@ class Live2DViewportSettings(QFrame):
         shape = self.editor.window_shape()
         shape["enabled"] = self.shape_enabled.isChecked()
         return normalize_live2d_window_shape(shape)
+
+    def create_shape_editor_dialog(self) -> Live2DWindowShapeDialog:
+        """创建使用临时副本的形状编辑器；接受后才写回主设置。"""
+        preview = (
+            self.editor.preview_pixmap()
+            if self.editor.has_preview()
+            else None
+        )
+        dialog = Live2DWindowShapeDialog(preview=preview, parent=self)
+        fallback = self.editor.fallback_canvas_size()
+        dialog.editor.set_fallback_canvas_size(
+            fallback.width(),
+            fallback.height(),
+        )
+        dialog.editor.set_viewport(*self.editor.viewport())
+        dialog.editor.set_crop_enabled(self.crop_enabled.isChecked())
+        dialog.set_window_shape(self.window_shape())
+        dialog.accepted.connect(
+            lambda current=dialog: self._apply_shape_editor_dialog(current)
+        )
+        return dialog
+
+    def _open_shape_editor(self, _checked: bool = False) -> None:
+        dialog = self.create_shape_editor_dialog()
+        dialog.exec_()
+
+    def _apply_shape_editor_dialog(
+        self,
+        dialog: Live2DWindowShapeDialog,
+    ) -> None:
+        shape = dialog.window_shape()
+        changed = shape != self.window_shape()
+        self.set_window_shape(shape)
+        if changed and not self._syncing:
+            self.changed.emit()
 
     def set_fallback_canvas_size(self, value: object) -> None:
         if isinstance(value, (list, tuple)) and len(value) >= 2:
@@ -1314,27 +1643,7 @@ class Live2DViewportSettings(QFrame):
     def _update_shape_state(self) -> None:
         shape = self.editor.window_shape()
         enabled = self.shape_enabled.isChecked()
-        tool = self.editor.shape_tool()
-        draft_points = self.editor.draft_shape_point_count()
         contours = shape["contours"]
-        at_limit = len(contours) >= MAX_LIVE2D_WINDOW_SHAPE_CONTOURS
-
-        self.shape_add_button.setEnabled(enabled and not at_limit)
-        self.shape_subtract_button.setEnabled(enabled and not at_limit)
-        self.shape_finish_button.setEnabled(
-            enabled and tool is not None and draft_points >= 3 and not at_limit
-        )
-        has_edits = bool(contours or draft_points)
-        self.shape_undo_button.setEnabled(enabled and has_edits)
-        self.shape_clear_button.setEnabled(enabled and has_edits)
-        self.shape_add_button.setChecked(tool == "add")
-        self.shape_subtract_button.setChecked(tool == "subtract")
-        self.shape_add_button.setText(
-            "正在画保留区" if tool == "add" else "绘制保留区"
-        )
-        self.shape_subtract_button.setText(
-            "正在画挖空区" if tool == "subtract" else "绘制挖空区"
-        )
 
         additions = sum(
             contour["operation"] == "add" for contour in contours
@@ -1342,27 +1651,18 @@ class Live2DViewportSettings(QFrame):
         subtractions = len(contours) - additions
         counts = f"{additions} 个保留区，{subtractions} 个挖空区"
         if not enabled:
-            text = f"自定义形状已关闭；已保留 {counts}，重新启用后可继续编辑。"
-        elif at_limit:
-            text = (
-                f"已达到 {MAX_LIVE2D_WINDOW_SHAPE_CONTOURS} 个轮廓上限；"
-                f"{counts}。"
-            )
-        elif tool is not None:
-            operation = "保留区" if tool == "add" else "挖空区"
-            text = (
-                f"正在绘制{operation}：已放置 {draft_points} 个点；"
-                f"至少 3 个点后可完成。当前已有 {counts}。"
-            )
+            text = f"精细形状已关闭；已保留 {counts}，重新启用后仍可使用。"
         elif additions == 0:
             text = (
-                f"当前有 {counts}。请先绘制至少一个保留区；"
-                "在此之前运行时继续使用普通矩形窗口。"
+                f"当前有 {counts}。需要至少一个保留区；"
+                "在此之前桌宠仍使用上方的普通矩形范围。"
             )
         else:
-            text = f"当前有 {counts}；可继续绘制分离区域或孔洞。"
-        self.shape_status_label.setText(text)
-        self.shape_status_label.setAccessibleDescription(text)
+            text = (
+                f"当前有 {counts}；只影响窗口与鼠标命中，不改变语音分区。"
+            )
+        self.shape_summary_label.setText(text)
+        self.shape_summary_label.setAccessibleDescription(text)
 
     def _update_status(self) -> None:
         anchor = self.placement_anchor()
@@ -1410,6 +1710,7 @@ class Live2DViewportSettings(QFrame):
 __all__ = [
     "Live2DViewportEditor",
     "Live2DViewportSettings",
+    "Live2DWindowShapeDialog",
     "MIN_VIEWPORT_SPAN",
     "constrain_viewport_edges",
     "viewport_edges_to_window_mask",

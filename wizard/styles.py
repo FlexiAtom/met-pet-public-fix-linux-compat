@@ -522,6 +522,18 @@ WIZARD_STYLESHEET = f"""
     QPushButton#CloseButton:focus {{
         border: 2px solid {COLOR_FOCUS};
     }}
+    QPushButton#ShapeAddTool:checked {{
+        background: {rgba(COLOR_OK, 48)};
+        color: {COLOR_TEXT};
+        border: 2px solid {COLOR_OK};
+        padding: 8px 15px;
+    }}
+    QPushButton#ShapeSubtractTool:checked {{
+        background: {rgba(COLOR_WARN, 48)};
+        color: {COLOR_TEXT};
+        border: 2px solid {COLOR_WARN};
+        padding: 8px 15px;
+    }}
     QProgressBar {{
         background: {COLOR_INPUT};
         color: {COLOR_TEXT};
@@ -644,11 +656,20 @@ WIZARD_STYLESHEET = f"""
         border-radius: 8px;
         padding: 6px 10px;
     }}
-    QSizeGrip {{
-        background: transparent;
-        width: 18px;
-        height: 18px;
-        image: none;
+    QSizeGrip#WizardSizeGrip {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+            stop:0 {rgba(COLOR_ELEVATED, 70)},
+            stop:0.48 {rgba(COLOR_ACCENT, 45)},
+            stop:0.52 {rgba(COLOR_ACCENT, 170)},
+            stop:0.62 {rgba(COLOR_ELEVATED, 80)},
+            stop:0.72 {rgba(COLOR_ACCENT, 210)},
+            stop:0.82 {rgba(COLOR_ELEVATED, 90)},
+            stop:0.92 {COLOR_ACCENT},
+            stop:1 {rgba(COLOR_ELEVATED, 100)});
+        border: 1px solid {COLOR_BORDER_STRONG};
+        border-radius: 7px;
+        width: 28px;
+        height: 28px;
     }}
     QMessageBox {{
         background: {COLOR_BG};
