@@ -152,7 +152,7 @@ class Live2DViewportEditor(QWidget):
         self.setAccessibleName("Live2D 窗口范围预览")
         self.setAccessibleDescription(
             "拖动选框移动窗口范围，拖动边缘或角点缩放；"
-            "拖动十字标记设置模型站立锚点，方向键移动最后选择的对象；"
+            "拖动十字标记设置模型站立锚点，方向键移动当前编辑模式的对象；"
             "下面的百分比数值可精确调整"
         )
 
