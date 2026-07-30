@@ -29,6 +29,7 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
         DEFAULT_GSV_SOVITS_MODEL,
         DEFAULT_GSV_SOVITS_WEIGHTS_DIR,
         DEFAULT_HERMES_WS_URL,
+        DEFAULT_LIVE2D_PLACEMENT_ANCHOR,
         DEFAULT_LIVE2D_WINDOW_MASK,
         DEFAULT_MIMO_API_BASE,
         DEFAULT_MIMO_TTS_MODEL,
@@ -61,12 +62,18 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
     assert example["live2d"]["window_mask"] == dict(
         DEFAULT_LIVE2D_WINDOW_MASK
     )
+    assert example["live2d"]["placement_anchor"] == dict(
+        DEFAULT_LIVE2D_PLACEMENT_ANCHOR
+    )
 
     assert preset_by_id("openai").api_base == DEFAULT_OPENAI_API_BASE
     assert preset_by_id("ollama").api_base == DEFAULT_OLLAMA_HOST
     assert preset_by_id("mimo").api_base == DEFAULT_MIMO_API_BASE
     assert normalize_config({})["live2d"]["window_mask"] == dict(
         DEFAULT_LIVE2D_WINDOW_MASK
+    )
+    assert normalize_config({})["live2d"]["placement_anchor"] == dict(
+        DEFAULT_LIVE2D_PLACEMENT_ANCHOR
     )
 
 

@@ -267,6 +267,7 @@ class PNGStartupTests(unittest.TestCase):
             }
         )
         host.sprite_label = QWidget(host)
+        host.sprite_label.setGeometry(0, 0, 200, 300)
         host.resize(200, 300)
         host.move(400, 500)
         old_center_x = host.frameGeometry().center().x()

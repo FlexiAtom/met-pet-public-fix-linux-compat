@@ -9,7 +9,7 @@ from pathlib import Path
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt  # noqa: E402
 from PyQt5.QtGui import QColor, QImage, QMouseEvent  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
@@ -148,6 +148,44 @@ class Live2DViewportEditorTests(unittest.TestCase):
             mask,
         )
 
+    def test_placement_anchor_defaults_to_the_visible_viewport_bottom_center(
+        self,
+    ) -> None:
+        from meapet.config.store import normalize_live2d_placement_anchor
+
+        mask = {
+            "enabled": True,
+            "cx": 0.62,
+            "cy": 0.35,
+            "rw": 0.24,
+            "rh": 0.42,
+        }
+
+        self.assertEqual(
+            normalize_live2d_placement_anchor(None, mask),
+            {"x": 0.62, "y": 0.77},
+        )
+        self.assertEqual(
+            normalize_live2d_placement_anchor(
+                {"x": -4, "y": 7},
+                mask,
+            ),
+            {"x": 0.0, "y": 1.0},
+        )
+        self.assertEqual(
+            normalize_live2d_placement_anchor(
+                {"x": "bad", "y": float("nan")},
+                mask,
+            ),
+            {"x": 0.62, "y": 0.77},
+        )
+
+        full_canvas = dict(mask, enabled=False)
+        self.assertEqual(
+            normalize_live2d_placement_anchor(None, full_canvas),
+            {"x": 0.5, "y": 1.0},
+        )
+
     def test_viewport_edges_stay_inside_canvas_with_a_safe_minimum_span(self) -> None:
         left, top, right, bottom = constrain_viewport_edges(
             0.96,
@@ -196,6 +234,49 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertAlmostEqual(saved["rw"], 0.27)
         self.assertEqual(saved["cy"], 0.40)
         self.assertEqual(saved["rh"], 0.40)
+
+        settings.set_placement_anchor({"x": 0.53, "y": 0.86})
+        self.assertAlmostEqual(settings.anchor_x_input.value(), 53.0)
+        self.assertAlmostEqual(settings.anchor_y_input.value(), 86.0)
+        self.assertEqual(
+            settings.placement_anchor(),
+            {"x": 0.53, "y": 0.86},
+        )
+
+    def test_editor_drag_moves_the_model_anchor_without_moving_the_viewport(
+        self,
+    ) -> None:
+        settings = self._track(Live2DViewportSettings())
+        settings.resize(700, 680)
+        settings.show()
+        QApplication.processEvents()
+        settings.set_placement_anchor({"x": 0.50, "y": 0.80})
+        editor = settings.editor
+        before_viewport = editor.viewport()
+        start = editor._anchor_point().toPoint()
+
+        self._drag(editor, start, start + QPoint(20, -18))
+
+        anchor = settings.placement_anchor()
+        self.assertGreater(anchor["x"], 0.50)
+        self.assertLess(anchor["y"], 0.80)
+        self.assertEqual(editor.viewport(), before_viewport)
+        self.assertIn("站立锚点", settings.status_label.text())
+
+    def test_anchor_remains_editable_when_viewport_crop_is_disabled(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+
+        settings.crop_enabled.setChecked(False)
+        settings.anchor_x_input.setValue(47.0)
+        settings.anchor_y_input.setValue(92.0)
+
+        self.assertTrue(settings.editor.isEnabled())
+        self.assertTrue(settings.anchor_x_input.isEnabled())
+        self.assertTrue(settings.anchor_y_input.isEnabled())
+        self.assertEqual(
+            settings.placement_anchor(),
+            {"x": 0.47, "y": 0.92},
+        )
 
     def test_full_canvas_action_is_explicit_and_reversible(self) -> None:
         settings = self._track(Live2DViewportSettings())
@@ -316,6 +397,7 @@ class Live2DViewportEditorTests(unittest.TestCase):
                 "enabled": True,
                 "model_dir": "D:/models/mea",
                 "custom_live2d_key": "keep-me",
+                "placement_anchor": {"x": 0.52, "y": 0.88},
                 "window_mask": {
                     "enabled": True,
                     "cx": 0.54,
@@ -338,12 +420,17 @@ class Live2DViewportEditorTests(unittest.TestCase):
                 timer.stop()
 
             wizard.live2d_viewport_settings.left_input.setValue(28.0)
+            wizard.live2d_viewport_settings.anchor_x_input.setValue(57.0)
             config = wizard.collect_config()
 
         self.assertEqual(config["live2d"]["model_dir"], "D:/models/mea")
         self.assertEqual(config["live2d"]["custom_live2d_key"], "keep-me")
         self.assertAlmostEqual(config["live2d"]["window_mask"]["cx"], 0.56)
         self.assertAlmostEqual(config["live2d"]["window_mask"]["rw"], 0.28)
+        self.assertEqual(
+            config["live2d"]["placement_anchor"],
+            {"x": 0.57, "y": 0.88},
+        )
 
     def test_runtime_reapplies_viewport_when_only_mask_changes(self) -> None:
         host = _RuntimeConfigHost()
@@ -370,6 +457,38 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertTrue(host._apply_runtime_config(host.config))
         self.assertEqual(host.viewport_apply_count, 0)
 
+    def test_runtime_reapplies_geometry_when_only_placement_anchor_changes(
+        self,
+    ) -> None:
+        host = _RuntimeConfigHost()
+        host.config["live2d"]["placement_anchor"] = {"x": 0.50, "y": 0.90}
+        updated = {
+            **host.config,
+            "live2d": {
+                **host.config["live2d"],
+                "placement_anchor": {"x": 0.58, "y": 0.84},
+            },
+        }
+
+        self.assertTrue(host._apply_runtime_config(updated))
+        self.assertEqual(host.viewport_apply_count, 1)
+
+    def test_anchor_reposition_keeps_a_canvas_point_fixed_across_geometry_changes(
+        self,
+    ) -> None:
+        from meapet.desktop.render_host import (
+            calculate_live2d_anchor_preserving_position,
+        )
+
+        target = calculate_live2d_anchor_preserving_position(
+            QPoint(200, 100),
+            QRect(-100, -20, 1000, 800),
+            QRect(-250, -80, 500, 400),
+            {"x": 0.60, "y": 0.90},
+        )
+
+        self.assertEqual(target, QPoint(650, 520))
+
     def test_hot_apply_resizes_parent_but_keeps_complete_child_canvas(self) -> None:
         class CanvasModel:
             def get_suggested_size(self):
@@ -380,6 +499,7 @@ class Live2DViewportEditorTests(unittest.TestCase):
                 super().__init__()
                 self.config = {
                     "live2d": {
+                        "placement_anchor": {"x": 0.62, "y": 0.91},
                         "window_mask": {
                             "enabled": True,
                             "cx": 0.50,
@@ -401,7 +521,17 @@ class Live2DViewportEditorTests(unittest.TestCase):
         host = self._track(Host())
         host.resize(500, 400)
         host.move(200, 100)
-        old_bottom = host.frameGeometry().bottom()
+        host.sprite_label.setGeometry(0, 0, 500, 400)
+        anchor = host.config["live2d"]["placement_anchor"]
+
+        def global_anchor() -> QPoint:
+            canvas = host.sprite_label.geometry()
+            return host.pos() + QPoint(
+                canvas.x() + round(canvas.width() * anchor["x"]),
+                canvas.y() + round(canvas.height() * anchor["y"]),
+            )
+
+        before_anchor = global_anchor()
 
         self.assertTrue(host._apply_live2d_viewport_preference())
 
@@ -415,7 +545,7 @@ class Live2DViewportEditorTests(unittest.TestCase):
             (-125, -40, 500, 400),
         )
         self.assertEqual((host.width(), host.height()), (250, 320))
-        self.assertEqual(host.frameGeometry().bottom(), old_bottom)
+        self.assertEqual(global_anchor(), before_anchor)
         self.assertEqual(host.bubble_positions, 1)
 
     def test_render_host_captures_a_bounded_full_canvas_preview(self) -> None:
