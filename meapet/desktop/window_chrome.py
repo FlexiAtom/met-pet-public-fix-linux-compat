@@ -808,9 +808,19 @@ class PetWindowChromeMixin:
     def _reopen_setup_wizard(self):
         try:
             from wizard.app import SetupWizard
+
+            preview = None
+            capture_preview = getattr(
+                self,
+                "_capture_live2d_viewport_preview",
+                None,
+            )
+            if callable(capture_preview):
+                preview = capture_preview()
             self._setup_wizard = SetupWizard(
                 config_path=getattr(self, "_config_path", None),
                 initial_config=getattr(self, "config", None),
+                live2d_preview=preview,
             )
             apply_config = getattr(self, "_apply_runtime_config", None)
             if callable(apply_config):

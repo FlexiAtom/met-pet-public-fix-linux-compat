@@ -47,6 +47,8 @@ BUBBLE_STACK_GAP = 8
 BUBBLE_HEAD_ANCHOR_RATIO = 0.16
 BUBBLE_TAIL_CORNER_INSET = 36
 LIVE2D_STARTUP_TIMEOUT_MS = 5000
+LIVE2D_PREVIEW_MAX_SOURCE_PIXELS = 8_000_000
+LIVE2D_PREVIEW_MAX_EDGE = 1600
 # 一次分辨率变更会连发多个屏幕信号，合并后再校正位置。
 SCREEN_GUARD_DEBOUNCE_MS = 400
 # 桌宠宽高各至少露出这么多比例才算「还看得见」，否则拉回可用区域。
@@ -770,6 +772,49 @@ class PetRenderHostMixin:
             )
         self.resize(layout.window_width, layout.window_height)
         return layout
+
+    def _apply_live2d_viewport_preference(self) -> bool:
+        """热应用 ``window_mask``，同时维持脚底锚点与气泡位置。"""
+        if not getattr(self, "_use_live2d", False) or self.sprite_label is None:
+            return False
+        before = QRect(self.x(), self.y(), self.width(), self.height())
+        self._apply_live2d_viewport_geometry(self._size_factor)
+        self._reanchor_after_resize(before)
+        self._position_bubble()
+        return True
+
+    def _capture_live2d_viewport_preview(self):
+        """抓取一次完整 Live2D 帧供配置页框选；异常或超大画布返回 None。"""
+        widget = getattr(self, "sprite_label", None)
+        if not getattr(self, "_use_live2d", False) or widget is None:
+            return None
+        grab = getattr(widget, "grabFramebuffer", None)
+        if not callable(grab):
+            return None
+        try:
+            width = max(0, int(widget.width()))
+            height = max(0, int(widget.height()))
+            if (
+                width <= 0
+                or height <= 0
+                or width * height > LIVE2D_PREVIEW_MAX_SOURCE_PIXELS
+            ):
+                return None
+            image = grab()
+            if image is None or image.isNull():
+                return None
+            image = image.copy()
+            if max(image.width(), image.height()) > LIVE2D_PREVIEW_MAX_EDGE:
+                image = image.scaled(
+                    LIVE2D_PREVIEW_MAX_EDGE,
+                    LIVE2D_PREVIEW_MAX_EDGE,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            return image
+        except Exception as exc:
+            safe_print(f"[live2d] 配置预览抓取失败: {type(exc).__name__}")
+            return None
 
     def _safe_set_mood(self, mood: str):
         r = self._safe_renderer()

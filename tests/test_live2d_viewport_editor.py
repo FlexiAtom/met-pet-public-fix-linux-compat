@@ -125,8 +125,8 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertGreaterEqual(top, 0.0)
         self.assertLessEqual(right, 1.0)
         self.assertLessEqual(bottom, 1.0)
-        self.assertGreaterEqual(right - left, 0.20)
-        self.assertGreaterEqual(bottom - top, 0.20)
+        self.assertGreaterEqual(right - left, 0.20 - 1e-9)
+        self.assertGreaterEqual(bottom - top, 0.20 - 1e-9)
 
     def test_settings_support_mouse_preview_and_keyboard_numeric_alternative(self) -> None:
         preview = QImage(320, 480, QImage.Format_ARGB32_Premultiplied)

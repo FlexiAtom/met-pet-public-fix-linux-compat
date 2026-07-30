@@ -76,6 +76,7 @@ from wizard.pages import (
     TTSPage,
     VisionPage,
 )
+from wizard.live2d_viewport import Live2DViewportSettings
 
 
 class SetupWizard(QWidget):
@@ -117,6 +118,7 @@ class SetupWizard(QWidget):
         self,
         config_path: str | os.PathLike[str] | None = None,
         initial_config: dict | None = None,
+        live2d_preview=None,
     ):
         from meapet.config.store import resolve_writable_config_path
 
@@ -219,7 +221,10 @@ class SetupWizard(QWidget):
 
         # 页面内容保留原有控件和配置收集逻辑，只把导航改为普通标签页。
         self.env_page = EnvCheckPage()
-        self.display_page = self._build_display_settings(initial_font_scale)
+        self.display_page = self._build_display_settings(
+            initial_font_scale,
+            live2d_preview=live2d_preview,
+        )
         self.backend_page = BackendPage()
         self.llm_page = LLMPage()
         self.tts_page = TTSPage()
@@ -335,7 +340,12 @@ class SetupWizard(QWidget):
         self._fade_timer.timeout.connect(lambda: self._fade_in() if self.isVisible() else None)
         self._fade_timer.start(0)
 
-    def _build_display_settings(self, initial_scale: float) -> QFrame:
+    def _build_display_settings(
+        self,
+        initial_scale: float,
+        *,
+        live2d_preview=None,
+    ) -> QFrame:
         """创建独立的界面字号设置卡，并提供即时预览。"""
         card = QFrame()
         card.setObjectName("PageCard")
@@ -428,6 +438,11 @@ class SetupWizard(QWidget):
         pet_hint.setObjectName("HelperText")
         pet_hint.setWordWrap(True)
         layout.addWidget(pet_hint)
+
+        self.live2d_viewport_settings = Live2DViewportSettings(
+            preview=live2d_preview,
+        )
+        layout.addWidget(self.live2d_viewport_settings)
 
         self.reduced_motion_cb = QCheckBox("减少动画（气泡与输入框淡入淡出）")
         self.reduced_motion_cb.setObjectName("ReducedMotionToggle")
@@ -939,6 +954,11 @@ class SetupWizard(QWidget):
                 if isinstance(cfg.get("display"), dict)
                 else {}
             )
+            live2d = (
+                cfg.get("live2d", {})
+                if isinstance(cfg.get("live2d"), dict)
+                else {}
+            )
 
             self.font_scale_slider.setValue(
                 round(
@@ -956,6 +976,12 @@ class SetupWizard(QWidget):
             )
             self.reduced_motion_cb.setChecked(
                 bool(display.get("reduced_motion", False))
+            )
+            self.live2d_viewport_settings.set_fallback_canvas_size(
+                live2d.get("default_canvas_size")
+            )
+            self.live2d_viewport_settings.set_window_mask(
+                live2d.get("window_mask")
             )
 
             self.apply_conversation_config(cfg)
@@ -1066,6 +1092,14 @@ class SetupWizard(QWidget):
             self.pet_size_slider.value() / 100.0
         )
         display["reduced_motion"] = self.reduced_motion_cb.isChecked()
+
+    def _collect_live2d_viewport_fields(self, config: dict) -> None:
+        """显示页只补丁 Live2D 视觉视口，模型路径等字段原样保留。"""
+        live2d = config.get("live2d")
+        if not isinstance(live2d, dict):
+            live2d = {}
+            config["live2d"] = live2d
+        live2d["window_mask"] = self.live2d_viewport_settings.window_mask()
 
     def _collect_reference_audios(
         self,
@@ -1246,6 +1280,7 @@ class SetupWizard(QWidget):
         """把 UI 作为字段补丁应用到现有配置，而不是重建整份配置。"""
         config = self._config_base(base_config)
         self._collect_display_fields(config)
+        self._collect_live2d_viewport_fields(config)
         self._collect_conversation_fields(config)
         self._collect_tts_fields(config)
         self._collect_vision_fields(config)
