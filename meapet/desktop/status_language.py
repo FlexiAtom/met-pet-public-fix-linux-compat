@@ -87,6 +87,18 @@ def watcher_silent() -> str:
     return "这次没有需要提醒你的内容喵"
 
 
+def voice_input_enabled() -> str:
+    return "语音输入已开启"
+
+
+def voice_input_disabled() -> str:
+    return "语音输入已关闭"
+
+
+def voice_input_unavailable() -> str:
+    return "语音输入依赖未安装，请在配置页下载"
+
+
 def vision_failed(_reason: object = None) -> str:
     return "这次没看清，请稍后再试喵"
 
@@ -247,3 +259,11 @@ def menu_section_interaction() -> str:
 
 def menu_section_system() -> str:
     return "系统"
+
+
+def menu_voice_input_enable() -> str:
+    return "开启语音输入"
+
+
+def menu_voice_input_disable() -> str:
+    return "关闭语音输入"

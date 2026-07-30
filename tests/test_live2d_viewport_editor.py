@@ -74,6 +74,9 @@ class _RuntimeConfigHost(PetConfigBridgeMixin):
     def _init_control(self) -> None:
         pass
 
+    def _init_voice(self) -> None:
+        pass
+
 
 class Live2DViewportEditorTests(unittest.TestCase):
     """用户可框选透明画布范围，同时保持配置和运行时链路稳定。"""

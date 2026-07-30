@@ -208,6 +208,9 @@ def llm_endpoint_family(llm_cfg: Optional[dict] = None) -> str:
 
 DEFAULT_BUBBLE = DEFAULT_BUBBLE_DURATIONS
 
+# 旧导出名兼容
+DEFAULT_WATCHER_INTERVAL = DEFAULT_WATCHER_INTERVAL  # 来自 defaults 导入
+
 
 def project_root() -> str:
     from meapet.paths import project_root as _pr
@@ -698,12 +701,12 @@ def _normalize_llm_contract(value: object) -> dict:
     # 8642 是 Hermes HTTP API Server，原生 WS 由 ``hermes serve`` 默认在
     # 9119 的 /api/ws 提供。精确识别旧本机默认，避免生成不存在的 :8642/ws。
     if raw_kind == "hermes":
-        default_url = DEFAULT_HERMES_WS_URL
+        default_url = "ws://127.0.0.1:9119/api/ws"
         lowered = raw_base.lower().rstrip("/")
         if lowered in {
             "http://127.0.0.1:8642",
             "http://localhost:8642",
-            DEFAULT_OPENAI_API_BASE,
+            "https://api.openai.com/v1",
         }:
             raw_base = default_url
         elif lowered.startswith(("http://", "https://")):
@@ -757,28 +760,16 @@ def _normalize_llm_contract(value: object) -> dict:
         or ""
     ).strip()
     try:
-        timeout_seconds = float(
-            agent.get(
-                "timeout_seconds",
-                DEFAULT_AGENT_TIMEOUT_SECONDS,
-            )
-        )
+        timeout_seconds = float(agent.get("timeout_seconds", 120.0))
     except (TypeError, ValueError):
-        timeout_seconds = DEFAULT_AGENT_TIMEOUT_SECONDS
+        timeout_seconds = 120.0
     agent["timeout_seconds"] = (
-        timeout_seconds
-        if timeout_seconds > 0
-        else DEFAULT_AGENT_TIMEOUT_SECONDS
+        timeout_seconds if timeout_seconds > 0 else 120.0
     )
     try:
-        history_turns = int(
-            agent.get(
-                "history_turns",
-                DEFAULT_AGENT_HISTORY_TURNS,
-            )
-        )
+        history_turns = int(agent.get("history_turns", 5))
     except (TypeError, ValueError):
-        history_turns = DEFAULT_AGENT_HISTORY_TURNS
+        history_turns = 5
     agent["history_turns"] = max(0, min(history_turns, 100))
     agent["allow_insecure_ws"] = bool(
         agent.get("allow_insecure_ws", False)
@@ -833,12 +824,10 @@ def _normalize_agent_control(value: object) -> dict:
         or "127.0.0.1"
     )
     try:
-        port = int(control.get("port", DEFAULT_CONTROL_PORT))
+        port = int(control.get("port", 8765))
     except (TypeError, ValueError):
-        port = DEFAULT_CONTROL_PORT
-    control["port"] = (
-        port if 1 <= port <= 65535 else DEFAULT_CONTROL_PORT
-    )
+        port = 8765
+    control["port"] = port if 1 <= port <= 65535 else 8765
     for key in ("auth_token", "cert_file", "key_file", "ca_file"):
         control[key] = str(control.get(key) or "").strip()
     return control
@@ -1136,6 +1125,19 @@ def normalize_config(config: dict) -> dict:
         watcher_out["enabled"] = False
     cfg["vision"] = vision
     cfg["watcher"] = watcher_out
+
+    # voice_input 规范化（默认关闭）
+    voice = (
+        copy.deepcopy(cfg.get("voice_input"))
+        if isinstance(cfg.get("voice_input"), dict)
+        else {}
+    )
+    voice.setdefault("enabled", False)
+    voice.setdefault("engine", "sherpa_onnx")
+    voice.setdefault("language", "zh")
+    voice.setdefault("auto_send", False)
+    cfg["voice_input"] = voice
+
     return cfg
 
 
@@ -1166,6 +1168,8 @@ def scrub_secrets(config: dict) -> dict:
         out["vision"]["api_key"] = ""
     if "agent_control" in out and isinstance(out["agent_control"], dict):
         out["agent_control"]["auth_token"] = ""
+    if "voice_input" in out and isinstance(out["voice_input"], dict):
+        out["voice_input"]["api_key"] = ""
     return out
 
 

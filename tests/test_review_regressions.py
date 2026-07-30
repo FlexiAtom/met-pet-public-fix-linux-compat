@@ -261,6 +261,9 @@ class TestRuntimeConfigurationSwitch(unittest.TestCase):
             def _init_watcher(self):
                 self.events.append("init:watcher")
 
+            def _init_voice(self):
+                self.events.append("init:voice")
+
             def _init_control(self):
                 self.events.append("init:control")
 

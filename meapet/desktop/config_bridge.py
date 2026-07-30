@@ -3,12 +3,6 @@ from __future__ import annotations
 
 import json
 
-from meapet.config.defaults import (
-    DEFAULT_OLLAMA_VISION_MODEL,
-    MIN_CONFIG_APPLIED_BUBBLE_MS,
-    bubble_duration_ms,
-)
-from meapet.desktop import status_language
 from meapet.config.store import (
     load_config as store_load_config,
     save_config as store_save_config,
@@ -97,6 +91,9 @@ class PetConfigBridgeMixin:
         if callable(stop_control):
             stop_control()
         self._disconnect_watcher_signals()
+        stop_voice = getattr(self, "_stop_voice_engine", None)
+        if callable(stop_voice):
+            stop_voice()
 
         old_adapter = getattr(self, "agent_adapter", None)
         close = getattr(old_adapter, "close", None)
@@ -154,29 +151,19 @@ class PetConfigBridgeMixin:
             self._init_chat()
             self._init_watcher()
             self._init_control()
+            self._init_voice()
         except Exception as exc:
             log.error(
                 f"[config] 运行时应用失败: {type(exc).__name__}: {exc}"
             )
             show = getattr(self, "_show_bubble", None)
             if callable(show):
-                show(
-                    status_language.config_apply_failed(),
-                    bubble_duration_ms(self.config, "reply"),
-                    mood=None,
-                )
+                show("新配置未能启动，请检查配置。", 8000, mood=None)
             return False
 
         show = getattr(self, "_show_bubble", None)
         if callable(show):
-            show(
-                status_language.config_applied(),
-                max(
-                    bubble_duration_ms(self.config, "interaction"),
-                    MIN_CONFIG_APPLIED_BUBBLE_MS,
-                ),
-                mood=None,
-            )
+            show("新配置已应用。", 3500, mood=None)
         return True
 
     def _disconnect_watcher_signals(self):
@@ -209,21 +196,15 @@ class PetConfigBridgeMixin:
         v = self.config.setdefault("vision", {})
         v["backend"] = backend
         if backend == "mimo":
-            if (
-                not v.get("model")
-                or v.get("model") == DEFAULT_OLLAMA_VISION_MODEL
-            ):
+            if not v.get("model") or v.get("model") in ("qwen3.5:4b",):
                 v["model"] = "mimo"
         else:
             if not v.get("model") or v.get("model") in ("mimo",):
-                v["model"] = DEFAULT_OLLAMA_VISION_MODEL
+                v["model"] = "qwen3.5:4b"
         self._save_config()
         self._disconnect_watcher_signals()
         self._init_watcher()
-        self._show_bubble(
-            status_language.vision_backend_switched(backend),
-            bubble_duration_ms(self.config, "interaction"),
-        )
+        self._show_bubble(f"识图后端切换为 {backend}", 2000)
 
     def _set_vision_model(self, model_name: str):
         self.config.setdefault("vision", {})["model"] = model_name
@@ -233,7 +214,4 @@ class PetConfigBridgeMixin:
         self._disconnect_watcher_signals()
         self._init_watcher()
         short = model_name.split(":")[0]
-        self._show_bubble(
-            status_language.vision_model_switched(short),
-            bubble_duration_ms(self.config, "interaction"),
-        )
+        self._show_bubble(f"识图模型切换为 {short}", 2000)
