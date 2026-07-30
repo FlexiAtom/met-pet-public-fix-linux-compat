@@ -111,6 +111,10 @@
     "model_dir": "./live2d/model/mea_live2d",
     "enabled": true,
     "scale": 0.15,
+    "placement_anchor": {
+      "x": 0.54,
+      "y": 0.80
+    },
     "window_mask": {
       "enabled": true,
       "cx": 0.54,

@@ -1,4 +1,4 @@
-"""Live2D 顶层窗口视口的矩形框选与数值编辑控件。"""
+"""Live2D 顶层窗口视口与模型站立锚点的可视化编辑控件。"""
 
 from __future__ import annotations
 
@@ -19,8 +19,14 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from meapet.config.defaults import DEFAULT_LIVE2D_WINDOW_MASK
-from meapet.config.store import normalize_live2d_window_mask
+from meapet.config.defaults import (
+    DEFAULT_LIVE2D_PLACEMENT_ANCHOR,
+    DEFAULT_LIVE2D_WINDOW_MASK,
+)
+from meapet.config.store import (
+    normalize_live2d_placement_anchor,
+    normalize_live2d_window_mask,
+)
 from meapet.ui_theme import MIN_TARGET_SIZE, PALETTE
 
 
@@ -131,9 +137,10 @@ def viewport_edges_to_window_mask(
 
 
 class Live2DViewportEditor(QWidget):
-    """在完整 Live2D 帧上拖动或缩放矩形视觉视口。"""
+    """在完整 Live2D 帧上编辑矩形视觉视口与模型站立锚点。"""
 
     viewportChanged = pyqtSignal(float, float, float, float)
+    placementAnchorChanged = pyqtSignal(float, float)
 
     def __init__(self, preview: QImage | QPixmap | None = None, parent=None):
         super().__init__(parent)
@@ -145,12 +152,19 @@ class Live2DViewportEditor(QWidget):
         self.setAccessibleName("Live2D 窗口范围预览")
         self.setAccessibleDescription(
             "拖动选框移动窗口范围，拖动边缘或角点缩放；"
-            "方向键可移动选框，下面的四边数值可精确调整"
+            "拖动十字标记设置模型站立锚点，方向键移动最后选择的对象；"
+            "下面的百分比数值可精确调整"
         )
 
         self._preview = QPixmap()
         self._fallback_canvas_size = QSize(525, 735)
         self._edges = window_mask_to_viewport_edges(DEFAULT_LIVE2D_WINDOW_MASK)
+        self._anchor = QPointF(
+            DEFAULT_LIVE2D_PLACEMENT_ANCHOR["x"],
+            DEFAULT_LIVE2D_PLACEMENT_ANCHOR["y"],
+        )
+        self._crop_enabled = True
+        self._edit_mode = "viewport"
         self._drag_mode: str | None = None
         self._drag_origin = QPointF()
         self._drag_origin_edges = self._edges
@@ -186,6 +200,45 @@ class Live2DViewportEditor(QWidget):
 
     def viewport(self) -> tuple[float, float, float, float]:
         return self._edges
+
+    def placement_anchor(self) -> dict:
+        return {
+            "x": round(self._anchor.x(), _EDGE_PRECISION),
+            "y": round(self._anchor.y(), _EDGE_PRECISION),
+        }
+
+    def set_placement_anchor(
+        self,
+        value: object,
+        *,
+        emit: bool = False,
+    ) -> None:
+        anchor = normalize_live2d_placement_anchor(value)
+        point = QPointF(anchor["x"], anchor["y"])
+        if point == self._anchor:
+            return
+        self._anchor = point
+        self.update()
+        if emit:
+            self.placementAnchorChanged.emit(point.x(), point.y())
+
+    def set_crop_enabled(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled == self._crop_enabled:
+            return
+        self._crop_enabled = enabled
+        if not enabled and self._drag_mode != "anchor":
+            self._drag_mode = None
+        self.update()
+
+    def set_edit_mode(self, mode: str) -> None:
+        normalized = "anchor" if mode == "anchor" else "viewport"
+        if normalized == self._edit_mode:
+            return
+        self._edit_mode = normalized
+        self._drag_mode = None
+        self.unsetCursor()
+        self.update()
 
     def set_viewport(
         self,
@@ -245,6 +298,9 @@ class Live2DViewportEditor(QWidget):
             canvas.height() * (bottom - top),
         )
 
+    def _anchor_point(self) -> QPointF:
+        return self._canvas_point(self._anchor)
+
     @staticmethod
     def _handle_points(rect: QRectF) -> dict[str, QPointF]:
         center = rect.center()
@@ -285,27 +341,26 @@ class Live2DViewportEditor(QWidget):
             )
 
         selection = self._selection_rect()
-        outside = QPainterPath()
-        outside.setFillRule(Qt.OddEvenFill)
-        outside.addRect(canvas)
-        outside.addRect(selection)
-        scrim = QColor(PALETTE["canvas"])
-        scrim.setAlpha(190)
-        painter.fillPath(outside, scrim)
-
         border = QColor(
             PALETTE["focus"] if self.hasFocus() else PALETTE["primary"]
         )
         if not self.isEnabled():
             border = QColor(PALETTE["text_muted"])
-        pen = QPen(border, 3 if self.hasFocus() else 2)
-        if not self.isEnabled():
-            pen.setStyle(Qt.DashLine)
-        painter.setPen(pen)
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRect(selection)
 
-        if self.isEnabled():
+        if self._crop_enabled:
+            outside = QPainterPath()
+            outside.setFillRule(Qt.OddEvenFill)
+            outside.addRect(canvas)
+            outside.addRect(selection)
+            scrim = QColor(PALETTE["canvas"])
+            scrim.setAlpha(190)
+            painter.fillPath(outside, scrim)
+
+            pen = QPen(border, 3 if self.hasFocus() else 2)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(selection)
+
             painter.setPen(QPen(QColor(PALETTE["canvas"]), 1))
             painter.setBrush(border)
             for point in self._handle_points(selection).values():
@@ -314,6 +369,34 @@ class Live2DViewportEditor(QWidget):
                     _HANDLE_VISUAL_RADIUS,
                     _HANDLE_VISUAL_RADIUS,
                 )
+
+        self._draw_placement_anchor(painter)
+
+    def _draw_placement_anchor(self, painter: QPainter) -> None:
+        """用高对比十字靶标显示模型在桌面上保持不动的画布点。"""
+        point = self._anchor_point()
+        color = QColor(
+            PALETTE["focus"]
+            if self._edit_mode == "anchor" and self.hasFocus()
+            else PALETTE["accent"]
+        )
+        if not self.isEnabled():
+            color = QColor(PALETTE["text_muted"])
+
+        painter.save()
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(PALETTE["canvas"]), 5))
+        painter.drawEllipse(point, 10, 10)
+        painter.drawLine(point + QPointF(-15, 0), point + QPointF(15, 0))
+        painter.drawLine(point + QPointF(0, -15), point + QPointF(0, 15))
+        painter.setPen(QPen(color, 2))
+        painter.drawEllipse(point, 10, 10)
+        painter.drawLine(point + QPointF(-15, 0), point + QPointF(15, 0))
+        painter.drawLine(point + QPointF(0, -15), point + QPointF(0, 15))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(point, 3, 3)
+        painter.restore()
 
     @staticmethod
     def _draw_canvas_grid(painter: QPainter, canvas: QRectF) -> None:
@@ -348,6 +431,10 @@ class Live2DViewportEditor(QWidget):
         )
 
     def _hit_test(self, point: QPointF) -> str | None:
+        if self._edit_mode == "anchor":
+            return "anchor" if self._canvas_rect().contains(point) else None
+        if not self._crop_enabled:
+            return None
         selection = self._selection_rect()
         for name, handle in self._handle_points(selection).items():
             if (
@@ -374,6 +461,7 @@ class Live2DViewportEditor(QWidget):
             "w": Qt.SizeHorCursor,
             "move": Qt.SizeAllCursor,
             "new": Qt.CrossCursor,
+            "anchor": Qt.CrossCursor,
         }.get(mode, Qt.ArrowCursor)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -389,6 +477,11 @@ class Live2DViewportEditor(QWidget):
         self._drag_origin = self._normalized_point(QPointF(event.pos()))
         self._drag_origin_edges = self._edges
         self._new_selection_started = False
+        if mode == "anchor":
+            self.set_placement_anchor(
+                {"x": self._drag_origin.x(), "y": self._drag_origin.y()},
+                emit=True,
+            )
         event.accept()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -404,6 +497,13 @@ class Live2DViewportEditor(QWidget):
         left, top, right, bottom = self._drag_origin_edges
         mode = self._drag_mode
 
+        if mode == "anchor":
+            self.set_placement_anchor(
+                {"x": normalized.x(), "y": normalized.y()},
+                emit=True,
+            )
+            event.accept()
+            return
         if mode == "move":
             width = right - left
             height = bottom - top
@@ -471,6 +571,19 @@ class Live2DViewportEditor(QWidget):
 
         step = 0.05 if event.modifiers() & Qt.ShiftModifier else 0.01
         dx, dy = movement[0] * step, movement[1] * step
+        if self._edit_mode == "anchor":
+            self.set_placement_anchor(
+                {
+                    "x": self._anchor.x() + dx,
+                    "y": self._anchor.y() + dy,
+                },
+                emit=True,
+            )
+            event.accept()
+            return
+        if not self._crop_enabled:
+            super().keyPressEvent(event)
+            return
         left, top, right, bottom = self._edges
         width, height = right - left, bottom - top
         left = max(0.0, min(1.0 - width, left + dx))
@@ -488,7 +601,7 @@ class Live2DViewportEditor(QWidget):
 
 
 class Live2DViewportSettings(QFrame):
-    """框选画布与四边百分比输入组成的完整配置区。"""
+    """框选视觉视口并校准模型站立锚点的完整配置区。"""
 
     changed = pyqtSignal()
 
@@ -497,7 +610,7 @@ class Live2DViewportSettings(QFrame):
         self.setObjectName("SectionCard")
         self.setAccessibleName("Live2D 窗口范围")
         self.setAccessibleDescription(
-            "裁去 Live2D 完整画布周围的透明空白，不改变模型大小和互动语音区域"
+            "裁去 Live2D 完整画布周围的透明空白，并设置缩放时保持不动的模型站立点"
         )
         self._syncing = False
 
@@ -511,7 +624,8 @@ class Live2DViewportSettings(QFrame):
 
         description = QLabel(
             "拖动预览中的矩形框住模型活动范围。这里只缩小透明窗口占用，"
-            "不会缩放模型，也不会改变头部和左右区域语音。"
+            "不会缩放模型，也不会改变头部和左右区域语音；模型站立锚点决定"
+            "缩放或改范围时留在桌面原位的模型位置。"
         )
         description.setObjectName("HelperText")
         description.setWordWrap(True)
@@ -524,6 +638,17 @@ class Live2DViewportSettings(QFrame):
             "关闭后桌宠窗口恢复为完整 Live2D 画布大小"
         )
         layout.addWidget(self.crop_enabled)
+
+        self.anchor_edit_button = QPushButton("调整模型站立锚点")
+        self.anchor_edit_button.setObjectName("SecondaryButton")
+        self.anchor_edit_button.setCheckable(True)
+        self.anchor_edit_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.anchor_edit_button.setAccessibleName("调整模型站立锚点")
+        self.anchor_edit_button.setAccessibleDescription(
+            "选中后可在完整画布预览中点击或拖动十字标记；"
+            "再次点击返回窗口范围编辑"
+        )
+        layout.addWidget(self.anchor_edit_button)
 
         self.editor = Live2DViewportEditor(preview=preview)
         layout.addWidget(self.editor, 1)
@@ -556,6 +681,35 @@ class Live2DViewportSettings(QFrame):
         grid.setColumnStretch(3, 1)
         layout.addLayout(grid)
 
+        anchor_title = QLabel("模型站立锚点")
+        anchor_title.setObjectName("InlineFieldLabel")
+        layout.addWidget(anchor_title)
+
+        anchor_hint = QLabel(
+            "通常放在双脚之间；X、Y 均相对于完整 Live2D 画布。"
+            "它只负责位置稳定，不会改变语音分区。"
+        )
+        anchor_hint.setObjectName("HelperText")
+        anchor_hint.setWordWrap(True)
+        layout.addWidget(anchor_hint)
+
+        anchor_grid = QGridLayout()
+        anchor_grid.setHorizontalSpacing(12)
+        anchor_grid.setVerticalSpacing(8)
+        self.anchor_x_input = self._make_anchor_input("X 坐标")
+        self.anchor_y_input = self._make_anchor_input("Y 坐标")
+        for label_text, control, column in (
+            ("X 坐标", self.anchor_x_input, 0),
+            ("Y 坐标", self.anchor_y_input, 2),
+        ):
+            label = QLabel(label_text)
+            label.setObjectName("InlineFieldLabel")
+            anchor_grid.addWidget(label, 0, column)
+            anchor_grid.addWidget(control, 0, column + 1)
+        anchor_grid.setColumnStretch(1, 1)
+        anchor_grid.setColumnStretch(3, 1)
+        layout.addLayout(anchor_grid)
+
         actions = QHBoxLayout()
         actions.setSpacing(12)
         self.reset_button = QPushButton("恢复默认范围")
@@ -569,10 +723,21 @@ class Live2DViewportSettings(QFrame):
         self.full_canvas_button.setMinimumHeight(MIN_TARGET_SIZE)
         self.full_canvas_button.setAccessibleName("Live2D 窗口使用完整画布")
         actions.addWidget(self.full_canvas_button)
+
+        self.anchor_reset_button = QPushButton("锚点移到范围底部中心")
+        self.anchor_reset_button.setObjectName("SecondaryButton")
+        self.anchor_reset_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.anchor_reset_button.setAccessibleName(
+            "把模型站立锚点移到当前窗口范围底部中心"
+        )
+        actions.addWidget(self.anchor_reset_button)
         actions.addStretch()
         layout.addLayout(actions)
 
         self.editor.viewportChanged.connect(self._on_editor_changed)
+        self.editor.placementAnchorChanged.connect(
+            self._on_editor_anchor_changed
+        )
         for edge, control in self._edge_inputs():
             control.valueChanged.connect(
                 lambda value, current_edge=edge: self._on_input_changed(
@@ -581,9 +746,14 @@ class Live2DViewportSettings(QFrame):
                 )
             )
         self.crop_enabled.toggled.connect(self._on_enabled_changed)
+        self.anchor_edit_button.toggled.connect(self._on_anchor_edit_toggled)
+        self.anchor_x_input.valueChanged.connect(self._on_anchor_input_changed)
+        self.anchor_y_input.valueChanged.connect(self._on_anchor_input_changed)
         self.reset_button.clicked.connect(self.restore_recommended)
         self.full_canvas_button.clicked.connect(self.use_full_canvas)
+        self.anchor_reset_button.clicked.connect(self.reset_placement_anchor)
         self.set_window_mask(DEFAULT_LIVE2D_WINDOW_MASK)
+        self.set_placement_anchor(DEFAULT_LIVE2D_PLACEMENT_ANCHOR)
 
     @staticmethod
     def _make_edge_input(name: str) -> QDoubleSpinBox:
@@ -596,6 +766,20 @@ class Live2DViewportSettings(QFrame):
         control.setKeyboardTracking(False)
         control.setMinimumHeight(MIN_TARGET_SIZE)
         control.setAccessibleName(f"Live2D 窗口{name}")
+        control.setAccessibleDescription("相对于完整 Live2D 画布的百分比坐标")
+        return control
+
+    @staticmethod
+    def _make_anchor_input(name: str) -> QDoubleSpinBox:
+        control = QDoubleSpinBox()
+        control.setObjectName(f"Live2D锚点{name}")
+        control.setRange(0.0, 100.0)
+        control.setDecimals(1)
+        control.setSingleStep(1.0)
+        control.setSuffix("%")
+        control.setKeyboardTracking(False)
+        control.setMinimumHeight(MIN_TARGET_SIZE)
+        control.setAccessibleName(f"Live2D 模型站立锚点{name}")
         control.setAccessibleDescription("相对于完整 Live2D 画布的百分比坐标")
         return control
 
@@ -633,6 +817,16 @@ class Live2DViewportSettings(QFrame):
             enabled=self.crop_enabled.isChecked(),
         )
 
+    def set_placement_anchor(self, value: object) -> None:
+        anchor = normalize_live2d_placement_anchor(value, self.window_mask())
+        self._set_anchor(anchor)
+
+    def placement_anchor(self) -> dict:
+        return {
+            "x": round(self.anchor_x_input.value() / 100.0, _EDGE_PRECISION),
+            "y": round(self.anchor_y_input.value() / 100.0, _EDGE_PRECISION),
+        }
+
     def set_fallback_canvas_size(self, value: object) -> None:
         if isinstance(value, (list, tuple)) and len(value) >= 2:
             self.editor.set_fallback_canvas_size(value[0], value[1])
@@ -649,6 +843,18 @@ class Live2DViewportSettings(QFrame):
             self._syncing = previous
         self._update_status()
 
+    def _set_anchor(self, value: object) -> None:
+        anchor = normalize_live2d_placement_anchor(value, self.window_mask())
+        previous = self._syncing
+        self._syncing = True
+        try:
+            self.editor.set_placement_anchor(anchor)
+            self.anchor_x_input.setValue(anchor["x"] * 100.0)
+            self.anchor_y_input.setValue(anchor["y"] * 100.0)
+        finally:
+            self._syncing = previous
+        self._update_status()
+
     def _on_editor_changed(
         self,
         left: float,
@@ -660,6 +866,25 @@ class Live2DViewportSettings(QFrame):
             return
         self._set_edges((left, top, right, bottom))
         self.changed.emit()
+
+    def _on_editor_anchor_changed(self, x: float, y: float) -> None:
+        if self._syncing:
+            return
+        self._set_anchor({"x": x, "y": y})
+        self.changed.emit()
+
+    def _on_anchor_input_changed(self, _value: float) -> None:
+        if self._syncing:
+            return
+        self._set_anchor(self.placement_anchor())
+        self.changed.emit()
+
+    def _on_anchor_edit_toggled(self, editing_anchor: bool) -> None:
+        self.editor.set_edit_mode("anchor" if editing_anchor else "viewport")
+        self.anchor_edit_button.setText(
+            "正在调整站立锚点" if editing_anchor else "调整模型站立锚点"
+        )
+        self._update_status()
 
     def _on_input_changed(self, edge: str, value: float) -> None:
         if self._syncing:
@@ -685,24 +910,31 @@ class Live2DViewportSettings(QFrame):
 
     def _update_enabled_state(self) -> None:
         enabled = self.crop_enabled.isChecked()
-        self.editor.setEnabled(enabled)
+        self.editor.set_crop_enabled(enabled)
         for _edge, control in self._edge_inputs():
             control.setEnabled(enabled)
 
     def _update_status(self) -> None:
+        anchor = self.placement_anchor()
+        anchor_text = (
+            f"站立锚点 X {anchor['x'] * 100:.1f}%，"
+            f"Y {anchor['y'] * 100:.1f}%"
+        )
         if not self.crop_enabled.isChecked():
-            text = "已关闭裁剪：桌宠窗口使用完整画布。"
+            text = f"已关闭裁剪：桌宠窗口使用完整画布；{anchor_text}。"
         else:
             left, top, right, bottom = self._current_edges()
             width = max(0.0, right - left) * 100.0
             height = max(0.0, bottom - top) * 100.0
             if width >= 99.95 and height >= 99.95:
-                text = "当前使用完整画布（100% × 100%）。"
+                text = f"当前使用完整画布（100% × 100%）；{anchor_text}。"
             else:
                 text = (
                     f"窗口约占完整画布的 {width:.1f}% × {height:.1f}%；"
-                    "模型大小和语音分区保持不变。"
+                    f"{anchor_text}；模型大小和语音分区保持不变。"
                 )
+        if self.anchor_edit_button.isChecked():
+            text += " 当前可在预览中点击或拖动站立锚点。"
         self.status_label.setText(text)
         self.status_label.setAccessibleDescription(text)
 
@@ -714,6 +946,12 @@ class Live2DViewportSettings(QFrame):
     def use_full_canvas(self) -> None:
         self.crop_enabled.setChecked(True)
         self._set_edges((0.0, 0.0, 1.0, 1.0))
+        self.changed.emit()
+
+    def reset_placement_anchor(self) -> None:
+        self._set_anchor(
+            normalize_live2d_placement_anchor(None, self.window_mask())
+        )
         self.changed.emit()
 
 

@@ -251,6 +251,7 @@ class Live2DViewportEditorTests(unittest.TestCase):
         settings.show()
         QApplication.processEvents()
         settings.set_placement_anchor({"x": 0.50, "y": 0.80})
+        settings.anchor_edit_button.click()
         editor = settings.editor
         before_viewport = editor.viewport()
         start = editor._anchor_point().toPoint()
@@ -382,7 +383,8 @@ class Live2DViewportEditorTests(unittest.TestCase):
 
         settings.crop_enabled.setChecked(False)
 
-        self.assertFalse(settings.editor.isEnabled())
+        # 完整画布模式仍允许在预览中校准模型站立锚点。
+        self.assertTrue(settings.editor.isEnabled())
         self.assertFalse(settings.left_input.isEnabled())
         self.assertFalse(settings.window_mask()["enabled"])
         self.assertEqual(settings.editor.viewport(), before)

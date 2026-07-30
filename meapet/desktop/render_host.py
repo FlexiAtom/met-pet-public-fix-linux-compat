@@ -13,7 +13,10 @@ from dataclasses import dataclass
 from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
 
-from meapet.config.store import normalize_live2d_window_mask
+from meapet.config.store import (
+    normalize_live2d_placement_anchor,
+    normalize_live2d_window_mask,
+)
 from meapet.config.defaults import bubble_duration_ms
 from meapet.desktop.renderer import SpriteCanvas, SpriteRenderer
 from meapet.desktop.widgets import (
@@ -136,6 +139,26 @@ def calculate_drag_position(
 ) -> QPoint:
     """根据一次按下时的固定全局锚点计算窗口位置，避免增量累计漂移。"""
     return window_origin + current_pointer - pointer_origin
+
+
+def calculate_live2d_anchor_preserving_position(
+    window_origin: QPoint,
+    before_canvas: QRect,
+    after_canvas: QRect,
+    placement_anchor: object,
+) -> QPoint:
+    """计算几何变化后仍让同一画布锚点留在原屏幕位置的窗口坐标。"""
+    anchor = normalize_live2d_placement_anchor(placement_anchor)
+
+    def local_point(canvas: QRect) -> QPoint:
+        return QPoint(
+            canvas.x() + round(canvas.width() * anchor["x"]),
+            canvas.y() + round(canvas.height() * anchor["y"]),
+        )
+
+    return QPoint(window_origin) + local_point(before_canvas) - local_point(
+        after_canvas
+    )
 
 
 def calculate_bubble_anchor_rect(
@@ -645,8 +668,16 @@ class PetRenderHostMixin:
 
         factor = float(getattr(self, "_size_factor", 1.0))
         before = QRect(self.x(), self.y(), self.width(), self.height())
+        before_canvas = (
+            QRect(self.sprite_label.geometry())
+            if self.sprite_label is not None
+            else None
+        )
         layout = self._apply_live2d_viewport_geometry(factor)
-        self._reanchor_after_resize(before)
+        self._reanchor_after_resize(
+            before,
+            before_live2d_canvas=before_canvas,
+        )
 
         safe_print(
             "[live2d] 窗口已适配视觉视口: "
@@ -774,12 +805,16 @@ class PetRenderHostMixin:
         return layout
 
     def _apply_live2d_viewport_preference(self) -> bool:
-        """热应用 ``window_mask``，同时维持脚底锚点与气泡位置。"""
+        """热应用视觉视口与模型锚点，同时维持模型和气泡位置。"""
         if not getattr(self, "_use_live2d", False) or self.sprite_label is None:
             return False
         before = QRect(self.x(), self.y(), self.width(), self.height())
+        before_canvas = QRect(self.sprite_label.geometry())
         self._apply_live2d_viewport_geometry(self._size_factor)
-        self._reanchor_after_resize(before)
+        self._reanchor_after_resize(
+            before,
+            before_live2d_canvas=before_canvas,
+        )
         self._position_bubble()
         return True
 
@@ -900,6 +935,11 @@ class PetRenderHostMixin:
         safe_print(f"[PREVIEW] factor={factor}, use_live2d={self._use_live2d}, model={self._l2d_model is not None}")
 
         before = QRect(self.x(), self.y(), self.width(), self.height())
+        before_canvas = (
+            QRect(self.sprite_label.geometry())
+            if self._use_live2d and self.sprite_label is not None
+            else None
+        )
         self._size_factor = factor
 
         if self._use_live2d and self.sprite_label:
@@ -922,20 +962,46 @@ class PetRenderHostMixin:
                 self.resize(new_w, new_h)
             self._update_sprite()
 
-        self._reanchor_after_resize(before)
+        self._reanchor_after_resize(
+            before,
+            before_live2d_canvas=before_canvas,
+        )
         self._position_bubble()
 
-    def _reanchor_after_resize(self, before: QRect):
-        """缩放以「底部中心」为锚点，并保证新尺寸仍落在屏幕可用区域内。"""
+    def _reanchor_after_resize(
+        self,
+        before: QRect,
+        *,
+        before_live2d_canvas: QRect | None = None,
+    ):
+        """按模型锚点或 PNG 底部中心重定位，并夹回屏幕可用区域。"""
         width = self.width()
         height = self.height()
-        if before.width() == width and before.height() == height:
+        widget = getattr(self, "sprite_label", None)
+        if (
+            before_live2d_canvas is not None
+            and getattr(self, "_use_live2d", False)
+            and widget is not None
+        ):
+            live2d = (getattr(self, "config", {}) or {}).get("live2d") or {}
+            anchor = normalize_live2d_placement_anchor(
+                live2d.get("placement_anchor"),
+                live2d.get("window_mask"),
+            )
+            target = calculate_live2d_anchor_preserving_position(
+                before.topLeft(),
+                before_live2d_canvas,
+                QRect(widget.geometry()),
+                anchor,
+            )
+        elif before.width() == width and before.height() == height:
             safe_print(f"[REANCHOR] 尺寸未变化 ({width}x{height})，跳过")
             return
-        target = QPoint(
-            before.center().x() - width // 2,
-            before.bottom() + 1 - height,
-        )
+        else:
+            target = QPoint(
+                before.center().x() - width // 2,
+                before.bottom() + 1 - height,
+            )
         area = available_geometry_for(before)
         if area is not None:
             target = clamp_position(target, QSize(width, height), area, margin=0)

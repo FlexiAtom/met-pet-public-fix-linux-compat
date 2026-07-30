@@ -865,6 +865,36 @@ def normalize_live2d_window_mask(value: object) -> dict:
     }
 
 
+def normalize_live2d_placement_anchor(
+    value: object,
+    window_mask: object = None,
+) -> dict:
+    """规范化模型站立锚点（完整 Live2D 画布归一化坐标）。
+
+    历史配置没有锚点：启用裁剪时迁移为当前视觉视口的底部中心；关闭
+    裁剪时使用完整画布底部中心。这样升级本身不会改变桌宠位置。
+    """
+    mask = normalize_live2d_window_mask(window_mask)
+    if mask["enabled"]:
+        fallback_x = float(mask["cx"])
+        fallback_y = min(1.0, float(mask["cy"]) + float(mask["rh"]))
+    else:
+        fallback_x = 0.5
+        fallback_y = 1.0
+
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "x": round(
+            _clamp_ratio(raw.get("x", fallback_x), fallback_x, 0.0, 1.0),
+            6,
+        ),
+        "y": round(
+            _clamp_ratio(raw.get("y", fallback_y), fallback_y, 0.0, 1.0),
+            6,
+        ),
+    }
+
+
 def _normalize_reference_audios(tts: dict) -> dict:
     """规范化每语言固定参考音频，并只读迁移旧单条 GSV 配置。"""
     raw_mapping = tts.get("reference_audios")
@@ -899,6 +929,10 @@ def normalize_config(config: dict) -> dict:
     cfg.setdefault("character", {})
     live2d = cfg.get("live2d") if isinstance(cfg.get("live2d"), dict) else {}
     live2d["window_mask"] = normalize_live2d_window_mask(live2d.get("window_mask"))
+    live2d["placement_anchor"] = normalize_live2d_placement_anchor(
+        live2d.get("placement_anchor"),
+        live2d["window_mask"],
+    )
     cfg["live2d"] = live2d
     cfg["agent_control"] = _normalize_agent_control(cfg.get("agent_control"))
 

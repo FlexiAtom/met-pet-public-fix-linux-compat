@@ -78,6 +78,15 @@ DEFAULT_LIVE2D_WINDOW_MASK = MappingProxyType(
     }
 )
 
+# 模型在桌面上保持不动的画布参照点。默认取推荐视觉视口的底部中心，
+# 使旧配置升级后与原先固定“窗口底部中心”的视觉位置一致。
+DEFAULT_LIVE2D_PLACEMENT_ANCHOR = MappingProxyType(
+    {
+        "x": 0.54,
+        "y": 0.80,
+    }
+)
+
 
 def default_agent_url(kind: object) -> str:
     """按 Agent 类型返回本地 WebSocket 默认地址。"""

@@ -13,6 +13,7 @@ from meapet.config.store import (
     load_config as store_load_config,
     save_config as store_save_config,
     normalize_config,
+    normalize_live2d_placement_anchor,
     normalize_live2d_window_mask,
     resolve_writable_config_path,
 )
@@ -55,6 +56,12 @@ class PetConfigBridgeMixin:
             current_live2d.get("window_mask")
             if isinstance(current_live2d, dict)
             else None
+        )
+        old_placement_anchor = normalize_live2d_placement_anchor(
+            current_live2d.get("placement_anchor")
+            if isinstance(current_live2d, dict)
+            else None,
+            old_window_mask,
         )
 
         worker = getattr(self, "_chat_worker", None)
@@ -104,7 +111,16 @@ class PetConfigBridgeMixin:
             if isinstance(new_live2d, dict)
             else None
         )
-        viewport_changed = old_window_mask != new_window_mask
+        new_placement_anchor = normalize_live2d_placement_anchor(
+            new_live2d.get("placement_anchor")
+            if isinstance(new_live2d, dict)
+            else None,
+            new_window_mask,
+        )
+        viewport_changed = (
+            old_window_mask != new_window_mask
+            or old_placement_anchor != new_placement_anchor
+        )
         try:
             apply_motion = getattr(self, "_apply_motion_preference", None)
             if callable(apply_motion):
@@ -120,7 +136,7 @@ class PetConfigBridgeMixin:
                     None,
                 )
                 if callable(apply_viewport):
-                    # window_mask 只改变顶层视觉视口；完整画布与互动坐标不变。
+                    # 视觉视口与站立锚点只改变窗口几何；互动坐标仍属完整画布。
                     apply_viewport()
             self._init_tts()
             self._init_chat()
