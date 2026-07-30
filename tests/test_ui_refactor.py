@@ -517,6 +517,52 @@ class UiRefactorTests(unittest.TestCase):
             )
         )
 
+    def test_configuration_window_exposes_resize_and_maximize_controls(
+        self,
+    ) -> None:
+        from meapet.ui_theme import MIN_TARGET_SIZE
+        from wizard.app import SetupWizard
+
+        wizard = self._track(SetupWizard())
+        wizard._load_timer.stop()
+        wizard.env_page._check_timer.stop()
+        wizard.setWindowOpacity(1.0)
+        wizard.show()
+        self.app.processEvents()
+
+        self.assertTrue(wizard.windowFlags() & Qt.WindowMaximizeButtonHint)
+        self.assertGreater(wizard.maximumWidth(), wizard.minimumWidth())
+        self.assertGreater(wizard.maximumHeight(), wizard.minimumHeight())
+        self.assertGreaterEqual(
+            wizard.maximize_btn.minimumHeight(),
+            MIN_TARGET_SIZE,
+        )
+        self.assertTrue(wizard.maximize_btn.isVisible())
+        self.assertTrue(wizard.maximize_btn.accessibleName())
+        self.assertGreaterEqual(wizard.size_grip.width(), 28)
+        self.assertGreaterEqual(wizard.size_grip.height(), 28)
+        self.assertTrue(wizard.size_grip.isVisible())
+        self.assertTrue(wizard.size_grip.accessibleName())
+
+        before = wizard.size()
+        wizard.resize(before.width() + 120, before.height() + 80)
+        self.app.processEvents()
+        self.assertGreater(wizard.width(), before.width())
+        self.assertGreater(wizard.height(), before.height())
+
+        QTest.mouseClick(wizard.maximize_btn, Qt.LeftButton)
+        self.app.processEvents()
+        self.assertTrue(wizard.isMaximized())
+        self.assertIn("还原", wizard.maximize_btn.text())
+        self.assertTrue(wizard.mask().isEmpty())
+        self.assertFalse(wizard.size_grip.isVisible())
+
+        QTest.mouseClick(wizard.maximize_btn, Qt.LeftButton)
+        self.app.processEvents()
+        self.assertFalse(wizard.isMaximized())
+        self.assertIn("最大化", wizard.maximize_btn.text())
+        self.assertTrue(wizard.size_grip.isVisible())
+
     def test_configuration_restores_pet_window_size_from_existing_config(
         self,
     ) -> None:

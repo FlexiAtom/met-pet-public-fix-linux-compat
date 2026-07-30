@@ -12,7 +12,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt  # noqa: E402
 from PyQt5.QtGui import QColor, QImage, QMouseEvent  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QPushButton, QWidget  # noqa: E402
 
 from meapet.desktop.config_bridge import PetConfigBridgeMixin  # noqa: E402
 from meapet.desktop.render_host import PetRenderHostMixin  # noqa: E402
@@ -125,6 +125,40 @@ class Live2DViewportEditorTests(unittest.TestCase):
             QMouseEvent(
                 QEvent.MouseButtonRelease,
                 QPointF(end),
+                Qt.LeftButton,
+                Qt.NoButton,
+                Qt.NoModifier,
+            ),
+        )
+
+    @staticmethod
+    def _drag_path(widget, points: tuple[QPoint, ...]) -> None:
+        QApplication.sendEvent(
+            widget,
+            QMouseEvent(
+                QEvent.MouseButtonPress,
+                QPointF(points[0]),
+                Qt.LeftButton,
+                Qt.LeftButton,
+                Qt.NoModifier,
+            ),
+        )
+        for point in points[1:]:
+            QApplication.sendEvent(
+                widget,
+                QMouseEvent(
+                    QEvent.MouseMove,
+                    QPointF(point),
+                    Qt.NoButton,
+                    Qt.LeftButton,
+                    Qt.NoModifier,
+                ),
+            )
+        QApplication.sendEvent(
+            widget,
+            QMouseEvent(
+                QEvent.MouseButtonRelease,
+                QPointF(points[-1]),
                 Qt.LeftButton,
                 Qt.NoButton,
                 Qt.NoModifier,
@@ -367,48 +401,48 @@ class Live2DViewportEditorTests(unittest.TestCase):
 
     def test_editor_draws_disconnected_keep_regions_and_a_cutout(self) -> None:
         settings = self._track(Live2DViewportSettings())
-        settings.resize(800, 1040)
-        settings.show()
+        dialog = self._track(settings.create_shape_editor_dialog())
+        dialog.resize(900, 720)
+        dialog.show()
         QApplication.processEvents()
-        settings.shape_enabled.setChecked(True)
 
         self._draw_shape_contour(
-            settings,
+            dialog,
             "add",
             ((0.25, 0.18), (0.48, 0.18), (0.42, 0.52), (0.28, 0.48)),
         )
         self._draw_shape_contour(
-            settings,
+            dialog,
             "add",
             ((0.58, 0.58), (0.72, 0.58), (0.66, 0.78)),
         )
         self._draw_shape_contour(
-            settings,
+            dialog,
             "subtract",
             ((0.32, 0.27), (0.40, 0.27), (0.36, 0.38)),
         )
 
-        shape = settings.window_shape()
+        shape = dialog.window_shape()
         self.assertTrue(shape["enabled"])
         self.assertEqual(
             [contour["operation"] for contour in shape["contours"]],
             ["add", "add", "subtract"],
         )
-        self.assertIn("2 个保留区", settings.shape_status_label.text())
-        self.assertIn("1 个挖空区", settings.shape_status_label.text())
+        self.assertIn("2 个保留区", dialog.shape_status_label.text())
+        self.assertIn("1 个挖空区", dialog.shape_status_label.text())
 
-        settings.shape_undo_button.click()
+        dialog.shape_undo_button.click()
         self.assertEqual(
             [
                 contour["operation"]
-                for contour in settings.window_shape()["contours"]
+                for contour in dialog.window_shape()["contours"]
             ],
             ["add", "add"],
         )
 
-        settings.shape_clear_button.click()
+        dialog.shape_clear_button.click()
         self.assertEqual(
-            settings.window_shape(),
+            dialog.window_shape(),
             {"enabled": True, "contours": []},
         )
 
@@ -430,18 +464,19 @@ class Live2DViewportEditorTests(unittest.TestCase):
         saved = settings.window_shape()
         self.assertFalse(saved["enabled"])
         self.assertEqual(saved["contours"], shape["contours"])
-        self.assertFalse(settings.shape_add_button.isEnabled())
+        self.assertTrue(settings.shape_edit_button.isEnabled())
+        self.assertIn("1 个保留区", settings.shape_summary_label.text())
 
     def test_shape_keyboard_shortcuts_finish_undo_and_cancel_drafts(
         self,
     ) -> None:
         settings = self._track(Live2DViewportSettings())
-        settings.resize(800, 1040)
-        settings.show()
+        dialog = self._track(settings.create_shape_editor_dialog())
+        dialog.resize(900, 720)
+        dialog.show()
         QApplication.processEvents()
-        settings.shape_enabled.setChecked(True)
-        settings.shape_add_button.click()
-        editor = settings.editor
+        dialog.shape_add_button.click()
+        editor = dialog.editor
         points = (
             QPointF(0.25, 0.20),
             QPointF(0.70, 0.20),
@@ -455,16 +490,16 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self._click(editor, editor._canvas_point(points[-1]).toPoint())
         QTest.keyClick(editor, Qt.Key_Return)
 
-        self.assertIsNone(editor.shape_tool())
+        self.assertEqual(editor.shape_tool(), "add")
         self.assertEqual(
             [
                 contour["operation"]
-                for contour in settings.window_shape()["contours"]
+                for contour in dialog.window_shape()["contours"]
             ],
             ["add"],
         )
 
-        settings.shape_subtract_button.click()
+        dialog.shape_subtract_button.click()
         self._click(
             editor,
             editor._canvas_point(QPointF(0.45, 0.35)).toPoint(),
@@ -473,13 +508,13 @@ class Live2DViewportEditorTests(unittest.TestCase):
 
         self.assertIsNone(editor.shape_tool())
         self.assertEqual(editor.draft_shape_point_count(), 0)
-        self.assertEqual(len(settings.window_shape()["contours"]), 1)
+        self.assertEqual(len(dialog.window_shape()["contours"]), 1)
 
     def test_shape_preview_renders_completed_regions_and_a_draft(self) -> None:
         settings = self._track(Live2DViewportSettings())
-        settings.resize(800, 1040)
-        settings.show()
-        settings.set_window_shape(
+        dialog = self._track(settings.create_shape_editor_dialog())
+        dialog.resize(900, 720)
+        dialog.set_window_shape(
             {
                 "enabled": True,
                 "contours": [
@@ -503,17 +538,158 @@ class Live2DViewportEditorTests(unittest.TestCase):
                 ],
             }
         )
+        dialog.show()
         QApplication.processEvents()
-        settings.shape_add_button.click()
+        dialog.shape_add_button.click()
         self._click(
-            settings.editor,
-            settings.editor._canvas_point(QPointF(0.3, 0.3)).toPoint(),
+            dialog.editor,
+            dialog.editor._canvas_point(QPointF(0.3, 0.3)).toPoint(),
         )
 
-        rendered = settings.editor.grab().toImage()
+        rendered = dialog.editor.grab().toImage()
 
         self.assertFalse(rendered.isNull())
-        self.assertEqual(rendered.size(), settings.editor.size())
+        self.assertEqual(rendered.size(), dialog.editor.size())
+
+    def test_shape_editor_uses_progressive_resizable_dialog(self) -> None:
+        from meapet.ui_theme import MIN_TARGET_SIZE
+
+        settings = self._track(Live2DViewportSettings())
+        button_texts = {
+            button.text() for button in settings.findChildren(QPushButton)
+        }
+
+        self.assertIn("编辑精细形状…", settings.shape_edit_button.text())
+        self.assertNotIn("绘制保留区", button_texts)
+        self.assertNotIn("完成轮廓", button_texts)
+        self.assertGreaterEqual(
+            settings.shape_edit_button.minimumHeight(),
+            MIN_TARGET_SIZE,
+        )
+
+        dialog = self._track(settings.create_shape_editor_dialog())
+        self.assertTrue(dialog.isSizeGripEnabled())
+        self.assertTrue(dialog.windowFlags() & Qt.WindowMaximizeButtonHint)
+        self.assertGreaterEqual(dialog.minimumWidth(), 720)
+        self.assertGreaterEqual(dialog.minimumHeight(), 520)
+        self.assertGreater(dialog.maximumWidth(), dialog.minimumWidth())
+        self.assertGreater(dialog.maximumHeight(), dialog.minimumHeight())
+        self.assertGreaterEqual(dialog.apply_button.minimumHeight(), MIN_TARGET_SIZE)
+        self.assertGreaterEqual(dialog.cancel_button.minimumHeight(), MIN_TARGET_SIZE)
+        self.assertIn("按住鼠标", dialog.instructions_label.text())
+        self.assertIn("双击", dialog.instructions_label.text())
+
+    def test_freehand_lasso_finishes_on_release_and_keeps_the_tool(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        dialog = self._track(settings.create_shape_editor_dialog())
+        dialog.resize(900, 720)
+        dialog.show()
+        QApplication.processEvents()
+        editor = dialog.editor
+        dialog.shape_add_button.click()
+
+        self._drag_path(
+            editor,
+            tuple(
+                editor._canvas_point(point).toPoint()
+                for point in (
+                    QPointF(0.25, 0.20),
+                    QPointF(0.65, 0.20),
+                    QPointF(0.72, 0.65),
+                    QPointF(0.30, 0.75),
+                    QPointF(0.25, 0.20),
+                )
+            ),
+        )
+
+        shape = dialog.window_shape()
+        self.assertEqual(
+            [contour["operation"] for contour in shape["contours"]],
+            ["add"],
+        )
+        self.assertGreaterEqual(len(shape["contours"][0]["points"]), 4)
+        self.assertEqual(editor.draft_shape_point_count(), 0)
+        self.assertEqual(editor.shape_tool(), "add")
+        self.assertIn("1 个保留区", dialog.shape_status_label.text())
+
+        dialog.shape_subtract_button.click()
+        self._drag_path(
+            editor,
+            tuple(
+                editor._canvas_point(point).toPoint()
+                for point in (
+                    QPointF(0.40, 0.35),
+                    QPointF(0.55, 0.35),
+                    QPointF(0.50, 0.52),
+                    QPointF(0.40, 0.35),
+                )
+            ),
+        )
+        self.assertEqual(
+            [
+                contour["operation"]
+                for contour in dialog.window_shape()["contours"]
+            ],
+            ["add", "subtract"],
+        )
+
+    def test_polygon_double_click_finishes_without_a_separate_action(
+        self,
+    ) -> None:
+        settings = self._track(Live2DViewportSettings())
+        dialog = self._track(settings.create_shape_editor_dialog())
+        dialog.resize(900, 720)
+        dialog.show()
+        QApplication.processEvents()
+        editor = dialog.editor
+        dialog.shape_add_button.click()
+
+        self._click(editor, editor._canvas_point(QPointF(0.25, 0.20)).toPoint())
+        self._click(editor, editor._canvas_point(QPointF(0.70, 0.20)).toPoint())
+        QTest.mouseDClick(
+            editor,
+            Qt.LeftButton,
+            Qt.NoModifier,
+            editor._canvas_point(QPointF(0.50, 0.75)).toPoint(),
+        )
+
+        self.assertEqual(len(dialog.window_shape()["contours"]), 1)
+        self.assertEqual(editor.draft_shape_point_count(), 0)
+        self.assertEqual(editor.shape_tool(), "add")
+
+    def test_shape_dialog_cancel_preserves_and_accept_applies_the_shape(
+        self,
+    ) -> None:
+        settings = self._track(Live2DViewportSettings())
+        original = {
+            "enabled": False,
+            "contours": [
+                {
+                    "operation": "add",
+                    "points": [[0.2, 0.2], [0.7, 0.2], [0.5, 0.8]],
+                }
+            ],
+        }
+        replacement = {
+            "enabled": True,
+            "contours": [
+                {
+                    "operation": "add",
+                    "points": [[0.1, 0.1], [0.8, 0.1], [0.5, 0.9]],
+                }
+            ],
+        }
+        settings.set_window_shape(original)
+
+        cancelled = self._track(settings.create_shape_editor_dialog())
+        cancelled.set_window_shape(replacement)
+        cancelled.reject()
+        self.assertEqual(settings.window_shape(), original)
+
+        accepted = self._track(settings.create_shape_editor_dialog())
+        accepted.set_window_shape(replacement)
+        accepted.accept()
+        self.assertEqual(settings.window_shape(), replacement)
 
     def test_direction_keys_move_the_last_directly_selected_object(self) -> None:
         settings = self._track(Live2DViewportSettings())
