@@ -1,16 +1,19 @@
 """PNG / Live2D render host: switch modes, size, hit region, standby.
 
-椭圆裁剪已全部移除。窗口大小直接联动 Live2D 模型画布：
-- Live2D 模式下，窗口尺寸 = 模型画布尺寸 × size_factor
-- 不再设置 Qt setMask / OS 椭圆窗形 / OpenGL stencil
-- 触摸事件在全窗口范围内有效，与视觉位置天然一致
+Live2D 保留完整模型画布用于渲染动作，但顶层桌宠窗口只暴露配置的视觉视口：
+- OpenGL 子控件尺寸 = 模型画布尺寸 × size_factor
+- 顶层窗口尺寸 = ``live2d.window_mask`` 外接矩形对应的视觉区域
+- 子控件通过负偏移放在顶层窗口后方，由普通父子窗口矩形裁剪透明留白
+- 不使用 Qt setMask / OS 椭圆窗形 / OpenGL stencil，避免裁断大幅动作
 """
+from dataclasses import dataclass
 import os
 from collections.abc import Callable
 
 from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
 
+from meapet.config.store import normalize_live2d_window_mask
 from meapet.config.defaults import bubble_duration_ms
 from meapet.desktop.renderer import SpriteCanvas, SpriteRenderer
 from meapet.desktop.widgets import (
@@ -56,6 +59,72 @@ MIN_CANVAS_SIZE = 256
 MAX_CANVAS_SIZE = 4096
 # 当模型画布异常时使用的默认尺寸。
 DEFAULT_CANVAS_SIZE = (1024, 1024)
+
+
+@dataclass(frozen=True)
+class Live2DViewportLayout:
+    """完整 Live2D 画布子控件与顶层视觉窗口的像素几何。"""
+
+    widget_x: int
+    widget_y: int
+    widget_width: int
+    widget_height: int
+    window_width: int
+    window_height: int
+
+
+def calculate_live2d_viewport_layout(
+    canvas_width: int,
+    canvas_height: int,
+    factor: float,
+    window_mask: dict | None = None,
+) -> Live2DViewportLayout:
+    """把模型画布与视觉视口换算成稳定的父子窗口几何。
+
+    ``window_mask`` 是已有配置键。这里不恢复椭圆窗口 mask，只使用椭圆
+    的外接矩形作为模型专属视觉视口；这样能裁去已知透明留白，同时保留
+    外接矩形四角供头发、耳朵等动作伸展。关闭该配置时完整显示模型画布。
+    """
+    width = max(1, int(canvas_width))
+    height = max(1, int(canvas_height))
+    scale = normalize_pet_size_factor(factor)
+    widget_width = max(MIN_CANVAS_SIZE // 2, round(width * scale))
+    widget_height = max(MIN_CANVAS_SIZE // 2, round(height * scale))
+
+    mask = normalize_live2d_window_mask(window_mask)
+    if not mask["enabled"]:
+        return Live2DViewportLayout(
+            widget_x=0,
+            widget_y=0,
+            widget_width=widget_width,
+            widget_height=widget_height,
+            window_width=widget_width,
+            window_height=widget_height,
+        )
+
+    left_ratio = max(0.0, float(mask["cx"]) - float(mask["rw"]))
+    top_ratio = max(0.0, float(mask["cy"]) - float(mask["rh"]))
+    right_ratio = min(1.0, float(mask["cx"]) + float(mask["rw"]))
+    bottom_ratio = min(1.0, float(mask["cy"]) + float(mask["rh"]))
+
+    crop_left = max(0, min(widget_width - 1, round(widget_width * left_ratio)))
+    crop_top = max(0, min(widget_height - 1, round(widget_height * top_ratio)))
+    crop_right = max(
+        crop_left + 1,
+        min(widget_width, round(widget_width * right_ratio)),
+    )
+    crop_bottom = max(
+        crop_top + 1,
+        min(widget_height, round(widget_height * bottom_ratio)),
+    )
+    return Live2DViewportLayout(
+        widget_x=-crop_left,
+        widget_y=-crop_top,
+        widget_width=widget_width,
+        widget_height=widget_height,
+        window_width=crop_right - crop_left,
+        window_height=crop_bottom - crop_top,
+    )
 
 
 def calculate_drag_position(
@@ -565,35 +634,23 @@ class PetRenderHostMixin:
     # ------------------------------------------------------------ 窗口尺寸调整
 
     def _fit_window_to_model(self):
-        """根据 Live2D 模型画布大小 × size_factor 调整窗口尺寸。
-
-        模型加载后，其画布大小已知，窗口应刚好包裹模型渲染区域，
-        不再有多余透明边距，触摸区域与视觉位置天然一致。
-        """
+        """首帧后按实际画布刷新视觉视口，并保持模型脚底位置。"""
         model = self._l2d_model
         if model is None:
             safe_print("[live2d] _fit_window_to_model: 模型未加载，跳过")
             return
 
-        canvas_w, canvas_h = self._read_canvas_size_from_model(model)
-        if canvas_w is None:
-            canvas_w, canvas_h = DEFAULT_CANVAS_SIZE
-            safe_print(f"[live2d] 画布尺寸获取失败，使用默认: {canvas_w}x{canvas_h}")
-
         factor = float(getattr(self, "_size_factor", 1.0))
-        new_w = max(MIN_CANVAS_SIZE // 2, round(canvas_w * factor))
-        new_h = max(MIN_CANVAS_SIZE // 2, round(canvas_h * factor))
-
-        widget = self.sprite_label
-        if widget is not None:
-            widget.resize(new_w, new_h)
-        self.resize(new_w, new_h)
-
-        # 以底部中心为锚点，防止放大时往右下角长出去
-        before = QRect(self.x(), self.y(), new_w, new_h)
+        before = QRect(self.x(), self.y(), self.width(), self.height())
+        layout = self._apply_live2d_viewport_geometry(factor)
         self._reanchor_after_resize(before)
 
-        safe_print(f"[live2d] 窗口已适配模型画布: {new_w}x{new_h} (canvas={canvas_w}x{canvas_h}, factor={factor})")
+        safe_print(
+            "[live2d] 窗口已适配视觉视口: "
+            f"window={layout.window_width}x{layout.window_height} "
+            f"canvas={layout.widget_width}x{layout.widget_height} "
+            f"offset=({layout.widget_x},{layout.widget_y}) factor={factor}"
+        )
 
     def _reveal_live2d_window(self):
         """刷新已经正常映射的 OpenGL 子控件，不重置顶层窗口。"""
@@ -666,13 +723,14 @@ class PetRenderHostMixin:
         widget.initialization_failed.connect(
             self._on_live2d_initialization_failed
         )
-        # 初始大小：使用模型画布（或默认值）× size_factor
-        w0, h0 = self._scaled_live2d_size(self._size_factor)
-        widget.move(0, 0)
-        widget.resize(w0, h0)
-        self.resize(w0, h0)
+        # 子控件保留完整模型画布，顶层窗口只显示配置的视觉视口。
+        layout = self._apply_live2d_viewport_geometry(self._size_factor)
         widget.show()
-        safe_print(f"[live2d] 控件已创建，等待首帧: {w0}x{h0}")
+        safe_print(
+            "[live2d] 控件已创建，等待首帧: "
+            f"window={layout.window_width}x{layout.window_height} "
+            f"canvas={layout.widget_width}x{layout.widget_height}"
+        )
 
     def _safe_renderer(self):
         if self._use_live2d and self._l2d_model:
@@ -680,12 +738,37 @@ class PetRenderHostMixin:
         return self.renderer
 
     def _scaled_live2d_size(self, factor: float) -> tuple[int, int]:
-        """返回模型画布大小 × 缩放因子，作为窗口尺寸。"""
+        """返回裁去模型透明留白后的顶层窗口尺寸。"""
+        layout = self._live2d_viewport_layout(factor)
+        return layout.window_width, layout.window_height
+
+    def _live2d_viewport_layout(self, factor: float) -> Live2DViewportLayout:
+        """按当前模型和配置计算 Live2D 父子窗口几何。"""
         base_w, base_h = self._live2d_base_size()
-        return (
-            max(MIN_CANVAS_SIZE // 2, round(base_w * factor)),
-            max(MIN_CANVAS_SIZE // 2, round(base_h * factor)),
+        live2d = (getattr(self, "config", {}) or {}).get("live2d") or {}
+        return calculate_live2d_viewport_layout(
+            base_w,
+            base_h,
+            factor,
+            live2d.get("window_mask"),
         )
+
+    def _apply_live2d_viewport_geometry(
+        self,
+        factor: float,
+    ) -> Live2DViewportLayout:
+        """应用完整画布子控件与裁剪顶层窗口的几何。"""
+        layout = self._live2d_viewport_layout(factor)
+        widget = self.sprite_label
+        if widget is not None:
+            widget.setGeometry(
+                layout.widget_x,
+                layout.widget_y,
+                layout.widget_width,
+                layout.widget_height,
+            )
+        self.resize(layout.window_width, layout.window_height)
+        return layout
 
     def _safe_set_mood(self, mood: str):
         r = self._safe_renderer()
@@ -771,13 +854,13 @@ class PetRenderHostMixin:
         self._size_factor = factor
 
         if self._use_live2d and self.sprite_label:
-            # Live2D 模式：根据模型画布重新计算窗口大小
-            base_w, base_h = self._live2d_base_size()
-            new_w = max(MIN_CANVAS_SIZE // 2, round(base_w * factor))
-            new_h = max(MIN_CANVAS_SIZE // 2, round(base_h * factor))
-            safe_print(f"[PREVIEW] Live2D resize: base=({base_w},{base_h}) -> ({new_w},{new_h})")
-            self.sprite_label.resize(new_w, new_h)
-            self.resize(new_w, new_h)
+            layout = self._apply_live2d_viewport_geometry(factor)
+            safe_print(
+                "[PREVIEW] Live2D viewport: "
+                f"window=({layout.window_width},{layout.window_height}) "
+                f"canvas=({layout.widget_width},{layout.widget_height}) "
+                f"offset=({layout.widget_x},{layout.widget_y})"
+            )
         else:
             if self.renderer is None:
                 safe_print("[PREVIEW] no renderer available, skip")
