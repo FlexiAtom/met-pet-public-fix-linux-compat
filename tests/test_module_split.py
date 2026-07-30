@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -368,7 +370,7 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
                 PetChatFlowMixin._on_tts_audio(Host(), str(source))
 
     def test_vits_setup_error_callback_keeps_exception_message(self):
-        from wizard.page_tts_vits import QMessageBox, QTimer, TtsPageVitsMixin
+        from wizard.page_tts_vits import QMessageBox, TtsPageVitsMixin
 
         callbacks = []
 
@@ -429,7 +431,10 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
                 "wizard.page_tts_vits.styled_message_box",
                 return_value=QMessageBox.Yes,
             ),
-            mock.patch.object(QTimer, "singleShot", side_effect=lambda _ms, cb: callbacks.append(cb)),
+            mock.patch(
+                "wizard.page_tts_vits._post_to_main",
+                side_effect=callbacks.append,
+            ),
             mock.patch("subprocess.run", side_effect=fake_run),
             mock.patch("threading.Thread", ImmediateThread),
         ):
@@ -854,7 +859,7 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
 import os
 import sys
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 import meapet.config.store as store
 
 del store.normalize_gsv_ref_language

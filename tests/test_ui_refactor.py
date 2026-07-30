@@ -7,7 +7,7 @@ import re
 import unittest
 from unittest.mock import patch
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt5.QtCore import (  # noqa: E402
     QAbstractAnimation,
@@ -78,9 +78,13 @@ class UiRefactorTests(unittest.TestCase):
     def tearDown(self) -> None:
         for widget in reversed(self._widgets):
             try:
+                for timer in widget.findChildren(QTimer):
+                    timer.stop()
                 widget.close()
+                widget.deleteLater()
             except RuntimeError:
                 pass
+        QApplication.processEvents()
 
     def _track(self, widget):
         self._widgets.append(widget)
@@ -350,7 +354,19 @@ class UiRefactorTests(unittest.TestCase):
         self.assertIsInstance(wizard.tabs, QTabWidget)
         self.assertEqual(
             [wizard.tabs.tabText(index) for index in range(wizard.tabs.count())],
-            ["环境", "对话", "语音", "屏幕识图", "语音输入"],
+            ["环境", "Live2D", "对话", "语音", "屏幕识图", "语音输入"],
+        )
+        live2d_scroll = wizard.tabs.widget(wizard.TAB_LIVE2D)
+        self.assertIs(
+            live2d_scroll.widget().findChild(
+                type(wizard.live2d_viewport_settings)
+            ),
+            wizard.live2d_viewport_settings,
+        )
+        self.assertFalse(
+            wizard.display_page.isAncestorOf(
+                wizard.live2d_viewport_settings
+            )
         )
         self.assertFalse(hasattr(wizard, "progress"))
         self.assertFalse(hasattr(wizard, "back_btn"))
@@ -477,8 +493,7 @@ class UiRefactorTests(unittest.TestCase):
             WIZARD_STYLESHEET,
         )
 
-    def test_configuration_window_mask_removes_square_outer_corners(self) -> None:
-        from meapet.ui_theme import RADIUS_LARGE
+    def test_configuration_window_supports_all_native_resize_edges(self) -> None:
         from wizard.app import SetupWizard
 
         wizard = self._track(SetupWizard())
@@ -488,30 +503,123 @@ class UiRefactorTests(unittest.TestCase):
         wizard.show()
         self.app.processEvents()
 
-        mask = wizard.mask()
-        self.assertFalse(mask.isEmpty())
-        for corner in (
-            QPoint(0, 0),
-            QPoint(wizard.width() - 1, 0),
-            QPoint(0, wizard.height() - 1),
-            QPoint(wizard.width() - 1, wizard.height() - 1),
-        ):
-            with self.subTest(corner=corner):
-                self.assertFalse(mask.contains(corner))
-        self.assertTrue(mask.contains(QPoint(RADIUS_LARGE, RADIUS_LARGE)))
-        self.assertTrue(
-            mask.contains(QPoint(wizard.width() // 2, wizard.height() // 2))
+        midpoint_x = wizard.width() // 2
+        midpoint_y = wizard.height() // 2
+        expected = (
+            (QPoint(1, midpoint_y), Qt.LeftEdge),
+            (QPoint(wizard.width() - 2, midpoint_y), Qt.RightEdge),
+            (QPoint(midpoint_x, 1), Qt.TopEdge),
+            (QPoint(midpoint_x, wizard.height() - 2), Qt.BottomEdge),
+            (QPoint(1, 1), Qt.LeftEdge | Qt.TopEdge),
+            (
+                QPoint(wizard.width() - 2, wizard.height() - 2),
+                Qt.RightEdge | Qt.BottomEdge,
+            ),
+        )
+        for point, edges in expected:
+            with self.subTest(point=point):
+                self.assertEqual(wizard._resize_edges_at(point), edges)
+        self.assertEqual(
+            wizard._resize_edges_at(QPoint(midpoint_x, midpoint_y)),
+            Qt.Edges(),
         )
 
-        wizard.resize(940, 820)
-        self.app.processEvents()
-        resized_mask = wizard.mask()
-        self.assertFalse(resized_mask.contains(QPoint(0, 0)))
-        self.assertTrue(
-            resized_mask.contains(
-                QPoint(wizard.width() // 2, wizard.height() // 2)
+        with patch.object(
+            wizard,
+            "_start_system_resize",
+            return_value=True,
+        ) as start_resize:
+            local = QPoint(1, midpoint_y)
+            event = QMouseEvent(
+                QEvent.MouseButtonPress,
+                local,
+                wizard.mapToGlobal(local),
+                Qt.LeftButton,
+                Qt.LeftButton,
+                Qt.NoModifier,
             )
+            self.assertTrue(wizard.eventFilter(wizard, event))
+        start_resize.assert_called_once_with(Qt.LeftEdge)
+
+    def test_configuration_window_exposes_resize_and_maximize_controls(
+        self,
+    ) -> None:
+        from meapet.ui_theme import MIN_TARGET_SIZE
+        from wizard.app import SetupWizard
+
+        wizard = self._track(SetupWizard())
+        wizard._load_timer.stop()
+        wizard.env_page._check_timer.stop()
+        wizard.setWindowOpacity(1.0)
+        wizard.show()
+        self.app.processEvents()
+
+        self.assertTrue(wizard.windowFlags() & Qt.WindowMaximizeButtonHint)
+        self.assertGreater(wizard.maximumWidth(), wizard.minimumWidth())
+        self.assertGreater(wizard.maximumHeight(), wizard.minimumHeight())
+        self.assertGreaterEqual(
+            wizard.maximize_btn.minimumHeight(),
+            MIN_TARGET_SIZE,
         )
+        self.assertTrue(wizard.maximize_btn.isVisible())
+        self.assertTrue(wizard.maximize_btn.accessibleName())
+        self.assertFalse(hasattr(wizard, "size_grip"))
+
+        before = wizard.size()
+        wizard.resize(before.width() + 120, before.height() + 80)
+        self.app.processEvents()
+        self.assertGreater(wizard.width(), before.width())
+        self.assertGreater(wizard.height(), before.height())
+
+        QTest.mouseClick(wizard.maximize_btn, Qt.LeftButton)
+        self.app.processEvents()
+        self.assertTrue(wizard.isMaximized())
+        self.assertIn("还原", wizard.maximize_btn.text())
+        self.assertTrue(wizard.mask().isEmpty())
+
+        QTest.mouseClick(wizard.maximize_btn, Qt.LeftButton)
+        self.app.processEvents()
+        self.assertFalse(wizard.isMaximized())
+        self.assertIn("最大化", wizard.maximize_btn.text())
+
+    def test_configuration_window_restores_its_last_normal_size(self) -> None:
+        import tempfile
+
+        from wizard.app import SetupWizard
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = os.path.join(directory, "config.json")
+            state_path = os.path.join(directory, "wizard-window.json")
+            first = self._track(
+                SetupWizard(
+                    config_path=config_path,
+                    window_state_path=state_path,
+                )
+            )
+            first._load_timer.stop()
+            first.env_page._check_timer.stop()
+            first.setWindowOpacity(1.0)
+            first.show()
+            first.resize(1020, 720)
+            first.move(32, 28)
+            self.app.processEvents()
+            first.close()
+            self.app.processEvents()
+
+            reopened = self._track(
+                SetupWizard(
+                    config_path=config_path,
+                    window_state_path=state_path,
+                )
+            )
+            reopened._load_timer.stop()
+            reopened.env_page._check_timer.stop()
+
+            self.assertEqual(reopened.size(), QSize(1020, 720))
+            self.assertEqual(
+                reopened._restored_window_position,
+                QPoint(32, 28),
+            )
 
     def test_configuration_restores_pet_window_size_from_existing_config(
         self,
@@ -1646,6 +1754,22 @@ class UiRefactorTests(unittest.TestCase):
         host.move(inside)
         host._ensure_on_screen()
         self.assertEqual(host.pos(), inside)
+
+    def test_pet_restores_the_position_saved_after_the_last_drag(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = os.path.join(directory, "pet-window.json")
+            first = self._make_screen_guard_host()
+            first._window_state_path = state_path
+            expected = QPoint(120, 90)
+            first.move(expected)
+            first._save_pet_position()
+
+            reopened = self._make_screen_guard_host()
+            reopened._window_state_path = state_path
+            self.assertTrue(reopened._restore_pet_position())
+            self.assertEqual(reopened.pos(), expected)
 
     def test_screen_layout_signals_are_debounced_into_one_correction(self) -> None:
         from meapet.desktop.render_host import SCREEN_GUARD_DEBOUNCE_MS

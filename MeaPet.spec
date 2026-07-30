@@ -57,6 +57,7 @@ a = Analysis(
         "meapet.desktop.chat_input",
         "meapet.desktop.dialogs",
         # agent adapters
+        "meapet.agent.agent_link",
         "meapet.agent.openclaw",
         "meapet.agent.hermes",
         # in-process VITS

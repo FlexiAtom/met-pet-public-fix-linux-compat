@@ -522,6 +522,18 @@ WIZARD_STYLESHEET = f"""
     QPushButton#CloseButton:focus {{
         border: 2px solid {COLOR_FOCUS};
     }}
+    QPushButton#ShapeAddTool:checked {{
+        background: {rgba(COLOR_OK, 48)};
+        color: {COLOR_TEXT};
+        border: 2px solid {COLOR_OK};
+        padding: 8px 15px;
+    }}
+    QPushButton#ShapeSubtractTool:checked {{
+        background: {rgba(COLOR_WARN, 48)};
+        color: {COLOR_TEXT};
+        border: 2px solid {COLOR_WARN};
+        padding: 8px 15px;
+    }}
     QProgressBar {{
         background: {COLOR_INPUT};
         color: {COLOR_TEXT};
@@ -643,12 +655,6 @@ WIZARD_STYLESHEET = f"""
         border: 1px solid {COLOR_BORDER_STRONG};
         border-radius: 8px;
         padding: 6px 10px;
-    }}
-    QSizeGrip {{
-        background: transparent;
-        width: 18px;
-        height: 18px;
-        image: none;
     }}
     QMessageBox {{
         background: {COLOR_BG};

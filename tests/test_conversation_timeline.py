@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -272,6 +272,9 @@ class TestTimelineViewer(unittest.TestCase):
         from PyQt5.QtWidgets import QApplication
 
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.addCleanup(self.app.processEvents)
 
     def test_full_turn_dialog_contains_every_segment_and_can_copy(self):
         from PyQt5.QtWidgets import QApplication

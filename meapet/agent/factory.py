@@ -5,9 +5,11 @@ from __future__ import annotations
 import os
 import uuid
 
+from meapet.agent.agent_link import AgentLinkAdapter, AgentLinkConfig
 from meapet.agent.hermes import HermesAdapter, HermesConfig
 from meapet.agent.openclaw import OpenClawAdapter, OpenClawConfig
 from meapet.config.defaults import (
+    DEFAULT_AGENT_LINK_WS_URL,
     DEFAULT_AGENT_HISTORY_TURNS,
     DEFAULT_AGENT_TIMEOUT_SECONDS,
     DEFAULT_HERMES_WS_URL,
@@ -64,10 +66,18 @@ def _ensure_local_session(agent_cfg: dict) -> str:
     return session_id
 
 
+def _ensure_device_id(agent_cfg: dict) -> str:
+    device_id = str(agent_cfg.get("device_id") or "").strip()
+    if not device_id:
+        device_id = f"meapet-device-{uuid.uuid4().hex}"
+        agent_cfg["device_id"] = device_id
+    return device_id
+
+
 def create_agent_adapter_from_config(
     config: dict,
-) -> HermesAdapter | OpenClawAdapter:
-    """构造 Hermes TUI Gateway 或 OpenClaw Gateway 的 WS 适配器。
+) -> HermesAdapter | OpenClawAdapter | AgentLinkAdapter:
+    """构造 Hermes、OpenClaw 或通用 Agent Link 的 WS 适配器。
 
     OpenAI/Ollama/Anthropic 等 HTTP 接口属于 ``llm.direct``，不会从本工厂
     创建，也不会在 Agent 连接失败时作为隐式回落。
@@ -75,13 +85,13 @@ def create_agent_adapter_from_config(
     llm = config.setdefault("llm", {})
     agent_cfg = llm.setdefault("agent", {})
     kind = str(agent_cfg.get("kind") or "hermes").strip().lower()
-    if kind not in {"hermes", "openclaw"}:
+    if kind not in {"hermes", "openclaw", "agent_link"}:
         raise ValueError(
-            "llm.agent.kind must be 'hermes' or 'openclaw'; "
+            "llm.agent.kind must be 'hermes', 'openclaw' or 'agent_link'; "
             "HTTP model endpoints belong under llm.direct"
         )
 
-    _ensure_local_session(agent_cfg)
+    session_id = _ensure_local_session(agent_cfg)
     timeout = _positive_float(
         agent_cfg.get("timeout_seconds"),
         DEFAULT_AGENT_TIMEOUT_SECONDS,
@@ -94,6 +104,30 @@ def create_agent_adapter_from_config(
     raw_token = str(
         agent_cfg.get("auth_token") or agent_cfg.get("api_key") or ""
     ).strip()
+
+    if kind == "agent_link":
+        token = _resolve_secret(
+            raw_token,
+            ("AGENT_LINK_TOKEN", "MEAPET_AGENT_TOKEN"),
+        )
+        extensions = agent_cfg.get("extensions")
+        extensions = extensions if isinstance(extensions, dict) else {}
+        return AgentLinkAdapter(
+            AgentLinkConfig(
+                base_url=(
+                    str(agent_cfg.get("base_url") or "").strip()
+                    or DEFAULT_AGENT_LINK_WS_URL
+                ),
+                auth_token=token,
+                device_id=_ensure_device_id(agent_cfg),
+                session_id=session_id,
+                timeout_seconds=timeout,
+                verify_tls=verify_tls,
+                ca_file=ca_file,
+                allow_insecure_ws=allow_insecure_ws,
+                extensions=extensions,
+            )
+        )
 
     if kind == "openclaw":
         token = _resolve_secret(

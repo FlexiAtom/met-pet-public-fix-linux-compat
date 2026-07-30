@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -28,6 +28,7 @@ class TestWizardConversationConfig(unittest.TestCase):
     def setUp(self):
         from wizard.app import SetupWizard
 
+        self.addCleanup(QApplication.processEvents)
         self._config_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._config_dir.cleanup)
         template = json.loads(
@@ -319,6 +320,48 @@ class TestWizardConversationConfig(unittest.TestCase):
                 "key_file": "",
                 "ca_file": "",
             },
+        )
+
+    def test_agent_link_uses_one_channel_and_preserves_custom_fields(self):
+        from meapet.config.defaults import DEFAULT_AGENT_LINK_WS_URL
+
+        page = self.wizard.backend_page
+        page.apply_config(
+            {
+                "mode": "agent",
+                "agent": {
+                    "kind": "agent_link",
+                    "base_url": DEFAULT_AGENT_LINK_WS_URL,
+                    "auth_token": "$AGENT_LINK_TOKEN",
+                    "device_id": "device-existing",
+                    "session_id": "session-existing",
+                    "extensions": {
+                        "vendor.trace": {"enabled": True},
+                    },
+                },
+            },
+            # 旧配置即使残留为 true，Agent Link 也不展示第二套监听。
+            {"enabled": True},
+        )
+        QApplication.processEvents()
+
+        self.assertEqual(page.agent_kind.currentData(), "agent_link")
+        self.assertEqual(page.agent_base_url.text(), DEFAULT_AGENT_LINK_WS_URL)
+        self.assertTrue(page.agent_setup_help_btn.isHidden())
+        self.assertTrue(page.agent_session_key.isHidden())
+        self.assertTrue(page.control_enabled.isHidden())
+        self.assertTrue(page.control_frame.isHidden())
+        self.assertIn("一条 Agent Link v1 连接", page.agent_transport_hint.text())
+        self.assertEqual(
+            self.wizard._configuration_issues()[self.wizard.TAB_CHAT],
+            [],
+        )
+
+        agent = page.collect_agent()
+        self.assertEqual(agent["device_id"], "device-existing")
+        self.assertEqual(
+            agent["extensions"],
+            {"vendor.trace": {"enabled": True}},
         )
 
     # ------------------------------------------------------------------
@@ -651,6 +694,9 @@ class TestWizardCaptureScope(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.addCleanup(QApplication.processEvents)
 
     def test_screen_observer_scope_is_chosen_per_confirmation_not_persisted(self):
         from wizard.page_vision import VisionPage

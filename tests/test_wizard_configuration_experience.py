@@ -11,9 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
@@ -35,6 +35,8 @@ class WizardConfigurationExperienceTests(unittest.TestCase):
     def tearDown(self) -> None:
         for widget in reversed(self._widgets):
             try:
+                for timer in widget.findChildren(QTimer):
+                    timer.stop()
                 widget.close()
                 widget.deleteLater()
             except RuntimeError:
@@ -240,6 +242,7 @@ class WizardConfigurationExperienceTests(unittest.TestCase):
 
         wizard = self._track(SetupWizard())
         self._stop_startup_work(wizard)
+        wizard.backend_page.set_agent_kind("hermes")
         wizard.backend_page.agent_radio.setChecked(True)
         wizard.backend_page.agent_setup_help_btn.click()
         QApplication.processEvents()

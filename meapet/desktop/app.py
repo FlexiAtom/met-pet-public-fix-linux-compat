@@ -44,6 +44,7 @@ from meapet.config.store import (
     resolve_vision_backend,
 )
 from meapet.config.checker import check_config_lines
+from meapet.window_state import state_path_for_config
 
 ensure_utf8_stdout()
 
@@ -107,10 +108,18 @@ class MeaPet(
 ):
     """梅尔桌宠主窗口"""
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        window_state_path: Optional[str] = None,
+    ):
         super().__init__()
         config_path = config_path or resolve_startup_config_path(PROJECT_ROOT)
         self.config = self._load_config(config_path)
+        self._window_state_path = window_state_path or state_path_for_config(
+            self._config_path,
+            "pet_window_state.json",
+        )
         if not check_config_lines(config_path):
             # bubble not ready yet; defer message
             self._config_broken = True
@@ -179,7 +188,7 @@ class MeaPet(
         _safe("screen", self._init_screen_guard)
 
         try:
-            self._place_bottom_right()
+            self._place_initial_position()
         except Exception as e:
             log.warning(f"[init] 窗口定位失败: {e}")
         self.show()
@@ -282,6 +291,7 @@ class MeaPet(
             previous_scope = (
                 str(agent_config.get("session_id") or ""),
                 str(agent_config.get("session_key") or ""),
+                str(agent_config.get("device_id") or ""),
             )
             self.chat_engine = None
             self.agent_adapter = create_agent_adapter_from_config(self.config)
@@ -289,6 +299,7 @@ class MeaPet(
             current_scope = (
                 str(current_agent_config.get("session_id") or ""),
                 str(current_agent_config.get("session_key") or ""),
+                str(current_agent_config.get("device_id") or ""),
             )
             if current_scope != previous_scope:
                 self._save_config()
@@ -494,6 +505,10 @@ class MeaPet(
         self._drag_window_origin = None
         self._is_head_touching = False
         self._head_press_x = None
+        try:
+            self._save_pet_position()
+        except Exception:
+            pass
 
     def mouseDoubleClickEvent(self, event):
         if getattr(self, "_standby", False):

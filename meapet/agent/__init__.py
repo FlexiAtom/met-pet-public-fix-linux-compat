@@ -13,6 +13,9 @@ from .base import (
 from .presentation import AgentTurnPresentation
 
 __all__ = [
+    "AgentLinkAdapter",
+    "AgentLinkCapabilities",
+    "AgentLinkConfig",
     "AgentTurnRequest",
     "AgentTurnPresentation",
     "FormatRepairRequired",
@@ -30,6 +33,12 @@ __all__ = [
 ]
 
 _LAZY_EXPORTS = {
+    "AgentLinkAdapter": (".agent_link", "AgentLinkAdapter"),
+    "AgentLinkCapabilities": (
+        ".agent_link",
+        "AgentLinkCapabilities",
+    ),
+    "AgentLinkConfig": (".agent_link", "AgentLinkConfig"),
     "HermesAdapter": (".hermes", "HermesAdapter"),
     "HermesCapabilities": (".hermes", "HermesCapabilities"),
     "HermesConfig": (".hermes", "HermesConfig"),

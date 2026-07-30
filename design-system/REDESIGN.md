@@ -937,7 +937,7 @@ QPushButton#CancelUploadButton:default {  /* 默认=安全选项，必须同样�
 
 ## 4. 向导专章（`wizard/styles.py` + `wizard/app.py`）
 
-> 现实现是**顶部标签栏**（`QTabWidget#ConfigurationTabs`，四个固定标签），不是侧边导航。本次**不改导航形态**（`wizard.md` 的四标签契约 + 单测依赖）。下文 4.2 同时给出"顶部标签态"的完整规范和"若将来改侧边导航"的等价映射。
+> 现实现是**顶部标签栏**（`QTabWidget#ConfigurationTabs`，六个固定标签），不是侧边导航。本次**不改导航形态**（`wizard.md` 的六标签契约 + 单测依赖）。下文 4.2 同时给出"顶部标签态"的完整规范和"若将来改侧边导航"的等价映射。
 
 ### 4.1 外壳背景处理
 
