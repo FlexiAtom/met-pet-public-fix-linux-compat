@@ -432,6 +432,110 @@ class Live2DViewportEditorTests(unittest.TestCase):
         self.assertEqual(saved["contours"], shape["contours"])
         self.assertFalse(settings.shape_add_button.isEnabled())
 
+    def test_shape_keyboard_shortcuts_finish_undo_and_cancel_drafts(
+        self,
+    ) -> None:
+        settings = self._track(Live2DViewportSettings())
+        settings.resize(800, 1040)
+        settings.show()
+        QApplication.processEvents()
+        settings.shape_enabled.setChecked(True)
+        settings.shape_add_button.click()
+        editor = settings.editor
+        points = (
+            QPointF(0.25, 0.20),
+            QPointF(0.70, 0.20),
+            QPointF(0.50, 0.75),
+        )
+        for point in points:
+            self._click(editor, editor._canvas_point(point).toPoint())
+
+        QTest.keyClick(editor, Qt.Key_Backspace)
+        self.assertEqual(editor.draft_shape_point_count(), 2)
+        self._click(editor, editor._canvas_point(points[-1]).toPoint())
+        QTest.keyClick(editor, Qt.Key_Return)
+
+        self.assertIsNone(editor.shape_tool())
+        self.assertEqual(
+            [
+                contour["operation"]
+                for contour in settings.window_shape()["contours"]
+            ],
+            ["add"],
+        )
+
+        settings.shape_subtract_button.click()
+        self._click(
+            editor,
+            editor._canvas_point(QPointF(0.45, 0.35)).toPoint(),
+        )
+        QTest.keyClick(editor, Qt.Key_Escape)
+
+        self.assertIsNone(editor.shape_tool())
+        self.assertEqual(editor.draft_shape_point_count(), 0)
+        self.assertEqual(len(settings.window_shape()["contours"]), 1)
+
+    def test_shape_preview_renders_completed_regions_and_a_draft(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        settings.resize(800, 1040)
+        settings.show()
+        settings.set_window_shape(
+            {
+                "enabled": True,
+                "contours": [
+                    {
+                        "operation": "add",
+                        "points": [
+                            [0.2, 0.1],
+                            [0.8, 0.1],
+                            [0.8, 0.9],
+                            [0.2, 0.9],
+                        ],
+                    },
+                    {
+                        "operation": "subtract",
+                        "points": [
+                            [0.4, 0.4],
+                            [0.6, 0.4],
+                            [0.5, 0.6],
+                        ],
+                    },
+                ],
+            }
+        )
+        QApplication.processEvents()
+        settings.shape_add_button.click()
+        self._click(
+            settings.editor,
+            settings.editor._canvas_point(QPointF(0.3, 0.3)).toPoint(),
+        )
+
+        rendered = settings.editor.grab().toImage()
+
+        self.assertFalse(rendered.isNull())
+        self.assertEqual(rendered.size(), settings.editor.size())
+
+    def test_direction_keys_move_the_last_directly_selected_object(self) -> None:
+        settings = self._track(Live2DViewportSettings())
+        settings.resize(800, 900)
+        settings.show()
+        QApplication.processEvents()
+        settings.set_placement_anchor({"x": 0.50, "y": 0.80})
+        editor = settings.editor
+        before_viewport = editor.viewport()
+
+        self._click(editor, editor._anchor_point().toPoint())
+        QTest.keyClick(editor, Qt.Key_Right)
+
+        self.assertEqual(settings.placement_anchor(), {"x": 0.51, "y": 0.80})
+        self.assertEqual(editor.viewport(), before_viewport)
+
+        self._click(editor, editor._selection_rect().center().toPoint())
+        QTest.keyClick(editor, Qt.Key_Down)
+
+        self.assertAlmostEqual(editor.viewport()[1], before_viewport[1] + 0.01)
+        self.assertEqual(settings.placement_anchor(), {"x": 0.51, "y": 0.80})
+
     def test_full_canvas_action_is_explicit_and_reversible(self) -> None:
         settings = self._track(Live2DViewportSettings())
         settings.set_window_mask(
