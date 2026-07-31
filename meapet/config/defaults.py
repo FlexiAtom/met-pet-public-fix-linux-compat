@@ -16,6 +16,7 @@ DEFAULT_MIMO_API_BASE = "https://api.xiaomimimo.com/v1"
 
 DEFAULT_HERMES_WS_URL = "ws://127.0.0.1:9119/api/ws"
 DEFAULT_OPENCLAW_WS_URL = "ws://127.0.0.1:18789"
+DEFAULT_AGENT_LINK_WS_URL = "ws://127.0.0.1:8766/agent-link"
 
 DEFAULT_DIRECT_MODEL = "gpt-4o-mini"
 DEFAULT_OLLAMA_VISION_MODEL = "qwen3.5:4b"
@@ -65,7 +66,8 @@ DEFAULT_AGENT_CONTROL = MappingProxyType(
     }
 )
 
-# Live2D 顶层窗椭圆 mask：比例相对当前窗口宽高，随 size_factor 自动缩放。
+# Live2D 视觉视口兼容键：保留历史椭圆参数，但运行时仅使用其外接矩形
+# 裁去画布透明留白，不再把椭圆形状应用到绘制或 OS 窗口区域。
 DEFAULT_LIVE2D_WINDOW_MASK = MappingProxyType(
     {
         "enabled": True,
@@ -76,14 +78,33 @@ DEFAULT_LIVE2D_WINDOW_MASK = MappingProxyType(
     }
 )
 
+# 模型在桌面上保持不动的画布参照点。默认取推荐视觉视口的底部中心，
+# 使旧配置升级后与原先固定“窗口底部中心”的视觉位置一致。
+DEFAULT_LIVE2D_PLACEMENT_ANCHOR = MappingProxyType(
+    {
+        "x": 0.54,
+        "y": 0.80,
+    }
+)
+
+# 可选的静态窗口形状。轮廓坐标属于完整 Live2D 画布；空轮廓默认关闭，
+# 继续使用普通矩形顶层窗口，保证旧配置和大幅动作不受影响。
+DEFAULT_LIVE2D_WINDOW_SHAPE = MappingProxyType(
+    {
+        "enabled": False,
+        "contours": (),
+    }
+)
+
 
 def default_agent_url(kind: object) -> str:
-    """按 Agent 类型返回本地 Gateway 默认地址。"""
-    return (
-        DEFAULT_OPENCLAW_WS_URL
-        if str(kind or "").strip().lower() == "openclaw"
-        else DEFAULT_HERMES_WS_URL
-    )
+    """按 Agent 类型返回本地 WebSocket 默认地址。"""
+    normalized = str(kind or "").strip().lower()
+    if normalized == "openclaw":
+        return DEFAULT_OPENCLAW_WS_URL
+    if normalized == "agent_link":
+        return DEFAULT_AGENT_LINK_WS_URL
+    return DEFAULT_HERMES_WS_URL
 
 
 def bubble_duration_ms(

@@ -23,11 +23,13 @@
       "base_url": "ws://127.0.0.1:9119/api/ws",
       "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
       "model": "",
+      "device_id": "",
       "session_id": "",
       "session_key": "",
       "timeout_seconds": 120,
       "history_turns": 5,
       "allow_insecure_ws": false,
+      "extensions": {},
       "tls": {
         "verify": true,
         "ca_file": ""
@@ -110,6 +112,14 @@
     "model_dir": "./live2d/model/mea_live2d",
     "enabled": true,
     "scale": 0.15,
+    "placement_anchor": {
+      "x": 0.54,
+      "y": 0.80
+    },
+    "window_shape": {
+      "enabled": false,
+      "contours": []
+    },
     "window_mask": {
       "enabled": true,
       "cx": 0.54,

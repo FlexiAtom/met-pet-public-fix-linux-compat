@@ -50,7 +50,7 @@ _AGENT_DEPENDENCIES = (
     RuntimeDependency(
         "websockets",
         WEBSOCKETS_REQUIREMENT,
-        "Hermes/OpenClaw Agent",
+        "WebSocket Agent 通信",
     ),
 )
 
@@ -62,8 +62,16 @@ _OPENCLAW_DEPENDENCIES = (
     ),
 )
 
+_CAPABILITY_DEPENDENCIES = (
+    RuntimeDependency(
+        "mcp",
+        MCP_REQUIREMENT,
+        "MeaPet 前端工具 Schema",
+    ),
+)
+
 _CONTROL_DEPENDENCIES = (
-    RuntimeDependency("mcp", MCP_REQUIREMENT, "Companion MCP 服务"),
+    *_CAPABILITY_DEPENDENCIES,
     RuntimeDependency("uvicorn", UVICORN_REQUIREMENT, "Companion MCP 服务"),
 )
 
@@ -118,7 +126,7 @@ def required_runtime_dependencies(
     if requested_mode not in {"direct", "agent"}:
         requested_mode = (
             "agent"
-            if agent_kind in {"hermes", "openclaw"}
+            if agent_kind in {"hermes", "openclaw", "agent_link"}
             and bool(llm.get("backend") or agent.get("kind"))
             else "direct"
         )
@@ -127,7 +135,13 @@ def required_runtime_dependencies(
         dependencies.extend(_AGENT_DEPENDENCIES)
         if agent_kind == "openclaw":
             dependencies.extend(_OPENCLAW_DEPENDENCIES)
-    if agent_mode and bool(control.get("enabled", False)):
+        elif agent_kind == "agent_link":
+            dependencies.extend(_CAPABILITY_DEPENDENCIES)
+    if (
+        agent_mode
+        and agent_kind != "agent_link"
+        and bool(control.get("enabled", False))
+    ):
         dependencies.extend(_CONTROL_DEPENDENCIES)
     return _deduplicate(dependencies)
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -106,9 +106,10 @@ class TestControlLifecycle(unittest.TestCase):
         runtimes = []
 
         class Runtime:
-            def __init__(self, broker, config):
+            def __init__(self, broker, config, *, registry=None):
                 self.broker = broker
                 self.config = config
+                self.registry = registry
                 self.starts = 0
                 runtimes.append(self)
 
@@ -149,6 +150,71 @@ class TestControlLifecycle(unittest.TestCase):
         self.assertEqual(saved, [True])
         self.assertEqual(len(runtimes), 1)
         self.assertEqual(runtimes[0].starts, 1)
+        self.assertEqual(len(runtimes[0].registry.tools()), 4)
+        self.assertTrue(host._control_poll_timer.started)
+
+    def test_agent_link_starts_one_connection_and_does_not_start_legacy_mcp(self):
+        import meapet.async_runtime as async_runtime
+        import meapet.desktop.control_bridge as bridge
+
+        submitted = []
+
+        class Adapter:
+            def __init__(self):
+                self.registry = None
+                self.starts = 0
+
+            def bind_capability_registry(self, registry):
+                self.registry = registry
+
+            async def start(self):
+                self.starts += 1
+
+        class Host(bridge.PetControlBridgeMixin):
+            config = {
+                "llm": {
+                    "mode": "agent",
+                    "agent": {"kind": "agent_link"},
+                },
+                # 旧配置即使残留为 true，也不能再启动第二个 HTTP 通道。
+                "agent_control": {"enabled": True},
+            }
+            _awaiting_reply = False
+
+            def __init__(self):
+                self.agent_adapter = Adapter()
+
+            def _build_agent_frontend_context(self):
+                return _state()
+
+        def submit(coro):
+            submitted.append(coro)
+            coro.close()
+            return mock.sentinel.agent_link_future
+
+        with (
+            mock.patch.object(
+                bridge,
+                "CompanionMcpRuntime",
+                side_effect=AssertionError("Agent Link 不应启动 HTTP MCP"),
+            ),
+            mock.patch.object(bridge, "QTimer", _Timer),
+            mock.patch.object(async_runtime, "submit", submit),
+        ):
+            host = Host()
+            host._init_control()
+
+        self.assertEqual(len(submitted), 1)
+        self.assertIsNone(host._control_runtime)
+        self.assertIs(
+            host._agent_link_start_future,
+            mock.sentinel.agent_link_future,
+        )
+        self.assertIs(
+            host.agent_adapter.registry,
+            host._control_capabilities,
+        )
+        self.assertEqual(len(host._control_capabilities.tools()), 4)
         self.assertTrue(host._control_poll_timer.started)
 
     def test_rotating_control_token_restarts_listener_and_revokes_old_value(self):

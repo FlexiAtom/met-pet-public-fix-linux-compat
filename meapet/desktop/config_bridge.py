@@ -7,6 +7,9 @@ from meapet.config.store import (
     load_config as store_load_config,
     save_config as store_save_config,
     normalize_config,
+    normalize_live2d_placement_anchor,
+    normalize_live2d_window_mask,
+    normalize_live2d_window_shape,
     resolve_writable_config_path,
 )
 from meapet.log import get_color_logger
@@ -43,6 +46,24 @@ class PetConfigBridgeMixin:
         不在 GUI 线程 ``Future.result`` / ``QThread.wait``，避免配置保存
         路径把窗口卡成“未响应”。
         """
+        current_live2d = (getattr(self, "config", {}) or {}).get("live2d") or {}
+        old_window_mask = normalize_live2d_window_mask(
+            current_live2d.get("window_mask")
+            if isinstance(current_live2d, dict)
+            else None
+        )
+        old_placement_anchor = normalize_live2d_placement_anchor(
+            current_live2d.get("placement_anchor")
+            if isinstance(current_live2d, dict)
+            else None,
+            old_window_mask,
+        )
+        old_window_shape = normalize_live2d_window_shape(
+            current_live2d.get("window_shape")
+            if isinstance(current_live2d, dict)
+            else None
+        )
+
         worker = getattr(self, "_chat_worker", None)
         if worker is not None:
             try:
@@ -87,6 +108,28 @@ class PetConfigBridgeMixin:
                 pass
 
         self.config = normalize_config(config or {})
+        new_live2d = self.config.get("live2d") or {}
+        new_window_mask = normalize_live2d_window_mask(
+            new_live2d.get("window_mask")
+            if isinstance(new_live2d, dict)
+            else None
+        )
+        new_placement_anchor = normalize_live2d_placement_anchor(
+            new_live2d.get("placement_anchor")
+            if isinstance(new_live2d, dict)
+            else None,
+            new_window_mask,
+        )
+        new_window_shape = normalize_live2d_window_shape(
+            new_live2d.get("window_shape")
+            if isinstance(new_live2d, dict)
+            else None
+        )
+        viewport_changed = (
+            old_window_mask != new_window_mask
+            or old_placement_anchor != new_placement_anchor
+            or old_window_shape != new_window_shape
+        )
         try:
             apply_motion = getattr(self, "_apply_motion_preference", None)
             if callable(apply_motion):
@@ -95,6 +138,15 @@ class PetConfigBridgeMixin:
             if callable(apply_display):
                 # 窗口大小（display.size_factor）保存后立即生效，不必重启桌宠。
                 apply_display()
+            if viewport_changed:
+                apply_viewport = getattr(
+                    self,
+                    "_apply_live2d_viewport_preference",
+                    None,
+                )
+                if callable(apply_viewport):
+                    # 视觉视口与站立锚点只改变窗口几何；互动坐标仍属完整画布。
+                    apply_viewport()
             self._init_tts()
             self._init_chat()
             self._init_watcher()

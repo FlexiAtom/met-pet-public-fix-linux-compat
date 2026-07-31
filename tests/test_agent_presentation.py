@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -359,6 +359,9 @@ class TestDialogueBubbleStreaming(unittest.TestCase):
         from PyQt5.QtWidgets import QApplication
 
         cls._app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.addCleanup(self._app.processEvents)
 
     def test_stack_updates_and_finalizes_the_same_bubble(self):
         from meapet.desktop.widgets import DialogueBubbleStack
