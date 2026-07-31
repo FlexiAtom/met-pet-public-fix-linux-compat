@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import stat
 import sys
@@ -26,6 +27,7 @@ from meapet.config.normalizers import (
     normalize_gsv_ref_language,
 )
 from meapet.config.defaults import (
+    DEFAULT_AGENT_LINK_WS_URL,
     DEFAULT_AGENT_CONTROL,
     DEFAULT_AGENT_HISTORY_TURNS,
     DEFAULT_AGENT_TIMEOUT_SECONDS,
@@ -33,6 +35,7 @@ from meapet.config.defaults import (
     DEFAULT_CONTROL_PORT,
     DEFAULT_HERMES_WS_URL,
     DEFAULT_LIVE2D_WINDOW_MASK,
+    DEFAULT_LIVE2D_WINDOW_SHAPE,
     DEFAULT_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
     DEFAULT_OPENAI_API_BASE,
@@ -82,7 +85,7 @@ for _preset in _providers.all_presets():
 
 _DIRECT_PROVIDERS = frozenset({"custom"})
 # 旧顶层 backend 属于 Agent 类时，无 mode 配置迁去 agent。
-_AGENT_KINDS = frozenset({"hermes", "openclaw"})
+_AGENT_KINDS = frozenset({"hermes", "openclaw", "agent_link"})
 # 支持独立识图解析的视觉后端（vision.backend，不是 llm.provider）。
 _VISION_BACKENDS = frozenset({"ollama", "mimo"})
 
@@ -698,12 +701,12 @@ def _normalize_llm_contract(value: object) -> dict:
     # 8642 是 Hermes HTTP API Server，原生 WS 由 ``hermes serve`` 默认在
     # 9119 的 /api/ws 提供。精确识别旧本机默认，避免生成不存在的 :8642/ws。
     if raw_kind == "hermes":
-        default_url = "ws://127.0.0.1:9119/api/ws"
+        default_url = DEFAULT_HERMES_WS_URL
         lowered = raw_base.lower().rstrip("/")
         if lowered in {
             "http://127.0.0.1:8642",
             "http://localhost:8642",
-            "https://api.openai.com/v1",
+            DEFAULT_OPENAI_API_BASE,
         }:
             raw_base = default_url
         elif lowered.startswith(("http://", "https://")):
@@ -719,8 +722,12 @@ def _normalize_llm_contract(value: object) -> dict:
             raw_base = urlunsplit((scheme, parsed.netloc, path, "", ""))
         elif not lowered.startswith(("ws://", "wss://")):
             raw_base = default_url
+    elif raw_kind == "openclaw":
+        default_url = DEFAULT_OPENCLAW_WS_URL
+        if not raw_base.lower().startswith(("ws://", "wss://")):
+            raw_base = default_url
     else:
-        default_url = "ws://127.0.0.1:18789"
+        default_url = DEFAULT_AGENT_LINK_WS_URL
         if not raw_base.lower().startswith(("ws://", "wss://")):
             raw_base = default_url
     agent["base_url"] = raw_base or default_url
@@ -732,8 +739,14 @@ def _normalize_llm_contract(value: object) -> dict:
         or ""
     ).strip()
     agent["auth_token"] = auth_token
+    agent["device_id"] = str(agent.get("device_id") or "").strip()
     agent["session_id"] = str(agent.get("session_id") or "").strip()
     agent["session_key"] = str(agent.get("session_key") or "").strip()
+    agent["extensions"] = (
+        copy.deepcopy(agent.get("extensions"))
+        if isinstance(agent.get("extensions"), dict)
+        else {}
+    )
     remote_session_id = str(
         agent.get("remote_session_id") or ""
     ).strip()
@@ -747,11 +760,11 @@ def _normalize_llm_contract(value: object) -> dict:
         or ""
     ).strip()
     try:
-        timeout_seconds = float(agent.get("timeout_seconds", 120.0))
+        timeout_seconds = float(agent.get("timeout_seconds", DEFAULT_AGENT_TIMEOUT_SECONDS))
     except (TypeError, ValueError):
-        timeout_seconds = 120.0
+        timeout_seconds = DEFAULT_AGENT_TIMEOUT_SECONDS
     agent["timeout_seconds"] = (
-        timeout_seconds if timeout_seconds > 0 else 120.0
+        timeout_seconds if timeout_seconds > 0 else DEFAULT_AGENT_TIMEOUT_SECONDS
     )
     try:
         history_turns = int(agent.get("history_turns", 5))
@@ -831,7 +844,7 @@ def _clamp_ratio(value: object, default: float, lo: float, hi: float) -> float:
 
 
 def normalize_live2d_window_mask(value: object) -> dict:
-    """规范化 Live2D 椭圆窗口 mask（比例 0–1）。"""
+    """规范化 Live2D 视觉视口的历史椭圆参数（比例 0–1）。"""
     raw = value if isinstance(value, dict) else {}
     defaults = DEFAULT_LIVE2D_WINDOW_MASK
     return {
@@ -840,6 +853,94 @@ def normalize_live2d_window_mask(value: object) -> dict:
         "cy": _clamp_ratio(raw.get("cy", defaults["cy"]), defaults["cy"], 0.05, 0.95),
         "rw": _clamp_ratio(raw.get("rw", defaults["rw"]), defaults["rw"], 0.10, 0.55),
         "rh": _clamp_ratio(raw.get("rh", defaults["rh"]), defaults["rh"], 0.10, 0.55),
+    }
+
+
+def normalize_live2d_placement_anchor(
+    value: object,
+    window_mask: object = None,
+) -> dict:
+    """规范化模型站立锚点（完整 Live2D 画布归一化坐标）。
+
+    历史配置没有锚点：启用裁剪时迁移为当前视觉视口的底部中心；关闭
+    裁剪时使用完整画布底部中心。这样升级本身不会改变桌宠位置。
+    """
+    mask = normalize_live2d_window_mask(window_mask)
+    if mask["enabled"]:
+        fallback_x = float(mask["cx"])
+        fallback_y = min(1.0, float(mask["cy"]) + float(mask["rh"]))
+    else:
+        fallback_x = 0.5
+        fallback_y = 1.0
+
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "x": round(
+            _clamp_ratio(raw.get("x", fallback_x), fallback_x, 0.0, 1.0),
+            6,
+        ),
+        "y": round(
+            _clamp_ratio(raw.get("y", fallback_y), fallback_y, 0.0, 1.0),
+            6,
+        ),
+    }
+
+
+MAX_LIVE2D_WINDOW_SHAPE_CONTOURS = 32
+MAX_LIVE2D_WINDOW_SHAPE_POINTS = 128
+
+
+def normalize_live2d_window_shape(value: object) -> dict:
+    """规范化静态 Live2D 窗口多边形，限制复杂度以保护 GUI 性能。"""
+    raw = value if isinstance(value, dict) else {}
+    raw_contours = raw.get("contours")
+    if not isinstance(raw_contours, (list, tuple)):
+        raw_contours = ()
+
+    contours = []
+    for raw_contour in raw_contours:
+        if len(contours) >= MAX_LIVE2D_WINDOW_SHAPE_CONTOURS:
+            break
+        if not isinstance(raw_contour, dict):
+            continue
+        operation = str(raw_contour.get("operation") or "add").strip().lower()
+        if operation not in ("add", "subtract"):
+            continue
+        raw_points = raw_contour.get("points")
+        if not isinstance(raw_points, (list, tuple)):
+            continue
+
+        points = []
+        for raw_point in raw_points:
+            if len(points) >= MAX_LIVE2D_WINDOW_SHAPE_POINTS:
+                break
+            if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+                continue
+            try:
+                x = float(raw_point[0])
+                y = float(raw_point[1])
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(x) or not math.isfinite(y):
+                continue
+            point = [
+                round(max(0.0, min(1.0, x)), 6),
+                round(max(0.0, min(1.0, y)), 6),
+            ]
+            if not points or point != points[-1]:
+                points.append(point)
+
+        if len(points) >= 2 and points[0] == points[-1]:
+            points.pop()
+        if len({tuple(point) for point in points}) < 3:
+            continue
+        contours.append({"operation": operation, "points": points})
+
+    return {
+        "enabled": bool(
+            raw.get("enabled", DEFAULT_LIVE2D_WINDOW_SHAPE["enabled"])
+        ),
+        "contours": contours,
     }
 
 
@@ -877,6 +978,13 @@ def normalize_config(config: dict) -> dict:
     cfg.setdefault("character", {})
     live2d = cfg.get("live2d") if isinstance(cfg.get("live2d"), dict) else {}
     live2d["window_mask"] = normalize_live2d_window_mask(live2d.get("window_mask"))
+    live2d["placement_anchor"] = normalize_live2d_placement_anchor(
+        live2d.get("placement_anchor"),
+        live2d["window_mask"],
+    )
+    live2d["window_shape"] = normalize_live2d_window_shape(
+        live2d.get("window_shape")
+    )
     cfg["live2d"] = live2d
     cfg["agent_control"] = _normalize_agent_control(cfg.get("agent_control"))
 

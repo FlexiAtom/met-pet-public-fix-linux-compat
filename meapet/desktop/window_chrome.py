@@ -121,6 +121,12 @@ class PetWindowChromeMixin:
     def _quit(self):
         safe_print("[pet] quitting by user/menu…")
         try:
+            save_position = getattr(self, "_save_pet_position", None)
+            if callable(save_position):
+                save_position()
+        except Exception:
+            pass
+        try:
             self._close_menu_window()
         except Exception:
             pass
@@ -130,6 +136,15 @@ class PetWindowChromeMixin:
                 stop_control()
             except Exception:
                 pass
+        try:
+            adapter = getattr(self, "agent_adapter", None)
+            close = getattr(adapter, "close", None)
+            if callable(close):
+                from meapet.async_runtime import submit
+
+                submit(close())
+        except Exception:
+            pass
         try:
             if not self._use_live2d and self.renderer:
                 self.renderer.stop_blink_animation()
@@ -483,7 +498,15 @@ class PetWindowChromeMixin:
         control_enabled = bool(
             (self.config.get("agent_control") or {}).get("enabled", False)
         )
-        if llm_mode == "agent" and control_enabled:
+        agent_kind = str(
+            (((self.config.get("llm") or {}).get("agent") or {}).get("kind"))
+            or "hermes"
+        ).strip().lower()
+        if (
+            llm_mode == "agent"
+            and agent_kind != "agent_link"
+            and control_enabled
+        ):
             copy_token_action = QAction("复制 Agent 控制令牌", self)
             copy_token_action.triggered.connect(self._copy_agent_control_token)
             settings_menu.addAction(copy_token_action)
@@ -682,7 +705,7 @@ class PetWindowChromeMixin:
                 f"agent:main:meapet:{uuid.uuid4().hex}"
             )
             agent.pop("upstream_session_id", None)
-        else:
+        elif kind == "hermes":
             # Hermes 下次连接必须 session.create，而不是 resume 旧的持久会话。
             agent.pop("remote_session_id", None)
         self._persisted_agent_remote_session_id = ""
@@ -705,6 +728,10 @@ class PetWindowChromeMixin:
 
         try:
             self.agent_adapter = create_agent_adapter_from_config(self.config)
+            if kind == "agent_link":
+                attach = getattr(self, "_attach_agent_link_control", None)
+                if callable(attach):
+                    attach()
             self._save_config()
             refresh_key = getattr(self, "_refresh_conversation_key", None)
             if callable(refresh_key):
@@ -752,9 +779,23 @@ class PetWindowChromeMixin:
     def _reopen_setup_wizard(self):
         try:
             from wizard.app import SetupWizard
+
+            preview = None
+            capture_preview = getattr(
+                self,
+                "_capture_live2d_viewport_preview",
+                None,
+            )
+            if callable(capture_preview):
+                preview = capture_preview()
+            wizard_args = {
+                "config_path": getattr(self, "_config_path", None),
+                "initial_config": getattr(self, "config", None),
+            }
+            if preview is not None:
+                wizard_args["live2d_preview"] = preview
             self._setup_wizard = SetupWizard(
-                config_path=getattr(self, "_config_path", None),
-                initial_config=getattr(self, "config", None),
+                **wizard_args,
             )
             apply_config = getattr(self, "_apply_runtime_config", None)
             if callable(apply_config):

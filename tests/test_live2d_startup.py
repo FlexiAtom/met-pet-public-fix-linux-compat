@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt5.QtCore import Qt  # noqa: E402
+from PyQt5.QtCore import Qt, QTimer  # noqa: E402
 from PyQt5.QtGui import QColor, QPixmap  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
 
@@ -123,10 +123,15 @@ class PNGStartupTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         for host in self._hosts:
+            for timer in host.findChildren(QTimer):
+                timer.stop()
             chat_input = getattr(host, "_chat_input", None)
             if chat_input is not None:
                 chat_input.close()
+                chat_input.deleteLater()
             host.close()
+            host.deleteLater()
+        QApplication.processEvents()
 
     def _host(self, model_dir: str) -> _RenderHost:
         host = _RenderHost(model_dir)
@@ -149,6 +154,143 @@ class PNGStartupTests(unittest.TestCase):
             self.assertFalse(host._use_live2d)
             self.assertTrue(host._renderer_ready)
             self.assertEqual(host.windowOpacity(), 1.0)
+
+    # ── Live2D 视觉视口 ──────────────────────────────────────────────
+
+    def test_live2d_viewport_crops_canvas_to_configured_visual_bounds(self) -> None:
+        """视觉窗口只覆盖 mask 外接矩形，完整画布留在负偏移子控件中。"""
+        from meapet.desktop.render_host import calculate_live2d_viewport_layout
+
+        layout = calculate_live2d_viewport_layout(
+            1000,
+            800,
+            0.5,
+            {
+                "enabled": True,
+                "cx": 0.50,
+                "cy": 0.50,
+                "rw": 0.25,
+                "rh": 0.40,
+            },
+        )
+
+        self.assertEqual(
+            (
+                layout.widget_x,
+                layout.widget_y,
+                layout.widget_width,
+                layout.widget_height,
+            ),
+            (-125, -40, 500, 400),
+        )
+        self.assertEqual(
+            (layout.window_width, layout.window_height),
+            (250, 320),
+        )
+
+    def test_live2d_viewport_disabled_keeps_the_complete_canvas(self) -> None:
+        from meapet.desktop.render_host import calculate_live2d_viewport_layout
+
+        layout = calculate_live2d_viewport_layout(
+            1000,
+            800,
+            0.5,
+            {
+                "enabled": False,
+                "cx": 0.50,
+                "cy": 0.50,
+                "rw": 0.25,
+                "rh": 0.40,
+            },
+        )
+
+        self.assertEqual(
+            (
+                layout.widget_x,
+                layout.widget_y,
+                layout.widget_width,
+                layout.widget_height,
+            ),
+            (0, 0, 500, 400),
+        )
+        self.assertEqual(
+            (layout.window_width, layout.window_height),
+            (500, 400),
+        )
+
+    def test_live2d_host_keeps_full_canvas_behind_the_cropped_window(self) -> None:
+        class CanvasModel:
+            def get_suggested_size(self):
+                return 1000, 800
+
+        host = self._host("")
+        host._use_live2d = True
+        host._l2d_model = CanvasModel()
+        host.config["live2d"]["window_mask"] = {
+            "enabled": True,
+            "cx": 0.50,
+            "cy": 0.50,
+            "rw": 0.25,
+            "rh": 0.40,
+        }
+        host.sprite_label = QWidget(host)
+
+        layout = host._apply_live2d_viewport_geometry(0.5)
+
+        self.assertEqual(
+            (
+                host.sprite_label.x(),
+                host.sprite_label.y(),
+                host.sprite_label.width(),
+                host.sprite_label.height(),
+            ),
+            (-125, -40, 500, 400),
+        )
+        self.assertEqual((host.width(), host.height()), (250, 320))
+        self.assertEqual(layout.window_width, host.width())
+
+    def test_live2d_first_frame_uses_fallback_canvas_and_preserves_foot_anchor(
+        self,
+    ) -> None:
+        class InvalidCanvasModel:
+            def get_suggested_size(self):
+                return 1, 2
+
+        host = self._host("")
+        host._use_live2d = True
+        host._size_factor = 1.0
+        host._l2d_model = InvalidCanvasModel()
+        host.config["live2d"].update(
+            {
+                "default_canvas_size": [800, 1000],
+                "window_mask": {"enabled": False},
+            }
+        )
+        host.sprite_label = QWidget(host)
+        host.sprite_label.setGeometry(0, 0, 200, 300)
+        host.resize(200, 300)
+        host.move(400, 500)
+        old_center_x = host.frameGeometry().center().x()
+        old_bottom = host.frameGeometry().bottom()
+
+        with mock.patch(
+            "meapet.desktop.render_host.available_geometry_for",
+            return_value=None,
+        ):
+            host._fit_window_to_model()
+
+        self.assertEqual((host.width(), host.height()), (800, 1000))
+        self.assertEqual(
+            (
+                host.sprite_label.x(),
+                host.sprite_label.y(),
+                host.sprite_label.width(),
+                host.sprite_label.height(),
+            ),
+            (0, 0, 800, 1000),
+        )
+        self.assertAlmostEqual(host.frameGeometry().center().x(), old_center_x, delta=1)
+        self.assertEqual(host.frameGeometry().bottom(), old_bottom)
 
     # ── PNG 渲染器单元测试 ──────────────────────────────────────────
 
@@ -228,4 +370,3 @@ class PNGStartupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

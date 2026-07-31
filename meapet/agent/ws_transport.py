@@ -302,6 +302,17 @@ class PersistentJsonWebSocket:
             ca_file=self.ca_file,
             max_message_bytes=self.max_message_bytes,
         )
+        # websockets 15 默认读取系统代理；本机 Agent 不应因为代理环境变量
+        # 绕到 HTTP 代理。旧版 websockets 没有 proxy 参数，因此按签名兼容。
+        if is_loopback_host(urlsplit(self.url).hostname or ""):
+            try:
+                supports_proxy = "proxy" in inspect.signature(
+                    self._connector
+                ).parameters
+            except (TypeError, ValueError):
+                supports_proxy = False
+            if supports_proxy:
+                kwargs["proxy"] = None
         connection = self._connector(self.url, **kwargs)
         if hasattr(connection, "__aenter__"):
             websocket = await connection.__aenter__()

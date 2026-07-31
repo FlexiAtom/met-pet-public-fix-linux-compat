@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import secrets
 
 from PyQt5.QtCore import Qt
@@ -19,6 +20,7 @@ from PyQt5.QtWidgets import (
 )
 
 from meapet.config.defaults import (
+    DEFAULT_AGENT_LINK_WS_URL,
     DEFAULT_AGENT_HISTORY_TURNS,
     DEFAULT_CONTROL_PORT,
     DEFAULT_HERMES_WS_URL,
@@ -106,6 +108,7 @@ class BackendPage(QFrame):
         self.agent_kind = WheelSafeComboBox()
         self.agent_kind.addItem("Hermes Agent", "hermes")
         self.agent_kind.addItem("OpenClaw Gateway", "openclaw")
+        self.agent_kind.addItem("自定义 Agent Link", "agent_link")
         _field(agent_layout, "Agent 类型：", self.agent_kind, "Agent 类型")
 
         help_row = QHBoxLayout()
@@ -166,7 +169,10 @@ class BackendPage(QFrame):
         self.agent_session_id.setAccessibleName("Agent 当前会话 ID")
         session_left.addWidget(self.agent_session_id)
         session_right = QVBoxLayout()
-        session_right.addWidget(field_label("长期记忆作用域 Key（空值会自动生成）："))
+        self.agent_session_key_label = field_label(
+            "长期记忆作用域 Key（空值会自动生成）："
+        )
+        session_right.addWidget(self.agent_session_key_label)
         self.agent_session_key = QLineEdit()
         self.agent_session_key.setStyleSheet(STYLE_INPUT)
         self.agent_session_key.setEchoMode(QLineEdit.Password)
@@ -219,9 +225,9 @@ class BackendPage(QFrame):
         agent_test_row.addWidget(self.agent_connection_status, 1)
         agent_layout.addLayout(agent_test_row)
 
-        control_title = QLabel("Agent 主动控制桌宠（Companion MCP）")
-        control_title.setObjectName("SectionTitle")
-        agent_layout.addWidget(control_title)
+        self.control_title = QLabel("Agent 主动控制桌宠（Companion MCP）")
+        self.control_title.setObjectName("SectionTitle")
+        agent_layout.addWidget(self.control_title)
         self.control_enabled = QCheckBox("允许当前 Agent 主动控制（默认关闭）")
         self.control_enabled.setAccessibleDescription(
             "开启后 Agent 可请求说话、表情、状态和逐次确认的截图"
@@ -332,6 +338,8 @@ class BackendPage(QFrame):
         self.agent_allow_insecure_ws.toggled.connect(self._sync_visibility)
         self.agent_kind.currentIndexChanged.connect(self._on_agent_kind_changed)
         self._agent_identity_path = ""
+        self._agent_device_id = ""
+        self._agent_extensions = {}
         self._sync_visibility()
 
     def mode(self) -> str:
@@ -358,6 +366,8 @@ class BackendPage(QFrame):
 
     def _show_agent_setup_help(self) -> None:
         kind = self.agent_kind.currentData() or "hermes"
+        if kind == "agent_link":
+            return
         dialog = self._agent_help_dialog
         if dialog is not None:
             try:
@@ -386,7 +396,12 @@ class BackendPage(QFrame):
 
     def _on_agent_kind_changed(self, *_args) -> None:
         kind = self.agent_kind.currentData() or "hermes"
-        display_name = "OpenClaw" if kind == "openclaw" else "Hermes"
+        display_names = {
+            "hermes": "Hermes",
+            "openclaw": "OpenClaw",
+            "agent_link": "Agent Link",
+        }
+        display_name = display_names[kind]
         self.agent_setup_help_btn.setText(f"{display_name} 接入检查…")
         self.agent_setup_help_btn.setAccessibleName(
             f"检查 {display_name} 接入状态"
@@ -395,6 +410,7 @@ class BackendPage(QFrame):
         defaults = {
             "hermes": DEFAULT_HERMES_WS_URL,
             "openclaw": DEFAULT_OPENCLAW_WS_URL,
+            "agent_link": DEFAULT_AGENT_LINK_WS_URL,
         }
         legacy_defaults = {
             "http://127.0.0.1:8642",
@@ -407,12 +423,42 @@ class BackendPage(QFrame):
             self.agent_auth_token.setPlaceholderText(
                 "可填 $HERMES_DASHBOARD_SESSION_TOKEN"
             )
-        else:
+            self.agent_transport_hint.setText(
+                "启动 hermes serve，并连接 /api/ws；跨机器请使用 SSH "
+                "回环隧道。Agent 模式不使用 HTTP 模型接口。"
+            )
+            self.agent_setup_help_hint.setText(
+                "先检查依赖和连接，再查看服务启动与首次配对步骤。"
+            )
+        elif kind == "openclaw":
             self.agent_base_url.setPlaceholderText(defaults["openclaw"])
             self.agent_auth_token.setPlaceholderText(
                 "可填 $OPENCLAW_GATEWAY_TOKEN 或 $MEAPET_AGENT_TOKEN"
             )
-        if self._agent_help_dialog is not None:
+            self.agent_transport_hint.setText(
+                "连接 OpenClaw Gateway（默认 18789）。Agent 模式不使用 "
+                "HTTP 模型接口。"
+            )
+            self.agent_setup_help_hint.setText(
+                "先检查依赖和连接，再查看 Gateway 启动、令牌与配对步骤。"
+            )
+        else:
+            self.agent_base_url.setPlaceholderText(defaults["agent_link"])
+            self.agent_auth_token.setPlaceholderText(
+                "可填 $AGENT_LINK_TOKEN 或 $MEAPET_AGENT_TOKEN"
+            )
+            self.agent_transport_hint.setText(
+                "MeaPet 主动连接该地址；一条 Agent Link v1 连接同时承载"
+                "聊天、Agent 主动消息和前端 Tool 调用。"
+            )
+            self.agent_setup_help_hint.setText(
+                "后端必须实现 docs/agent-link-v1.md 的字段与状态约定；"
+                "仅支持普通 WebSocket 消息还不够。"
+            )
+        if kind == "agent_link" and self._agent_help_dialog is not None:
+            self._agent_help_dialog.close()
+            self._agent_help_dialog = None
+        elif self._agent_help_dialog is not None:
             try:
                 self._agent_help_dialog.set_agent_kind(kind)
             except RuntimeError:
@@ -421,17 +467,28 @@ class BackendPage(QFrame):
 
     def _sync_visibility(self, *_args) -> None:
         agent_mode = self.agent_radio.isChecked()
+        agent_link = (
+            (self.agent_kind.currentData() or "hermes") == "agent_link"
+        )
         self.agent_frame.setVisible(agent_mode)
+        self.agent_setup_help_btn.setVisible(agent_mode and not agent_link)
+        self.agent_session_key_label.setVisible(agent_mode and not agent_link)
+        self.agent_session_key.setVisible(agent_mode and not agent_link)
         self.agent_allow_insecure_ws.setVisible(agent_mode)
         self.insecure_ws_warning.setVisible(
             agent_mode
             and self.agent_allow_insecure_ws.isChecked()
         )
+        self.control_title.setVisible(agent_mode and not agent_link)
+        self.control_enabled.setVisible(agent_mode and not agent_link)
         self.control_frame.setVisible(
-            agent_mode and self.control_enabled.isChecked()
+            agent_mode
+            and not agent_link
+            and self.control_enabled.isChecked()
         )
         self.insecure_http_warning.setVisible(
             agent_mode
+            and not agent_link
             and self.control_enabled.isChecked()
             and self.control_allow_http.isChecked()
         )
@@ -446,6 +503,7 @@ class BackendPage(QFrame):
         default_url = {
             "hermes": DEFAULT_HERMES_WS_URL,
             "openclaw": DEFAULT_OPENCLAW_WS_URL,
+            "agent_link": DEFAULT_AGENT_LINK_WS_URL,
         }[self.agent_kind.currentData() or "hermes"]
         self.agent_base_url.setText(
             str(agent.get("base_url") or default_url)
@@ -468,6 +526,12 @@ class BackendPage(QFrame):
             bool(agent.get("allow_insecure_ws", False))
         )
         self._agent_identity_path = str(agent.get("identity_path") or "")
+        self._agent_device_id = str(agent.get("device_id") or "")
+        self._agent_extensions = copy.deepcopy(
+            agent.get("extensions")
+            if isinstance(agent.get("extensions"), dict)
+            else {}
+        )
         tls = agent.get("tls") if isinstance(agent.get("tls"), dict) else {}
         self.agent_tls_verify.setChecked(bool(tls.get("verify", True)))
         self.agent_ca_file.setText(str(tls.get("ca_file") or ""))
@@ -510,6 +574,8 @@ class BackendPage(QFrame):
             "history_turns": self.agent_history_turns.value(),
             "allow_insecure_ws": self.agent_allow_insecure_ws.isChecked(),
             "identity_path": self._agent_identity_path,
+            "device_id": self._agent_device_id,
+            "extensions": copy.deepcopy(self._agent_extensions),
             "tls": {
                 "verify": self.agent_tls_verify.isChecked(),
                 "ca_file": self.agent_ca_file.text().strip(),

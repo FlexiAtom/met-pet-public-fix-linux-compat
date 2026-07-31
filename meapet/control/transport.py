@@ -19,6 +19,7 @@ from meapet.config.defaults import DEFAULT_CONTROL_PORT
 from meapet.dependencies import MCP_REQUIREMENT, UVICORN_REQUIREMENT
 
 from .broker import CompanionControlBroker
+from .capabilities import CapabilityRegistry, build_companion_capabilities
 from .mcp_server import build_companion_mcp
 
 
@@ -354,6 +355,8 @@ class ControlSecurityMiddleware:
 def build_control_asgi_app(
     broker: CompanionControlBroker,
     config: ControlServerConfig,
+    *,
+    registry: CapabilityRegistry | None = None,
 ):
     """构造官方 FastMCP 1.x Streamable HTTP ASGI 应用。"""
     try:
@@ -374,13 +377,16 @@ def build_control_asgi_app(
         allowed_hosts=allowed_hosts,
         allowed_origins=[origin],
     )
+    capabilities = registry or build_companion_capabilities(broker)
     server = build_companion_mcp(
         broker,
         transport_security=transport_security,
+        registry=capabilities,
     )
     app = server.streamable_http_app()
     secured = ControlSecurityMiddleware(app, config)
     secured.mcp_server = server
+    secured.tool_count = len(capabilities.tools())
     return secured
 
 
@@ -391,10 +397,16 @@ class CompanionMcpRuntime:
         self,
         broker: CompanionControlBroker,
         config: ControlServerConfig,
+        *,
+        registry: CapabilityRegistry | None = None,
     ) -> None:
         self.broker = broker
         self.config = config
-        self.app = build_control_asgi_app(broker, config)
+        self.app = build_control_asgi_app(
+            broker,
+            config,
+            registry=registry,
+        )
         self._future = None
         self._server = None
 

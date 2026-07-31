@@ -25,6 +25,7 @@ from meapet.agent.presentation import (
 from meapet.config.defaults import DEFAULT_CONTROL_PORT
 from meapet.config.store import resolve_resource_path, resolve_secret
 from meapet.control.broker import CompanionControlBroker
+from meapet.control.capabilities import build_companion_capabilities
 from meapet.control.transport import (
     CompanionMcpRuntime,
     ControlServerConfig,
@@ -63,12 +64,14 @@ def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int
 
 
 class PetControlBridgeMixin:
-    """仅在活动 Agent 模式中启动 MCP，并把命令投递到 Qt 主线程。"""
+    """把 Agent Link 或 Companion MCP 命令安全投递到 Qt 主线程。"""
 
     def _init_control(self) -> None:
         self._control_broker = None
         self._control_runtime = None
+        self._control_capabilities = None
         self._control_poll_timer = None
+        self._agent_link_start_future = None
         self._control_say_active = False
         self._control_presentation = None
         self._control_tts_workers = {}
@@ -77,21 +80,16 @@ class PetControlBridgeMixin:
         config = getattr(self, "config", {}) or {}
         llm = config.get("llm") or {}
         control = config.get("agent_control") or {}
-        if (
-            str(llm.get("mode") or "direct").strip().lower() != "agent"
-            or not bool(control.get("enabled", False))
-        ):
+        if str(llm.get("mode") or "direct").strip().lower() != "agent":
             return
-
-        raw_token = str(control.get("auth_token") or "").strip()
-        token = resolve_secret(raw_token, ("MEAPET_CONTROL_TOKEN",))
-        if not token and not raw_token:
-            token = ensure_control_token(control)
-            save = getattr(self, "_save_config", None)
-            if callable(save):
-                save()
-        if not token:
-            raise ValueError("Agent 主动控制 token 未配置或环境变量不可用")
+        agent = llm.get("agent") or {}
+        agent_kind = str(agent.get("kind") or "hermes").strip().lower()
+        uses_agent_link = agent_kind == "agent_link"
+        uses_legacy_mcp = (
+            bool(control.get("enabled", False)) and not uses_agent_link
+        )
+        if not uses_agent_link and not uses_legacy_mcp:
+            return
 
         state_builder = getattr(self, "_build_agent_frontend_context", None)
         state = state_builder() if callable(state_builder) else {}
@@ -107,34 +105,88 @@ class PetControlBridgeMixin:
                 control.get("capture_timeout_seconds"), 60, 5, 300
             ),
         )
-        server_config = ControlServerConfig(
-            listen_host=control.get("listen_host", "127.0.0.1"),
-            allowed_agent_ip=control.get("allowed_agent_ip", "127.0.0.1"),
-            port=control.get("port", DEFAULT_CONTROL_PORT),
-            auth_token=token,
-            allow_insecure_http=control.get("allow_insecure_http", False),
-            cert_file=resolve_resource_path(control.get("cert_file", "")),
-            key_file=resolve_resource_path(control.get("key_file", "")),
-            ca_file=resolve_resource_path(control.get("ca_file", "")),
-            max_request_bytes=_bounded_int(
-                control.get("max_request_bytes"), 1_048_576, 1024, 16 * 1024 * 1024
-            ),
-            rate_limit_per_minute=_bounded_int(
-                control.get("rate_limit_per_minute"), 60, 1, 10_000
-            ),
+        self._control_capabilities = build_companion_capabilities(
+            self._control_broker
         )
-        self._control_runtime = CompanionMcpRuntime(
-            self._control_broker,
-            server_config,
-        )
-        self._control_runtime.start()
+
+        if uses_agent_link:
+            self._attach_agent_link_control()
+        else:
+            raw_token = str(control.get("auth_token") or "").strip()
+            token = resolve_secret(raw_token, ("MEAPET_CONTROL_TOKEN",))
+            if not token and not raw_token:
+                token = ensure_control_token(control)
+                save = getattr(self, "_save_config", None)
+                if callable(save):
+                    save()
+            if not token:
+                raise ValueError(
+                    "Agent 主动控制 token 未配置或环境变量不可用"
+                )
+
+            server_config = ControlServerConfig(
+                listen_host=control.get("listen_host", "127.0.0.1"),
+                allowed_agent_ip=control.get(
+                    "allowed_agent_ip", "127.0.0.1"
+                ),
+                port=control.get("port", DEFAULT_CONTROL_PORT),
+                auth_token=token,
+                allow_insecure_http=control.get(
+                    "allow_insecure_http", False
+                ),
+                cert_file=resolve_resource_path(
+                    control.get("cert_file", "")
+                ),
+                key_file=resolve_resource_path(
+                    control.get("key_file", "")
+                ),
+                ca_file=resolve_resource_path(control.get("ca_file", "")),
+                max_request_bytes=_bounded_int(
+                    control.get("max_request_bytes"),
+                    1_048_576,
+                    1024,
+                    16 * 1024 * 1024,
+                ),
+                rate_limit_per_minute=_bounded_int(
+                    control.get("rate_limit_per_minute"),
+                    60,
+                    1,
+                    10_000,
+                ),
+            )
+            self._control_runtime = CompanionMcpRuntime(
+                self._control_broker,
+                server_config,
+                registry=self._control_capabilities,
+            )
+            self._control_runtime.start()
+            log.info(
+                "[control] Companion MCP 已启动: "
+                f"endpoint={server_config.endpoint} "
+                f"agent_ip={server_config.allowed_agent_ip}"
+            )
 
         self._control_poll_timer = QTimer(self)
         self._control_poll_timer.timeout.connect(self._poll_control)
         self._control_poll_timer.start(100)
+
+    def _attach_agent_link_control(self) -> None:
+        """把同一能力注册表绑定到当前 Agent Link，并立即启动长连接。"""
+        adapter = getattr(self, "agent_adapter", None)
+        bind = getattr(adapter, "bind_capability_registry", None)
+        start = getattr(adapter, "start", None)
+        if not callable(bind) or not callable(start):
+            raise ValueError("Agent Link 适配器未正确初始化")
+        registry = getattr(self, "_control_capabilities", None)
+        if registry is None:
+            raise ValueError("MeaPet 前端能力注册表未初始化")
+        bind(registry)
+        from meapet.async_runtime import submit
+
+        self._agent_link_start_future = submit(start())
         log.info(
-            "[control] Companion MCP 已启动: "
-            f"endpoint={server_config.endpoint} agent_ip={server_config.allowed_agent_ip}"
+            "[control] Agent Link 长连接已启动，"
+            f"tools={len(registry.tools())}"
         )
 
     def _rotate_control_token(self) -> str:
@@ -149,8 +201,11 @@ class PetControlBridgeMixin:
         if callable(save):
             save()
         llm = self.config.get("llm") or {}
+        agent = llm.get("agent") or {}
         if (
             str(llm.get("mode") or "direct").strip().lower() == "agent"
+            and str(agent.get("kind") or "hermes").strip().lower()
+            != "agent_link"
             and bool(control.get("enabled", False))
         ):
             self._init_control()
@@ -492,4 +547,6 @@ class PetControlBridgeMixin:
             except Exception as exc:
                 log.warning(f"[control] 服务停止失败: {type(exc).__name__}")
         self._control_runtime = None
+        self._control_capabilities = None
+        self._agent_link_start_future = None
         self._control_broker = None
