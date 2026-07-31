@@ -210,7 +210,8 @@ class MeaPet(
             log.warning(f"[audio_cache] 缓存清理跳过: {e}")
 
         if self._config_broken:
-            QTimer.singleShot(800, lambda: self._show_bubble("配置文件坏了喵", 5000))
+            QTimer.singleShot(800, lambda: self._show_bubble(
+                status_language.config_corrupt(), 5000))
 
     def _init_window(self):
         # 注意：不要用 SubWindow（无父窗口时在部分 Windows 上会"存在但不可见/无任务栏"）
