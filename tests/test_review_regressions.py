@@ -666,6 +666,15 @@ class TestRepositoryIgnoreRules(unittest.TestCase):
             "*.db-wal",
             "*.db-shm",
             "audio_cache/",
+            "voice_cache/",
+            "voice_asr/",
+            "models/voice_asr/",
+            "screenshots/",
+            "logs/",
+            "*.download",
+            "*.tmp",
+            "/AGENTS.md",
+            "/CLAUDE.md",
             ".coverage*",
             ".pytest_cache/",
             ".mypy_cache/",
@@ -674,15 +683,54 @@ class TestRepositoryIgnoreRules(unittest.TestCase):
         ):
             self.assertIn(expected, patterns)
 
+        self.assertFalse((ROOT / "screenshots" / ".gitignore").exists())
+        self.assertNotIn("AGENTS.md", (ROOT / "README.md").read_text(encoding="utf-8"))
+
+    def test_readme_defaults_to_chinese_with_separate_english_version(self):
+        chinese = (ROOT / "README.md").read_text(encoding="utf-8")
+        english = (ROOT / "README.en.md").read_text(encoding="utf-8")
+
+        self.assertTrue(chinese.startswith("# MeaPet - 桌面宠物\n"))
+        self.assertIn("**简体中文** | [English](README.en.md)", chinese)
+        self.assertIn("## 快速开始", chinese)
+        self.assertIn("[简体中文](README.md) | **English**", english)
+        self.assertIn("## Quick Start", english)
+
+    def test_build_script_checks_all_lfs_model_assets(self):
+        source = (ROOT / "scripts" / "build_windows.ps1").read_text(
+            encoding="utf-8"
+        )
+        for path in (
+            "models\\GPT_weights\\mea_pro-e50.ckpt",
+            "models\\SoVITS_weights\\mea_pro_e24_s13704.pth",
+            "vits_models\\G_latest.pth",
+        ):
+            self.assertIn(path, source)
+        self.assertIn("Get-ChildItem", source)
+        # PowerShell variable names are case-insensitive: do not shadow the
+        # absolute repository-root variable used by later checks.
+        self.assertIn('foreach ($assetName in @("models", "vits_models"))', source)
+        self.assertNotIn('foreach ($root in @("models", "vits_models"))', source)
+
+    def test_pyinstaller_spec_excludes_runtime_model_caches(self):
+        source = (ROOT / "MeaPet.spec").read_text(encoding="utf-8")
+        self.assertIn('(\"models/GPT_weights\", \"models/GPT_weights\")', source)
+        self.assertIn('(\"models/SoVITS_weights\", \"models/SoVITS_weights\")', source)
+        self.assertNotIn('(\"models\", \"models\")', source)
+        self.assertNotIn("voice_asr", source)
+
     def test_setuptools_covers_runtime_subpackages(self):
         import tomllib
 
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(project["project"]["license"], "MIT")
         setuptools = project["tool"]["setuptools"]
         package_find = setuptools["packages"]["find"]
+        package_data = setuptools["package-data"]["*"]
 
         self.assertIn("meapet*", package_find["include"])
         self.assertIn("wizard*", package_find["include"])
+        self.assertIn("assets/interaction_voices/**/*.wav", package_data)
 
 
 class TestInstallerReliability(unittest.TestCase):
@@ -697,8 +745,11 @@ class TestInstallerReliability(unittest.TestCase):
         with mock.patch(
             "wizard.env_utils.subprocess.run",
             return_value=SimpleNamespace(returncode=0),
-        ):
+        ) as run:
             self.assertTrue(pip_install(["example-package"]))
+        command = run.call_args.args[0]
+        self.assertIn("--index-url", command)
+        self.assertIn("example-package", command)
 
     def test_download_rejects_plain_http(self):
         from wizard.env_utils import download_file
@@ -891,6 +942,15 @@ class TestWatcherPrivacyAndLifecycle(unittest.TestCase):
 
 
 class TestPrivacySafeLogging(unittest.TestCase):
+    def test_tts_normal_logs_do_not_include_payload_text(self):
+        for relative in (
+            "meapet/tts/service.py",
+            "meapet/tts/translation.py",
+        ):
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertNotIn("chars={len(translated)}\\n{translated}", source)
+            self.assertNotIn('log.info(f"[tts] 合成原文:\\n{clean}")', source)
+
     def test_key_value_secrets_are_redacted_even_without_sk_prefix(self):
         from meapet.utils import redact_text
 

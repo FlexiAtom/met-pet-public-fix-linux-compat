@@ -591,7 +591,12 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         if translated:
             log.info(
                 f"[tts] 机器翻译完成: {source_language}->{target_language} "
-                f"chars={len(translated)}\n{translated}"
+                f"chars={len(translated)}"
+            )
+            log.track(
+                lambda value=translated: (
+                    f"[tts] 机器翻译结果 {source_language}->{target_language}:\n{value}"
+                )
             )
         else:
             log.warning(
@@ -616,7 +621,12 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         if translated:
             log.info(
                 f"[tts] 机器翻译完成: {source_language}->{target_language} "
-                f"chars={len(translated)}\n{translated}"
+                f"chars={len(translated)}"
+            )
+            log.track(
+                lambda value=translated: (
+                    f"[tts] 机器翻译结果 {source_language}->{target_language}:\n{value}"
+                )
             )
         else:
             log.warning(
@@ -633,7 +643,8 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             clean,
             requested_language,
         )
-        log.info(f"[tts] 合成原文:\n{clean}")
+        log.info(f"[tts] 合成原文 chars={len(clean)}")
+        log.track(lambda value=clean: f"[tts] 合成原文:\n{value}")
         if action == "skip":
             log.warning(f"TTS: 跳过语音 reason={reason}")
             return None
@@ -659,7 +670,12 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             return None
         log.info(
             f"[tts] 翻译后文本 {source_lang}->{target_lang} "
-            f"chars={len(translated)}:\n{translated}"
+            f"chars={len(translated)}"
+        )
+        log.track(
+            lambda value=translated: (
+                f"[tts] 翻译后文本 {source_lang}->{target_lang}:\n{value}"
+            )
         )
         return translated, target_lang
 
@@ -736,7 +752,8 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             clean,
             requested_language,
         )
-        log.info(f"[tts] 合成原文:\n{clean}")
+        log.info(f"[tts] 合成原文 chars={len(clean)}")
+        log.track(lambda value=clean: f"[tts] 合成原文:\n{value}")
         if action == "skip":
             log.warning(f"TTS: 跳过语音 reason={reason}")
             return None
@@ -766,7 +783,12 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             return None
         log.info(
             f"[tts] 翻译后文本 {source_lang}->{target_lang} "
-            f"chars={len(translated)}:\n{translated}"
+            f"chars={len(translated)}"
+        )
+        log.track(
+            lambda value=translated: (
+                f"[tts] 翻译后文本 {source_lang}->{target_lang}:\n{value}"
+            )
         )
         return translated, target_lang
 
@@ -864,8 +886,9 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         tts_text, synthesis_language = prepared
         log.info(
             f"[tts] 最终合成文本 lang={synthesis_language} "
-            f"chars={len(tts_text)}:\n{tts_text}"
+            f"chars={len(tts_text)}"
         )
+        log.track(lambda value=tts_text: f"[tts] 最终合成文本:\n{value}")
 
         # 输出文件
         output_wav = self._new_output_wav_path()
@@ -953,8 +976,9 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             tts_text, lang_tag = prepared
             log.info(
                 f"[tts] 最终合成文本 lang={lang_tag} "
-                f"chars={len(tts_text)}:\n{tts_text}"
+                f"chars={len(tts_text)}"
             )
+            log.track(lambda value=tts_text: f"[tts] 最终合成文本:\n{value}")
             return await self._speak_mimo_async(
                 tts_text,
                 output_wav,
@@ -982,7 +1006,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         缓存文件命名: {lang}_{safe}.wav
         """
         if cache_dir is None:
-            cache_dir = project_path("voice_cache")
+            cache_dir = data_path("voice_cache")
         os.makedirs(cache_dir, exist_ok=True)
 
         results = {}
@@ -1012,7 +1036,15 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
     def get_cached(self, text: str, cache_dir: str = None) -> Optional[str]:
         """获取已缓存语音路径（优先当前 voice_lang 前缀，再回退 jp_/无前缀）"""
         if cache_dir is None:
-            cache_dir = project_path("voice_cache")
+            cache_dirs = []
+            for candidate in (
+                data_path("voice_cache"),
+                project_path("voice_cache"),
+            ):
+                if candidate not in cache_dirs:
+                    cache_dirs.append(candidate)
+        else:
+            cache_dirs = [cache_dir]
         safe = audio_cache_key(text)
         if not safe:
             return None
@@ -1022,20 +1054,21 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         prefixes.append(self.voice_lang or "jp")
         if "jp" not in prefixes:
             prefixes.append("jp")
-        for prefix in prefixes:
-            cache_path = os.path.join(cache_dir, f"{prefix}_{safe}.wav")
-            if os.path.exists(cache_path):
-                return cache_path
-        # 只读兼容旧的人类可读文件名；新缓存一律使用哈希键。
-        legacy_name = legacy_audio_cache_name(text)
-        if legacy_name:
+        for cache_dir in cache_dirs:
             for prefix in prefixes:
-                legacy = os.path.join(cache_dir, f"{prefix}_{legacy_name}.wav")
+                cache_path = os.path.join(cache_dir, f"{prefix}_{safe}.wav")
+                if os.path.exists(cache_path):
+                    return cache_path
+            # 只读兼容旧的人类可读文件名；新缓存一律使用哈希键。
+            legacy_name = legacy_audio_cache_name(text)
+            if legacy_name:
+                for prefix in prefixes:
+                    legacy = os.path.join(cache_dir, f"{prefix}_{legacy_name}.wav")
+                    if os.path.exists(legacy):
+                        return legacy
+                legacy = os.path.join(cache_dir, f"{legacy_name}.wav")
                 if os.path.exists(legacy):
                     return legacy
-            legacy = os.path.join(cache_dir, f"{legacy_name}.wav")
-            if os.path.exists(legacy):
-                return legacy
         return None
 
 

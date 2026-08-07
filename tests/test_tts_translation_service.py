@@ -56,7 +56,7 @@ class TestTranslationService(unittest.TestCase):
         loader.assert_called_once_with()
         self.assertFalse(service.available)
 
-    def test_translation_backend_uses_a_fixed_region_without_geo_request(self):
+    def test_translation_backend_defaults_to_cn(self):
         from meapet.tts.translation import TranslationService
 
         translate = mock.Mock(return_value="こんにちは")
@@ -66,11 +66,65 @@ class TestTranslationService(unittest.TestCase):
             {"translators": fake_package},
         ):
             os.environ.pop("translators_default_region", None)
+            os.environ.pop("MEAPET_TRANSLATORS_REGION", None)
             loaded = TranslationService._load_translate_func()
             selected_region = os.environ.get("translators_default_region")
 
         self.assertIs(loaded, translate)
         self.assertEqual(selected_region, "CN")
+
+    def test_translation_backend_honors_explicit_region_override(self):
+        from meapet.tts.translation import TranslationService
+
+        translate = mock.Mock(return_value="こんにちは")
+        fake_package = SimpleNamespace(translate_text=translate)
+        with mock.patch.dict(
+            os.environ,
+            {"MEAPET_TRANSLATORS_REGION": "en"},
+            clear=False,
+        ), mock.patch.dict(sys.modules, {"translators": fake_package}):
+            os.environ.pop("translators_default_region", None)
+            loaded = TranslationService._load_translate_func()
+            selected_region = os.environ.get("translators_default_region")
+
+        self.assertIs(loaded, translate)
+        self.assertEqual(selected_region, "EN")
+
+    def test_translation_backend_ignores_invalid_region_override(self):
+        from meapet.tts.translation import TranslationService
+
+        translate = mock.Mock(return_value="こんにちは")
+        fake_package = SimpleNamespace(translate_text=translate)
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MEAPET_TRANSLATORS_REGION": "ap-southeast-1",
+                "translators_default_region": "CN",
+            },
+            clear=False,
+        ), mock.patch.dict(sys.modules, {"translators": fake_package}):
+            loaded = TranslationService._load_translate_func()
+            selected_region = os.environ.get("translators_default_region")
+
+        self.assertIs(loaded, translate)
+        self.assertEqual(selected_region, "CN")
+
+    def test_translation_backend_preserves_valid_package_region(self):
+        from meapet.tts.translation import TranslationService
+
+        translate = mock.Mock(return_value="こんにちは")
+        fake_package = SimpleNamespace(translate_text=translate)
+        with mock.patch.dict(
+            os.environ,
+            {"translators_default_region": "en"},
+            clear=False,
+        ), mock.patch.dict(sys.modules, {"translators": fake_package}):
+            os.environ.pop("MEAPET_TRANSLATORS_REGION", None)
+            loaded = TranslationService._load_translate_func()
+            selected_region = os.environ.get("translators_default_region")
+
+        self.assertIs(loaded, translate)
+        self.assertEqual(selected_region, "EN")
 
     def test_rotates_across_at_most_three_non_llm_services(self):
         from meapet.tts.translation import TranslationService

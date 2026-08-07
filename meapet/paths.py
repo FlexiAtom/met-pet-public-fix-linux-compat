@@ -1,7 +1,6 @@
 """Project root and path helpers."""
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -55,6 +54,61 @@ def get_data_dir() -> str:
 def data_path(*parts: str) -> str:
     """Join path parts under :func:`get_data_dir`."""
     return str(Path(get_data_dir()).joinpath(*parts))
+
+
+VOICE_ASR_MODEL_REPO = (
+    "pkufool/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
+)
+VOICE_ASR_MODEL_CACHE_NAME = VOICE_ASR_MODEL_REPO.replace("/", "--")
+VOICE_ASR_REQUIRED_FILES = (
+    "encoder-epoch-99-avg-1.int8.onnx",
+    "decoder-epoch-99-avg-1.int8.onnx",
+    "joiner-epoch-99-avg-1.int8.onnx",
+    "tokens.txt",
+)
+
+
+def voice_asr_cache_dir() -> Path:
+    """Return the writable cache root for the optional ASR model."""
+    return Path(data_path("voice_asr"))
+
+
+def find_voice_asr_model_dir() -> Path | None:
+    """Find a complete ASR model in the new cache or legacy repository path."""
+    roots: list[Path] = []
+    for root in (
+        voice_asr_cache_dir(),
+        Path(project_path("models", "voice_asr")),
+    ):
+        if root not in roots:
+            roots.append(root)
+
+    def complete(directory: Path) -> bool:
+        return directory.is_dir() and all(
+            (directory / name).is_file() for name in VOICE_ASR_REQUIRED_FILES
+        )
+
+    for root in roots:
+        expected = (
+            root
+            / "models"
+            / VOICE_ASR_MODEL_CACHE_NAME
+            / "snapshots"
+            / "master"
+        )
+        if complete(expected):
+            return expected
+        if complete(root):
+            return root
+        if not root.is_dir():
+            continue
+        try:
+            for marker in root.rglob("tokens.txt"):
+                if complete(marker.parent):
+                    return marker.parent
+        except OSError:
+            continue
+    return None
 
 
 def migrate_legacy_home_data() -> list[str]:

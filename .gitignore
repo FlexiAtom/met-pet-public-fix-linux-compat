@@ -24,6 +24,9 @@ wizard_window_state.json
 # 日志与本地运行数据
 *.log
 *.log.*
+logs/
+*.download
+*.tmp
 *.db
 *.db-journal
 *.db-wal
@@ -34,6 +37,10 @@ chat_errors.log
 
 # 运行时缓存 / 下载物
 audio_cache/
+voice_cache/
+voice_asr/
+models/voice_asr/
+screenshots/
 wheels/
 OllamaSetup.exe
 _python.zip
@@ -51,6 +58,10 @@ Thumbs.db
 # IDE 配置
 .vscode/
 .idea/
+
+# Local assistant/developer instructions are not project artifacts.
+/AGENTS.md
+/CLAUDE.md
 
 # 构建产物
 mea_pet.egg-info/

@@ -24,6 +24,8 @@ function Test-LfsPointer([string]$Path) {
 
 $critical = @(
     "vits_models\G_latest.pth",
+    "models\GPT_weights\mea_pro-e50.ckpt",
+    "models\SoVITS_weights\mea_pro_e24_s13704.pth",
     "vits_models\finetune_speaker.json",
     "config.example.json",
     "meapet\assets\fonts\LXGWWenKai-Regular.ttf"
@@ -37,6 +39,19 @@ foreach ($rel in $critical) {
     if (Test-LfsPointer $p) {
         throw "Refusing to package Git LFS pointer: $rel (run git lfs pull)"
     }
+}
+
+# Every model included by the spec must be hydrated. Keep this check broad so
+# adding another .pth/.ckpt asset cannot silently ship a tiny LFS pointer.
+foreach ($assetName in @("models", "vits_models")) {
+    $assetRoot = Join-Path $Root $assetName
+    if (-not (Test-Path $assetRoot)) { continue }
+    Get-ChildItem -LiteralPath $assetRoot -Recurse -File -Include *.pth,*.ckpt |
+        ForEach-Object {
+            if (Test-LfsPointer $_.FullName) {
+                throw "Refusing to package Git LFS pointer: $($_.FullName) (run git lfs pull)"
+            }
+        }
 }
 
 # Never ship developer secrets from a local config.json as datas (spec only

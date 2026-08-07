@@ -29,8 +29,8 @@ export QTWEBENGINE_DISABLE_SANDBOX=1
 # 如果你有独立的 GPT-SoVITS Python 环境，设置此变量指向其 python 解释器
 # export GSV_PYTHON="$HOME/GPT-SoVITS/.venv/bin/python3"
 
-# --- HuggingFace 镜像 (国内用户) ---
-# export HF_ENDPOINT="https://hf-mirror.com"
+# --- HuggingFace / tokenizer options ---
+# Set HF_ENDPOINT or MEAPET_HF_ENDPOINT explicitly when a local mirror is needed.
 # export TOKENIZERS_PARALLELISM=false
 
 # --- 清理可能污染子进程的变量 ---
@@ -111,6 +111,7 @@ if ! $PY_CMD -m pip --version &>/dev/null; then
 fi
 
 # ======== 4. 选择 pip 镜像 ========
+DEFAULT_PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
 MIRROR_URL="${MEAPET_PIP_INDEX_URL:-${PIP_INDEX_URL:-}}"
 MIRROR_CHOICE="1"
 if [[ -n "$MIRROR_URL" ]]; then
@@ -118,16 +119,28 @@ if [[ -n "$MIRROR_URL" ]]; then
 elif [[ -t 0 ]]; then
     echo ""
     echo "请选择 pip 安装源:"
-    echo "  1) PyPI 默认源 (国际)"
-    echo "  2) 清华 TUNA 镜像 (国内)"
-    echo "  3) 跳过依赖安装"
-    read -r -p "请输入选项 [1-3] (默认: 1): " MIRROR_CHOICE
+    echo "  1) 清华 TUNA 镜像 (国内，默认)"
+    echo "  2) PyPI 官方源"
+    echo "  3) 输入自定义 pip 源"
+    echo "  4) 跳过依赖安装"
+    read -r -p "请输入选项 [1-4] (默认: 1): " MIRROR_CHOICE
     MIRROR_CHOICE="${MIRROR_CHOICE:-1}"
     case "$MIRROR_CHOICE" in
-        2) MIRROR_URL="https://pypi.tuna.tsinghua.edu.cn/simple" ;;
-        3) echo "[MeaPet] ⏭️  跳过依赖安装"; ;;
-        *) MIRROR_URL="" ;;
+        1) MIRROR_URL="$DEFAULT_PIP_INDEX_URL" ;;
+        2) MIRROR_URL="https://pypi.org/simple" ;;
+        3)
+            read -r -p "请输入自定义 pip 源 URL: " MIRROR_URL || MIRROR_URL=""
+            MIRROR_URL="${MIRROR_URL%/}"
+            if [[ -z "$MIRROR_URL" ]]; then
+                echo "[MeaPet] 未提供自定义源，继续使用清华 TUNA 镜像"
+                MIRROR_URL="$DEFAULT_PIP_INDEX_URL"
+            fi
+            ;;
+        4) echo "[MeaPet] ⏭️  跳过依赖安装"; ;;
+        *) MIRROR_URL="$DEFAULT_PIP_INDEX_URL" ;;
     esac
+else
+    MIRROR_URL="$DEFAULT_PIP_INDEX_URL"
 fi
 
 # ======== 5. 安装基础依赖 ========
@@ -137,7 +150,7 @@ if [[ ! -f "$REQ_FILE" ]]; then
     REQ_FILE="$SCRIPT_DIR/requirements.txt"
 fi
 
-if [[ "$MIRROR_CHOICE" == "3" ]]; then
+if [[ "$MIRROR_CHOICE" == "4" ]]; then
     echo "[MeaPet] 跳过依赖安装"
 elif [[ -f "$REQ_FILE" ]]; then
     echo "[MeaPet] 正在安装基础依赖 ..."

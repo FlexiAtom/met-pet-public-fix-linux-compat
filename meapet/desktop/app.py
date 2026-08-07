@@ -43,6 +43,7 @@ from meapet.config.store import (
     resolve_vision_api_key,
     resolve_vision_backend,
 )
+from meapet.config.defaults import DEFAULT_OLLAMA_VISION_MODEL
 from meapet.config.checker import check_config_lines
 from meapet.window_state import state_path_for_config
 
@@ -398,7 +399,7 @@ class MeaPet(
         backend = resolve_vision_backend(vision_cfg, llm_cfg)
         # 上传目标与云端确认共用同一解析：ollama 只走 host，mimo 走 api_base
         api_base = resolve_vision_api_base(vision_cfg, llm_cfg)
-        vision_model = vision_cfg.get("model") or "qwen3.5:4b"
+        vision_model = vision_cfg.get("model") or DEFAULT_OLLAMA_VISION_MODEL
 
         log.info(
             f"[watcher] 视觉路由: mode={vision_mode} backend={backend} "

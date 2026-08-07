@@ -284,8 +284,8 @@ GPT-SoVITS 的固定参考音频按规范化语言查找：
 {
   "tts": {
     "reference_audios": {
-      "ja": {"path": "D:/voices/mea-ja.wav", "text": "参考文本"},
-      "zh": {"path": "D:/voices/mea-zh.wav", "text": "参考文本"}
+      "ja": {"path": "./voice_cache/mea-ja.wav", "text": "参考文本"},
+      "zh": {"path": "./voice_cache/mea-zh.wav", "text": "参考文本"}
     }
   }
 }
@@ -400,11 +400,11 @@ Token 少于 32 个字符时服务拒绝启动。空 Token 会自动生成高熵
 
 ## 10. 日志和故障诊断
 
-默认日志如实记录用户输入、模型可见回复和 TTS 翻译文本，并按日滚动保留 7 天；API Key、认证头、推理、内部工具参数/结果和截图内容禁止进入日志。`MEAPET_DEBUG=1` 仅增加协议级诊断。提交问题前可提供：
+默认日志只记录文本长度、状态和错误类型，并按日滚动保留 7 天；对话正文和 TTS 翻译文本只在显式启用 TRACK 级调试时输出。API Key、认证头、推理、内部工具参数/结果和截图内容禁止进入普通日志。提交问题前可提供：
 
 - `logs/` 中对应日期的脱敏日志。
 - `meapet_boot.log` 启动摘要。
 - `meapet_fault.log` 原生崩溃信息。
 - 所选模式、协议和模型 ID。
 
-不要提供 `config.json`、Bearer Token、API Key、截图原图、`mea_memory.db` 或未经检查的完整日志；日志可能包含私人对话正文。
+不要提供 `config.json`、Bearer Token、API Key、截图原图、`mea_memory.db` 或未经检查的完整日志；启用 TRACK 调试时日志可能包含私人对话正文。

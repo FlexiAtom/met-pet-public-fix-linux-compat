@@ -1,35 +1,37 @@
-# MeaPet — Desktop Companion
+# MeaPet - 桌面宠物
 
-A Windows-first (Linux-compatible) PyQt5 transparent desktop companion. It integrates character sprites, AI conversation, speech synthesis, screen vision, SQLite memory, and affection into a single desktop frontend, supporting Live2D / PNG dual rendering.
+**简体中文** | [English](README.en.md)
 
-MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screenshot authorization, and local state are managed by MeaPet. When using an Agent as the reply backend, the model, long-term memory, and internal tools are managed by the Agent.
+MeaPet 是一款以 Windows 为主要平台、兼容 Linux 的 PyQt5 透明桌面宠物。它将角色立绘、AI 对话、语音合成、屏幕视觉、SQLite 记忆和好感度整合在一个桌面前端中，同时支持 Live2D 和 PNG 两种渲染方式。
 
-**Mobile Version**: [mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile) (Lightweight mobile client with core features)
+MeaPet 有清晰的职责边界：角色呈现、聊天气泡、TTS、截图授权和本地状态由 MeaPet 管理；使用 Agent 作为回复后端时，模型、长期记忆和内部工具由 Agent 管理。
 
-## Current Capabilities
+**移动版**：[mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile)（包含核心功能的轻量移动客户端）
 
-| Capability | Description |
-|------------|-------------|
-| Reply backends | Direct model API or Agent — one active at a time, no automatic fallback |
-| Direct protocol | Ollama Chat, OpenAI Chat/Responses, Anthropic Messages over HTTP streaming |
-| Agent | Hermes TUI Gateway, OpenClaw Gateway v4, or custom Agent Link v1 over WebSocket |
-| Display | Streaming text bubble without TTS; waits for audio then shows bubble + plays in sync |
-| Multi-segment replies | Each segment has its own bubble, mood, voice text, language, and TTS style |
-| Speech | MiMo cloud TTS, local GPT-SoVITS, local VITS; GPT-SoVITS supports per-language reference audio |
-| Vision | Disabled, inherit main model, or relay via independent vision model |
-| Reverse control | Shared frontend tools over Companion MCP or the same Agent Link connection |
-| Local data | SQLite memory, affection, per-backend/per-session conversation timeline |
-| Rendering | Live2D dynamic model and PNG diff sprites, switchable at runtime |
+## 当前功能
 
-## Quick Start
+| 功能 | 说明 |
+|------|------|
+| 回复后端 | 直连模型 API 或 Agent；同时只启用一种，不自动回退 |
+| 直连协议 | 通过 HTTP 流式传输支持 Ollama Chat、OpenAI Chat/Responses、Anthropic Messages |
+| Agent | 通过 WebSocket 支持 Hermes TUI Gateway、OpenClaw Gateway v4 或自定义 Agent Link v1 |
+| 显示 | 未启用 TTS 时流式显示文本气泡；启用 TTS 时等待音频生成，再同步显示气泡并播放 |
+| 多段回复 | 每段回复分别包含气泡、情绪、朗读文本、语言和 TTS 风格 |
+| 语音 | 支持 MiMo 云端 TTS、本地 GPT-SoVITS、本地 VITS；GPT-SoVITS 支持按语言配置参考音频 |
+| 视觉 | 可禁用、继承主模型，或通过独立视觉模型中继 |
+| 反向控制 | 通过 Companion MCP 或同一 Agent Link 连接共享前端工具 |
+| 本地数据 | SQLite 记忆、好感度，以及按后端和会话隔离的对话时间线 |
+| 渲染 | Live2D 动态模型与 PNG 差分立绘，可在运行时切换 |
 
-The companion requires Python 3.10+ (project defaults to 3.12). For local VITS, Python 3.10–3.12 is recommended due to dependency compatibility.
+## 快速开始
+
+桌宠需要 Python 3.10 或更高版本（项目默认使用 3.12）。由于依赖兼容性限制，使用本地 VITS 时建议使用 Python 3.10-3.12。
 
 ### Windows
 
-Double-click `启动桌宠.bat`. The script reuses `.venv` if available, creates the environment and installs core dependencies when needed, and opens the configuration wizard on first run.
+双击 `启动桌宠.bat`。脚本会复用已有的 `.venv`；必要时会创建环境并安装核心依赖，首次运行时会打开配置向导。
 
-Or run manually:
+也可以手动运行：
 
 ```bat
 python setup_wizard.py
@@ -44,91 +46,95 @@ python setup_wizard.py
 QT_QPA_PLATFORM=xcb python pet.py
 ```
 
-`live2d-py` is optional; falls back to PNG when unavailable. Prebuilt packages are available at [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py).
+`live2d-py` 是可选依赖；不可用时会回退到 PNG。预编译包可从 [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py) 获取。
 
-The configuration wizard can also be reopened from the pet's right-click menu ("Open Settings…") at any time. After saving, the new backend takes effect immediately; any in-flight generations from the old backend are cancelled.
+随时可以通过桌宠右键菜单中的“打开设置...”再次打开配置向导。保存后，新后端会立即生效，旧后端仍在进行的生成任务会被取消。
 
-### Windows binary (PyInstaller onedir)
+中文故障排查步骤见 [`docs/troubleshooting.zh-CN.md`](docs/troubleshooting.zh-CN.md)。
 
-Build from a venv that has app deps + PyInstaller (VITS needs `numpy<2` and `setuptools==69.5.1` if you ship local VITS):
+### Windows 二进制包（PyInstaller onedir）
+
+请在已安装应用依赖和 PyInstaller 的虚拟环境中构建。如果发布包包含本地 VITS，还需要 `numpy<2` 和 `setuptools==69.5.1`：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 ```
 
-Output: `dist/MeaPet/MeaPet.exe` + `dist/MeaPet/_internal/`.
+输出：`dist/MeaPet/MeaPet.exe` 和 `dist/MeaPet/_internal/`。
 
-Portable layout (user-writable data lives under `_internal` with the bundle):
+`mea-pet` wheel 只是用于开发和依赖分发的 Python 包组件，不包含完整桌面资源目录或独立启动器。请使用源码检出目录或 PyInstaller onedir 包运行完整桌宠。
 
-| Path under `_internal` | Role |
-|------------------------|------|
-| `config.json` / `config.example.json` | User config (example is the template) |
-| `mea_memory.db` | SQLite memory / affection |
-| `audio_cache/`, `logs/` | Runtime cache and logs |
-| `sprites/`, `live2d/`, `vits_models/`, `vits_core/`, `dic/` | Bundled assets |
+便携版目录结构（用户可写数据与程序包一起放在 `_internal` 下）：
 
-Speech engines in the packaged build:
+| `_internal` 下的路径 | 用途 |
+|----------------------|------|
+| `config.json` / `config.example.json` | 用户配置（example 文件是模板） |
+| `mea_memory.db` | SQLite 记忆和好感度 |
+| `audio_cache/`、`logs/` | 运行时缓存和日志 |
+| `sprites/`、`live2d/`、`vits_models/`、`vits_core/`、`dic/` | 随包资源 |
 
-- **VITS**: in-process (torch + `vits_core` inside the app). No external Python required when models are present.
-- **MiMo**: cloud TTS (API key).
-- **GPT-SoVITS**: still needs a separate GPT-SoVITS runtime `python.exe`; never point it at `MeaPet.exe`.
+打包版支持的语音引擎：
 
-Do not ship a developer `config.json` that contains API keys. Only `config.example.json` is packaged as a template. Do not commit `dist/` or `build/`.
+- **VITS**：在应用进程内运行（应用内包含 torch 和 `vits_core`）。模型存在时不需要外部 Python。
+- **MiMo**：云端 TTS（需要 API Key）。
+- **GPT-SoVITS**：仍需要独立 GPT-SoVITS 运行环境中的 `python.exe`；不要将路径指向 `MeaPet.exe`。
 
-## Reply Backends
+不要发布包含 API Key 的开发者 `config.json`。打包时只应将 `config.example.json` 作为模板。不要提交 `dist/` 或 `build/`。
 
-### Direct Model API
+## 回复后端
 
-Direct mode lets MeaPet manage character prompts, recent context, SQLite memory, and output constraints. It is the only mode that connects directly to an LLM HTTP API.
+### 直连模型 API
 
-You configure three things in the wizard: the API base URL, the model name (with optional auto-discovery via "Fetch Models"), and your API key. The saved `provider` is always `custom`. Transport is decided by `protocol` + `api_base` (Ollama local URLs auto-select `ollama_chat`; everything else defaults to OpenAI-compatible chat). URL hints only affect which environment variable is probed for the key, and MiMo/Ollama linkage for TTS/vision.
+直连模式由 MeaPet 管理角色提示词、近期上下文、SQLite 记忆和输出约束。这是唯一会直接连接 LLM HTTP API 的模式。
 
-| API Base URL Example | Saved provider | Auto protocol | Environment Variable |
-|----------------------|----------------|---------------|---------------------|
-| `https://api.deepseek.com/v1` | `custom` | `openai_chat` | `DEEPSEEK_API_KEY` (also `MEAPET_API_KEY`) |
+在向导中需要配置三项内容：API 基础 URL、模型名称（可以通过“获取模型”自动发现）和 API Key。保存后的 `provider` 始终为 `custom`。传输方式由 `protocol` 和 `api_base` 决定：Ollama 本地 URL 会自动选择 `ollama_chat`，其他地址默认使用 OpenAI 兼容的 Chat 协议。URL 提示只影响从哪个环境变量读取 Key，以及 TTS/视觉与 MiMo/Ollama 的联动。
+
+| API 基础 URL 示例 | 保存的 provider | 自动选择的协议 | 环境变量 |
+|-------------------|-----------------|----------------|----------|
+| `https://api.deepseek.com/v1` | `custom` | `openai_chat` | `DEEPSEEK_API_KEY`（也支持 `MEAPET_API_KEY`） |
 | `https://api.xiaomimimo.com/v1` | `custom` | `openai_chat` | `MIMO_API_KEY` |
-| `http://localhost:11434` | `custom` | `ollama_chat` | (none — key optional) |
-| Other OpenAI-compatible endpoint | `custom` | `openai_chat` | `MEAPET_API_KEY` / `OPENAI_API_KEY` |
+| `http://localhost:11434` | `custom` | `ollama_chat` | 无（Key 可选） |
+| 其他 OpenAI 兼容端点 | `custom` | `openai_chat` | `MEAPET_API_KEY` / `OPENAI_API_KEY` |
 
 ### Agent
 
-Agent mode treats MeaPet as a pure desktop frontend:
+Agent 模式将 MeaPet 作为纯桌面前端：
 
-- MeaPet calls the Agent to generate replies, providing mood, action, TTS language, and character state as context.
-- The Agent uses its own model, memory, and internal tools; MeaPet does not require the Agent to implement additional "memory query" capabilities.
-- Internal tool names and raw parameters are not displayed in character bubbles. Safe status (start, complete, failure) enters the timeline; diagnostic details go to logs only.
-- Agent mode uses WebSocket only. Hermes connects to the native TUI Gateway exposed by `hermes serve`; OpenClaw connects to Gateway v4; a custom backend can implement Agent Link v1. HTTP/SSE model endpoints belong exclusively to direct mode.
-- Connections are reused across turns and carry bidirectional streaming, cancellation, ping/pong, and protocol-specific reconnect recovery. OpenClaw retries with the same idempotency key; Hermes resumes the stored session and reconciles history instead of blindly resubmitting a possibly executed tool turn.
-- Agent Link uses one outbound connection for chat and frontend tool calls. MeaPet publishes typed tool schemas after the handshake, so the third-party connector can register them in its own Agent loop and can proactively call `meapet.say`.
-- Agent responses must follow the MeaPet segmented output format. Malformed output raises an explicit format-repair state; no Agent path silently falls back to an HTTP model endpoint.
+- MeaPet 调用 Agent 生成回复，并提供情绪、动作、TTS 语言和角色状态等上下文。
+- Agent 使用自己的模型、记忆和内部工具；MeaPet 不要求 Agent 额外实现“查询记忆”能力。
+- 内部工具名称和原始参数不会显示在角色气泡中。安全的状态（开始、完成、失败）会进入时间线，诊断详情只写入日志。
+- Agent 模式只使用 WebSocket。Hermes 连接 `hermes serve` 暴露的原生 TUI Gateway，OpenClaw 连接 Gateway v4，自定义后端可以实现 Agent Link v1。HTTP/SSE 模型端点只属于直连模式。
+- 连接会跨轮次复用，支持双向流式传输、取消、ping/pong 以及各协议自己的断线恢复。OpenClaw 使用相同的幂等键重试；Hermes 会恢复已保存的会话并核对历史，而不是盲目重新提交可能已经执行过工具调用的轮次。
+- Agent Link 使用同一个出站连接完成聊天和前端工具调用。握手后 MeaPet 会发布带类型的工具 schema，第三方连接器可以在自己的 Agent 循环中注册这些工具，并主动调用 `meapet.say`。
+- Agent 回复必须遵循 MeaPet 的分段输出格式。格式错误会进入明确的格式修复状态；任何 Agent 路径都不会静默回退到 HTTP 模型端点。
 
-The local `session_id` identifies MeaPet's timeline scope. OpenClaw additionally persists its Gateway `session_key`; Hermes persists the server-returned `remote_session_id` and uses `session.resume` after restart or reconnect. "Clear memory" in Agent mode explicitly starts a new upstream Agent session. Old timelines remain readable.
+本地 `session_id` 用于标识 MeaPet 的时间线范围。OpenClaw 还会持久化其 Gateway `session_key`；Hermes 会持久化服务器返回的 `remote_session_id`，并在重启或重连后使用 `session.resume`。在 Agent 模式中，“清除记忆”会明确启动一个新的上游 Agent 会话。旧时间线仍可读取。
 
-The complete custom backend contract is documented in [`docs/agent-link-v1.md`](docs/agent-link-v1.md). A generic WebSocket endpoint is not sufficient: the backend must implement its envelope, handshake, tool snapshot, request correlation, idempotency, cancellation, offline, and reconnect semantics.
+完整的自定义后端契约见 [`docs/agent-link-v1.md`](docs/agent-link-v1.md)。普通 WebSocket 端点并不足够；后端必须实现其中定义的信封格式、握手、工具快照、请求关联、幂等、取消、离线和重连语义。
 
-## Reply, Bubble, and TTS Timing
+## 回复、气泡与 TTS 时序
 
-Each reply segment from the model or Agent contains:
+模型或 Agent 返回的每个回复分段都包含：
 
-- `display_text`: text shown in the bubble
-- `voice_text`: text sent to TTS
-- `voice_language`: TTS language
-- `mood`: character expression; unsupported values normalize to `neutral`
-- `tts_style`: tone description passed to TTS engines that support it
+- `display_text`：气泡中显示的文本
+- `voice_text`：发送给 TTS 的文本
+- `voice_language`：TTS 语言
+- `mood`：角色情绪；不支持的值会归一化为 `neutral`
+- `tts_style`：传给支持该字段的 TTS 引擎的语气描述
 
-Rendering rules:
+渲染规则：
 
-1. TTS disabled: bubbles appear on first text delta and grow incrementally; finalized when the segment completes.
-2. TTS enabled: the full segment is collected and audio is generated first; the bubble and audio play appear simultaneously once audio is ready.
-3. Bubble duration is `max(configured min duration, audio duration + 500ms)`.
-4. If TTS fails to start, the language is unsupported, or audio generation fails, the reply falls back to a text-only bubble immediately — no blocking.
-5. Multiple segments are not merged; they play sequentially. Clicking a bubble or opening "Conversation Timeline…" shows the full turn.
+1. 未启用 TTS：收到第一个文本增量时显示气泡，随后逐步增长，分段完成时定稿。
+2. 已启用 TTS：先收集完整分段并生成音频，音频就绪后同时显示气泡并开始播放。
+3. 气泡持续时间为 `max(配置的最短时长, 音频时长 + 500ms)`。
+4. 如果 TTS 无法启动、语言不受支持或音频生成失败，会立即回退为纯文本气泡，不会阻塞。
+5. 多个分段不会合并，而是依次播放。点击气泡或打开“对话时间线...”可以查看这一轮的完整内容。
 
-Both direct and Agent modes share the same presentation layer, so switching backends does not change bubble or TTS timing.
+直连和 Agent 模式共用同一套呈现层，因此切换后端不会改变气泡或 TTS 时序。
 
-## Multi-language Speech
+## 多语言语音
 
-GPT-SoVITS can be configured with a fixed reference audio per language in `tts.reference_audios`. Each entry must specify the language; paths can be project-relative or absolute. Reference text can be left empty:
+GPT-SoVITS 可以通过 `tts.reference_audios` 为每种语言配置固定参考音频。每一项都必须指定语言；路径可以相对于项目，也可以使用绝对路径。参考文本可以留空：
 
 ```json
 {
@@ -136,64 +142,64 @@ GPT-SoVITS can be configured with a fixed reference audio per language in `tts.r
     "engine": "gpt_sovits",
     "enabled": true,
     "reference_audios": {
-      "ja": {"path": "./voices/mea-ja.wav", "text": ""},
-      "zh": {"path": "./voices/mea-zh.wav", "text": ""},
-      "en": {"path": "./voices/mea-en.wav", "text": ""}
+      "ja": {"path": "./voice_cache/mea-ja.wav", "text": ""},
+      "zh": {"path": "./voice_cache/mea-zh.wav", "text": ""},
+      "en": {"path": "./voice_cache/mea-en.wav", "text": ""}
     }
   }
 }
 ```
 
-Legacy `gsv_ref_wav` + `gsv_ref_lang` fields are read-only migrated to a single reference audio entry. A `.txt` file with the same name as the WAV is used as reference text.
+旧版 `gsv_ref_wav` 和 `gsv_ref_lang` 字段只会被读取，并迁移为一条参考音频配置。与 WAV 同名的 `.txt` 文件会作为参考文本。
 
-Speech translation uses MeaPet's built-in non-LLM machine translation service pool, rotating services on single-segment failure (max 3 total attempts). When "prefer model voice translation" is enabled, the model's returned `voice_language` and `voice_text` are checked against the configured target language — if inconsistent, they are translated to the target. A separate "translate when unsupported" toggle controls fallback for unsupported output languages. When translation ultimately fails, the voice segment is skipped and the text bubble is preserved.
+语音翻译使用 MeaPet 内置的非 LLM 机器翻译服务池。单个分段失败时会轮换服务，总尝试次数最多为 3 次。启用“优先使用模型语音翻译”后，模型返回的 `voice_language` 和 `voice_text` 会与配置的目标语言核对；若不一致，则翻译到目标语言。单独的“不支持时翻译”开关控制输出语言不受支持时的回退策略。翻译最终失败时会跳过该语音分段，但保留文本气泡。
 
-## Screen Vision
+## 屏幕视觉
 
-The vision link has three modes configured in the wizard:
+视觉链路可在向导中配置为三种模式：
 
-| Mode | Behavior |
-|------|----------|
-| `disabled` | Screenshots and vision turned off |
-| `inherit` | When the main reply model supports images, screenshots are included in the same multimodal request |
-| `relay` | An independent vision model generates a caption first, then passes it to the reply backend |
+| 模式 | 行为 |
+|------|------|
+| `disabled` | 关闭截图和视觉 |
+| `inherit` | 主回复模型支持图片时，在同一多模态请求中附带截图 |
+| `relay` | 先由独立视觉模型生成描述，再传给回复后端 |
 
-`inherit` is suitable for direct models or Agents that natively support images. `relay` can select Ollama or MiMo as the vision model in direct mode. Agent mode should use the Agent's own vision capability, or disable vision — do NOT route through a separate vision model on the MeaPet side. TTS machine translation does not participate in the vision pipeline.
+`inherit` 适用于原生支持图片的直连模型或 Agent。直连模式下，`relay` 可以选择 Ollama 或 MiMo 作为视觉模型。Agent 模式应使用 Agent 自己的视觉能力，或关闭视觉；不要在 MeaPet 侧通过另一个视觉模型中继。TTS 机器翻译不参与视觉链路。
 
-Privacy rules are enforced: screen observation is off by default; each screenshot requires local confirmation, and the authorization is valid for one shot only. Confirmation defaults to full-screen but can be scoped to a region or specific application. Screenshots are passed in memory only and are never written to disk by new links. Cloud vision additionally requires explicit `watcher.allow_cloud` consent.
+隐私规则会被强制执行：屏幕观察默认关闭；每张截图都需要本地确认，授权仅对当前一次截图有效。确认范围默认为全屏，也可以限定为区域或特定应用。新链路只在内存中传递截图，绝不会将其写入磁盘。使用云端视觉还必须明确设置 `watcher.allow_cloud` 同意项。
 
-## Companion MCP: Agent Control over MeaPet
+## Companion MCP：Agent 控制 MeaPet
 
-For Hermes and OpenClaw, Agent mode can expose an optional standard MCP Streamable HTTP endpoint:
+对于 Hermes 和 OpenClaw，Agent 模式可以选择暴露标准 MCP Streamable HTTP 端点：
 
 ```text
 http(s)://<listen_host>:<port>/mcp
 ```
 
-Only four tools are exposed:
+只暴露四个工具：
 
-| Tool | Capability |
-|------|-----------|
-| `meapet.say` | Queue one or more complete reply segments; does not preempt pending user replies |
-| `meapet.express` | Request a mood or action the frontend explicitly supports; no implicit mapping |
-| `meapet.get_state` | Read rendering, TTS capability, character state, and affection level summary; does not return paths, secrets, memory, or full chat history |
-| `meapet.capture_screen` | Request a screenshot (fullscreen, region, or application); requires local per-shot confirmation; results never written to disk |
+| 工具 | 能力 |
+|------|------|
+| `meapet.say` | 将一个或多个完整回复分段加入队列；不会抢占等待中的用户回复 |
+| `meapet.express` | 请求前端明确支持的情绪或动作；不做隐式映射 |
+| `meapet.get_state` | 读取渲染、TTS 能力、角色状态和好感度摘要；不返回路径、密钥、记忆或完整聊天历史 |
+| `meapet.capture_screen` | 请求截取全屏、区域或应用；每次都需要本地确认，结果绝不写入磁盘 |
 
-Security constraints:
+安全约束：
 
-- Defaults to listening on `127.0.0.1` only, with a single allowed Agent IP.
-- Every request must carry a Bearer Token; viewable, copyable, and rotatable from the wizard or right-click menu. Rotating invalidates the old token immediately.
-- LAN listening requires HTTPS by default. Plain HTTP can be explicitly allowed on trusted networks; the UI shows a persistent risk warning. When a client CA is configured, the Agent must present a client certificate signed by that CA (mTLS).
-- Does not modify Windows Firewall; remote access requires manually opening the chosen port.
-- The service also validates source IP, Host, Origin, request size, and rate.
+- 默认只监听 `127.0.0.1`，并只允许一个 Agent IP。
+- 每个请求都必须携带 Bearer Token；可在向导或右键菜单中查看、复制和轮换。轮换后旧 Token 立即失效。
+- LAN 监听默认要求 HTTPS。可信网络可以明确允许纯 HTTP，界面会持续显示风险警告。配置客户端 CA 后，Agent 必须提供由该 CA 签发的客户端证书（mTLS）。
+- 不会修改 Windows 防火墙；远程访问需要手动放行对应端口。
+- 服务还会验证来源 IP、Host、Origin、请求大小和速率。
 
-Custom Agent Link does not start this second listener. It projects the same capability registry over the existing WebSocket, so chat, proactive messages, and tool calls remain on one connection.
+自定义 Agent Link 不会启动第二个监听器。它会在现有 WebSocket 上投影相同的能力注册表，使聊天、主动消息和工具调用保持在同一个连接中。
 
-## Configuration
+## 配置
 
-The only user configuration file is `config.json` in the project root. The only template is `config.example.json`. Do not edit or commit real secrets; `config.json` is gitignored.
+项目根目录中唯一的用户配置文件是 `config.json`，唯一的模板是 `config.example.json`。不要编辑或提交真实密钥；`config.json` 已被 gitignore。
 
-Minimal example:
+最小配置示例：
 
 ```json
 {
@@ -221,73 +227,77 @@ Minimal example:
 }
 ```
 
-See `config.example.json`, `docs/backend-and-control.md`, and `docs/agent-link-v1.md` for the full schema, Agent, MCP, and custom Agent Link examples.
+完整 schema、Agent、MCP 和自定义 Agent Link 示例见 `config.example.json`、`docs/backend-and-control.md` 和 `docs/agent-link-v1.md`。
 
-### Secrets and Environment Variables
+### 密钥与环境变量
 
-Secret priority: environment variable > `config.json` plaintext. Config values also support `$ENV_VAR` or `${ENV_VAR}` placeholders.
+密钥优先级：环境变量高于 `config.json` 明文。配置值也支持 `$ENV_VAR` 或 `${ENV_VAR}` 占位符。
 
-| Environment Variable | Purpose |
-|---------------------|---------|
-| `DEEPSEEK_API_KEY` | DeepSeek direct connection |
-| `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY` | MiMo conversation, vision, or TTS |
-| `MEAPET_API_KEY` | Custom direct connection fallback |
-| `HERMES_DASHBOARD_SESSION_TOKEN` | Hermes `hermes serve` WebSocket token |
-| `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway token |
-| `AGENT_LINK_TOKEN` / `MEAPET_AGENT_TOKEN` | Custom Agent Link token |
+| 环境变量 | 用途 |
+|----------|------|
+| `DEEPSEEK_API_KEY` | DeepSeek 直连 |
+| `MIMO_API_KEY` / `XIAOMIMIMO_API_KEY` | MiMo 对话、视觉或 TTS |
+| `MEAPET_API_KEY` | 自定义直连的备用变量 |
+| `HERMES_DASHBOARD_SESSION_TOKEN` | Hermes `hermes serve` WebSocket Token |
+| `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway Token |
+| `AGENT_LINK_TOKEN` / `MEAPET_AGENT_TOKEN` | 自定义 Agent Link Token |
 | `MEAPET_CONTROL_TOKEN` | Companion MCP Bearer Token |
-| `GSV_PYTHON` | GPT-SoVITS environment `python.exe` |
-| `MEAPET_FORCE_PNG` | Force PNG rendering when set to a non-empty value |
-| `MEAPET_DEBUG=1` | Additional protocol-level diagnostic output; leave off by default |
+| `GSV_PYTHON` | GPT-SoVITS 环境中的 `python.exe` |
+| `MEAPET_PIP_INDEX_URL` / `PIP_INDEX_URL` | Python 包索引覆盖；默认使用清华 TUNA |
+| `MEAPET_TORCH_INDEX_URL` / `TORCH_INDEX_URL` | 可选的 PyTorch wheel 索引覆盖 |
+| `MEAPET_HF_ENDPOINT` / `HF_ENDPOINT` | 可选的 Hugging Face 端点覆盖 |
+| `MEAPET_TRANSLATORS_REGION` | `translators` 导入地区（`CN` 或 `EN`）；默认为 `CN` |
+| `MEAPET_FORCE_PNG` | 设置为非空值时强制使用 PNG 渲染 |
+| `MEAPET_DEBUG=1` | 输出额外的协议级诊断信息；默认应保持关闭 |
 
-If a real key has ever entered a repository or public log, rotate it immediately at the provider — do not just delete the local text.
+如果真实 Key 曾经进入代码仓库或公开日志，请立即前往服务提供商处轮换；不要只删除本地文本。
 
-## Local Cache and Privacy
+## 本地缓存与隐私
 
-- Defaults to retaining the last 5 timeline turns; configurable 0–100 in the wizard.
-- Timelines are isolated by direct provider / Agent type + Agent session; switching backends will not cross streams.
-- SQLite memory (direct mode) and Agent-owned memory are separate boundaries. MeaPet does not replicate the Agent's long-term memory.
-- New config apply, session switches, and token rotation all invalidate old async results — late replies, TTS, or screenshots do not enter the new session.
-- Runtime data lives in `mea_memory.db`, `logs/`, `audio_cache/`, `voice_cache/`; none should be distributed.
-- Logs record user input, model-visible replies, and TTS translation text by default, rotated daily and retained for 7 days. API keys, auth headers, reasoning, internal tool parameters/results, and screenshot content must NOT be written to logs. `MEAPET_DEBUG=1` is for protocol diagnostics only.
+- 默认保留最近 5 轮时间线，可在向导中配置为 0-100。
+- 时间线按直连 provider / Agent 类型和 Agent 会话隔离；切换后端不会串线。
+- SQLite 记忆（直连模式）与 Agent 自己的记忆边界彼此独立。MeaPet 不会复制 Agent 的长期记忆。
+- 应用新配置、切换会话和轮换 Token 都会使旧异步结果失效；迟到的回复、TTS 或截图不会进入新会话。
+- 运行时数据位于 `mea_memory.db`、`logs/`、`audio_cache/`、`voice_cache/` 和 `voice_asr/`，这些内容都不应发布。随包分发的互动音频位于包资源 `meapet/assets/interaction_voices/`。
+- 普通日志默认只记录长度、状态等元数据，按天轮换并保留 7 天。正文只会进入明确的 TRACK/debug 诊断。API Key、认证头、推理内容、内部工具参数/结果和截图内容都不得写入普通日志。
 
-## Controls
+## 操作
 
-| Action | Effect |
-|--------|--------|
-| Left-click drag | Move the pet |
-| Double-click | Open chat input |
-| Drag on head area | Trigger headpat reaction |
-| Right-click | Open settings, timeline, status, rendering, idle, and exit menu |
-| Click a reply bubble | Open that turn's full reply (while still in recent cache) |
-| `Esc` | Close input or panel |
+| 操作 | 效果 |
+|------|------|
+| 按住左键拖动 | 移动桌宠 |
+| 双击 | 打开聊天输入框 |
+| 拖动头部区域 | 触发摸头互动 |
+| 右键 | 打开设置、时间线、状态、渲染、待机和退出菜单 |
+| 点击回复气泡 | 在内容仍处于近期缓存时打开该轮完整回复 |
+| `Esc` | 关闭输入框或面板 |
 
-Closing the main window only hides it; use the tray menu to exit.
+关闭主窗口只会隐藏桌宠；请使用托盘菜单退出程序。
 
-## Project Structure
+## 项目结构
 
 ```text
 mea-pet/
-├── pet.py / meapet/__main__.py       Entry points
+├── pet.py / meapet/__main__.py       入口
 ├── meapet/
-│   ├── agent/                         Hermes / OpenClaw / Agent Link and presentation state machine
-│   ├── direct/                        Direct protocol client with unified stream events
-│   ├── conversation/                  Segmented output protocol, session isolation, timeline
-│   ├── control/                       Companion MCP and security middleware
-│   ├── chat/                          Direct-mode character prompts, history, and memory coordination
-│   ├── desktop/                       PyQt5 main window, bubbles, input, rendering, and bridges
-│   ├── memory/                        SQLite memory, affection, timeline persistence
+│   ├── agent/                         Hermes / OpenClaw / Agent Link 与呈现状态机
+│   ├── direct/                        使用统一流事件的直连协议客户端
+│   ├── conversation/                  分段输出协议、会话隔离和时间线
+│   ├── control/                       Companion MCP 与安全中间件
+│   ├── chat/                          直连模式的角色提示词、历史和记忆协调
+│   ├── desktop/                       PyQt5 主窗口、气泡、输入、渲染和桥接
+│   ├── memory/                        SQLite 记忆、好感度和时间线持久化
 │   ├── tts/                           MiMo / GPT-SoVITS / VITS
-│   ├── vision/                        Vision routing and screen watcher coordination
-│   ├── watcher/                       Screenshot thread and privacy latch
-│   └── config/                        Config normalization and secret resolution
-├── wizard/                            Configuration wizard
-├── config.example.json                Single config template
-├── design-system/                     UI design constraints
-└── tests/                             pytest / unittest regression tests
+│   ├── vision/                        视觉路由与屏幕观察协调
+│   ├── watcher/                       截图线程和隐私授权锁
+│   └── config/                        配置归一化和密钥解析
+├── wizard/                            配置向导
+├── config.example.json                唯一配置模板
+├── design-system/                     UI 设计约束
+└── tests/                             pytest / unittest 回归测试
 ```
 
-## Development and Validation
+## 开发与验证
 
 ```bash
 python -m pytest -q
@@ -295,42 +305,42 @@ python -m ruff check meapet wizard scripts tests
 python -m compileall -q meapet wizard
 ```
 
-Before editing the pet UI, read `design-system/MASTER.md`, `design-system/pages/desktop.md`, and `meapet/ui_theme.py`. Threading model, window lifecycle, privacy, and distribution constraints are in `AGENTS.md`.
+编辑桌宠 UI 前，请先阅读 `design-system/MASTER.md`、`design-system/pages/desktop.md` 和 `meapet/ui_theme.py`。仓库卫生、测试和分发规则见 [`CONTRIBUTING.md`](CONTRIBUTING.md)；后端、线程和隐私契约见 [`docs/backend-and-control.md`](docs/backend-and-control.md)。
 
-## Custom Character and Sprites
+## 自定义角色与立绘
 
-- Character prompt: `SYSTEM_PROMPT` in `meapet/chat/engine.py` and its persona references.
-- Expression mapping: `EXPRESSION_MAP` and `MOOD_TO_EXPRESSION` in `meapet/desktop/renderer.py`.
-- PNG resource naming: `sprites/mea{outfit_id}{direction}_{expression}.png`.
-- Live2D model directory: `live2d.model_dir` in `config.json`.
-- Live2D visual viewport: the legacy `live2d.window_mask` ellipse parameters define a rectangular outer bound used to crop transparent canvas margins; set `enabled` to `false` to expose the complete model canvas. The configuration center can edit this bound by dragging a rectangle or entering its four edge percentages. A separate `live2d.placement_anchor` target can be placed between the model's feet so that the same full-canvas point stays fixed on screen while the viewport or model scale changes. Saving keeps the complete model canvas and interaction zones unchanged while applying both settings immediately.
+- 角色提示词：`meapet/chat/engine.py` 中的 `SYSTEM_PROMPT` 及其角色设定引用。
+- 表情映射：`meapet/desktop/renderer.py` 中的 `EXPRESSION_MAP` 和 `MOOD_TO_EXPRESSION`。
+- PNG 资源命名：`sprites/mea{outfit_id}{direction}_{expression}.png`。
+- Live2D 模型目录：`config.json` 中的 `live2d.model_dir`。
+- Live2D 可视视口：旧版 `live2d.window_mask` 椭圆参数定义了用于裁剪透明画布边缘的矩形外边界；将 `enabled` 设为 `false` 可以显示完整模型画布。配置中心支持拖动矩形或输入四边百分比来编辑该边界。还可以在模型两脚之间放置单独的 `live2d.placement_anchor` 锚点，使视口或模型缩放变化时，同一个完整画布坐标仍固定在屏幕上。保存后会立即应用两项设置，同时保持完整模型画布和交互区域不变。
 
-## FAQ
+## 常见问题
 
 <details>
-<summary>Replies still come from the old backend after saving</summary>
+<summary>保存设置后，回复仍来自旧后端</summary>
 
-Saving cancels the old backend and builds the new one immediately. If old content still appears, check the timeline tab: old session timelines are retained read-only, but late events do not enter the new session. Search logs for "New config applied" and the backend initialization status.
+保存会取消旧后端并立即创建新后端。如果仍看到旧内容，请检查时间线标签页：旧会话时间线会以只读方式保留，但迟到的事件不会进入新会话。可以在日志中搜索“New config applied”和后端初始化状态。
 </details>
 
 <details>
-<summary>Text bubbles show but there is no voice</summary>
+<summary>有文本气泡，但没有语音</summary>
 
-Check whether TTS is enabled, the engine health check passes, the reply's `voice_language` is supported, and the language has a valid reference audio (for GPT-SoVITS). When a language is unsupported and translation is not configured, the voice is skipped and the text bubble is preserved by design.
+请检查是否启用了 TTS、引擎健康检查是否通过、回复中的 `voice_language` 是否受支持，以及该语言是否配置了有效参考音频（GPT-SoVITS）。如果语言不受支持且未配置翻译，按设计会跳过语音并保留文本气泡。
 </details>
 
 <details>
-<summary>Hermes, OpenClaw, Agent Link, or remote MCP cannot connect</summary>
+<summary>Hermes、OpenClaw、Agent Link 或远程 MCP 无法连接</summary>
 
-For Hermes, start `hermes serve --host 127.0.0.1 --port 9119` with a fixed `HERMES_DASHBOARD_SESSION_TOKEN`, then configure `ws://127.0.0.1:9119/api/ws`; port 8642 is the separate HTTP API Server and is not the Agent WebSocket endpoint. Current Hermes public binds use short-lived login tickets rather than the static loopback token, so connect a remote Hermes through an SSH tunnel to its loopback port. Remote OpenClaw and Agent Link should use WSS; plain remote WS requires explicit opt-in. An Agent Link server must return a matching `control.ready` and support dynamic tool calls as described in `docs/agent-link-v1.md`. The Companion MCP listen IP must be a concrete local interface IP, and the allowed IP must match the Agent host. LAN HTTP also requires explicit opt-in; check Windows Firewall for the port.
+对于 Hermes，请使用固定的 `HERMES_DASHBOARD_SESSION_TOKEN` 运行 `hermes serve --host 127.0.0.1 --port 9119`，然后配置 `ws://127.0.0.1:9119/api/ws`；8642 端口属于单独的 HTTP API Server，并不是 Agent WebSocket 端点。当前 Hermes 的公开地址绑定使用短期登录票据，而非静态回环 Token，因此远程 Hermes 应通过 SSH 隧道连接其回环端口。远程 OpenClaw 和 Agent Link 应使用 WSS；远程明文 WS 需要明确选择启用。Agent Link 服务器必须返回匹配的 `control.ready`，并支持 [`docs/agent-link-v1.md`](docs/agent-link-v1.md) 所述的动态工具调用。Companion MCP 的监听 IP 必须是具体的本地接口 IP，允许的 IP 必须与 Agent 主机一致。LAN HTTP 也需要明确选择启用，并请检查 Windows 防火墙是否已放行端口。
 </details>
 
 <details>
-<summary>Live2D does not render, or PNG switch results in wrong size</summary>
+<summary>Live2D 不渲染，或切换 PNG 后尺寸错误</summary>
 
-Verify that `live2d.model_dir` contains a `.model3.json` file and check `meapet_boot.log` / `meapet_fault.log`. Set `MEAPET_FORCE_PNG=1` to test the PNG path. Runtime switching resyncs window geometry; if still broken, attach logs and display scale info.
+请确认 `live2d.model_dir` 中包含 `.model3.json` 文件，并检查 `meapet_boot.log` / `meapet_fault.log`。可以设置 `MEAPET_FORCE_PNG=1` 测试 PNG 路径。运行时切换会重新同步窗口几何信息；如果问题仍然存在，请附上日志和显示缩放信息。
 </details>
 
-## License
+## 许可证
 
-Project code is MIT Licensed. Live2D Cubism Core is a proprietary component of Live2D Inc. and requires compliance with its own software license agreement. Character, model, and voice resource copyrights belong to their respective authors. Dependencies such as GPT-SoVITS, VITS, and Ollama are governed by their respective licenses.
+项目代码采用 MIT 许可证。Live2D Cubism Core 是 Live2D Inc. 的专有组件，使用时必须遵守其软件许可协议。角色、模型和语音资源的版权归各自作者所有。GPT-SoVITS、VITS 和 Ollama 等依赖遵循各自的许可证。

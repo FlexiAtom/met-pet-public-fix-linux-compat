@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from meapet import USER_AGENT
 from meapet.async_runtime import get_loop, submit
 
 _client: Optional[httpx.AsyncClient] = None
@@ -28,7 +29,7 @@ def _new_client() -> httpx.AsyncClient:
         timeout=httpx.Timeout(120.0, connect=10.0),
         follow_redirects=True,
         verify=ssl.create_default_context(),
-        headers={"User-Agent": "MeaPet/0.1"},
+        headers={"User-Agent": USER_AGENT},
     )
 
 

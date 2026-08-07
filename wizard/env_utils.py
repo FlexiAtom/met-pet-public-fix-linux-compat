@@ -10,6 +10,8 @@ import urllib.request
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from meapet.dependencies import resolve_pip_index_url
+
 
 def _is_frozen() -> bool:
     """Check if running in a PyInstaller-frozen environment."""
@@ -26,7 +28,15 @@ def pip_install(packages: list) -> bool:
         return False
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install"] + packages,
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--index-url",
+                resolve_pip_index_url(),
+                *packages,
+            ],
             capture_output=True, text=True, timeout=300
         )
         return result.returncode == 0

@@ -1353,8 +1353,8 @@ class PetChatFlowMixin:
                     else getattr(self, "_current_speaking_text", "")
                 )
                 if safe:
-                    from meapet.paths import project_path
-                    cache_dir = project_path("voice_cache")
+                    from meapet.paths import data_path
+                    cache_dir = data_path("voice_cache")
                     os.makedirs(cache_dir, exist_ok=True)
                     cache_path = os.path.join(cache_dir, f"{tts_lang}_{safe}.wav")
                     try:

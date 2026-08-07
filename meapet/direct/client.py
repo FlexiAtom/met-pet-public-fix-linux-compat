@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from meapet import USER_AGENT
 from meapet.direct.types import (
     CanonicalChatRequest,
     ReasoningDelta,
@@ -559,7 +560,7 @@ class DirectProtocolClient:
                     timeout=httpx.Timeout(self.config.timeout_seconds, connect=10.0),
                     follow_redirects=True,
                     verify=verify,
-                    headers={"User-Agent": "MeaPet/1.0"},
+                    headers={"User-Agent": USER_AGENT},
                     **kwargs,
                 )
             return self._owned_client

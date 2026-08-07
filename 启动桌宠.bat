@@ -25,7 +25,8 @@ for /f "delims=" %%i in ("!MEAPET_PY!") do set "MEAPET_PY=%%i"
 if not defined UV_INDEX_URL if defined MEAPET_PIP_INDEX_URL set "UV_INDEX_URL=%MEAPET_PIP_INDEX_URL%"
 if not defined UV_INDEX_URL if defined PIP_INDEX_URL set "UV_INDEX_URL=%PIP_INDEX_URL%"
 if not defined UV_INDEX_URL set "UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
-if not defined UV_PYTHON_INSTALL_MIRROR set "UV_PYTHON_INSTALL_MIRROR=https://ghproxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"
+rem Use the China-friendly default; UV_INDEX_URL or MEAPET_PIP_INDEX_URL can override it.
+rem Leave UV_PYTHON_INSTALL_MIRROR unset so uv uses its official source.
 
 if not exist "pet.py" goto missing_pet
 if not exist "linux_requirements.txt" goto missing_req

@@ -15,16 +15,9 @@ from typing import Optional
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from meapet.log import get_color_logger
+from meapet.paths import find_voice_asr_model_dir
 
 log = get_color_logger("voice")
-
-_MODEL_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..", "..", "models", "voice_asr",
-    "models",
-    "pkufool--sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
-    "snapshots", "master",
-)
 
 
 class VoiceEngine(QThread):
@@ -137,8 +130,6 @@ class VoiceEngine(QThread):
 
     def _find_mic_device(self, p_audio) -> int:
         """找真正的麦克风，跳过立体声混音/扬声器回录等设备。"""
-        from pyaudio import paInt16
-
         exclude = {"立体声混音", "stereo mix", "扬声器", "speaker",
                     "声音映射器", "mapper", "主声音捕获", "主声音"}
         default = p_audio.get_default_input_device_info()
@@ -165,12 +156,16 @@ class VoiceEngine(QThread):
         try:
             import sherpa_onnx
 
+            model_dir = find_voice_asr_model_dir()
+            if model_dir is None:
+                self.error.emit("语音识别模型缺失，请在配置页下载")
+                return False
             log.info("[voice] loading sherpa-onnx zipformer zh-en model...")
             self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
-                encoder=os.path.join(_MODEL_DIR, "encoder-epoch-99-avg-1.int8.onnx"),
-                decoder=os.path.join(_MODEL_DIR, "decoder-epoch-99-avg-1.int8.onnx"),
-                joiner=os.path.join(_MODEL_DIR, "joiner-epoch-99-avg-1.int8.onnx"),
-                tokens=os.path.join(_MODEL_DIR, "tokens.txt"),
+                encoder=os.path.join(model_dir, "encoder-epoch-99-avg-1.int8.onnx"),
+                decoder=os.path.join(model_dir, "decoder-epoch-99-avg-1.int8.onnx"),
+                joiner=os.path.join(model_dir, "joiner-epoch-99-avg-1.int8.onnx"),
+                tokens=os.path.join(model_dir, "tokens.txt"),
                 num_threads=4,
                 provider="cpu",
                 sample_rate=self._sample_rate,

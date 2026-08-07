@@ -5,7 +5,7 @@ import os
 from typing import Optional
 
 from meapet.config.defaults import DEFAULT_MIMO_TTS_CLONE_MODEL
-from meapet.paths import project_path
+from meapet.paths import data_path, project_path
 from meapet.log import get_color_logger
 
 log = get_color_logger("tts")
@@ -276,10 +276,15 @@ class TtsMimoMixin:
                 score += 5_000_000
             candidates.append((score, path, ref_lang or "?"))
 
-        for d in (
+        clone_dirs: list[str] = []
+        for candidate in (
             self.mimo_clone_dir,
+            data_path("voice_cache"),
             project_path("voice_cache"),
         ):
+            if candidate and candidate not in clone_dirs:
+                clone_dirs.append(candidate)
+        for d in clone_dirs:
             if not d or not os.path.isdir(d):
                 continue
             try:
