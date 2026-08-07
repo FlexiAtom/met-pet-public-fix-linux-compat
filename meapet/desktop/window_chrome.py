@@ -17,6 +17,7 @@ from PyQt5.QtCore import QRect, Qt
 
 from meapet.desktop import status_language
 from meapet.desktop.icons import standard_icon
+from meapet.config.defaults import DEFAULT_OLLAMA_VISION_MODEL
 from meapet.desktop.screen_geometry import (
     available_geometry_for,
     calculate_centered_position,
@@ -374,7 +375,7 @@ class PetWindowChromeMixin:
         vision_menu.setObjectName("VisionAndWatchMenu")
         set_scaled_stylesheet(vision_menu, MENU_STYLE)
         vision_menu.setAccessibleName("识图与观察设置")
-        current_vision = vision_cfg.get("model", "qwen3.5:4b")
+        current_vision = vision_cfg.get("model", DEFAULT_OLLAMA_VISION_MODEL)
         for label, bname in (
             ("Ollama 本地识图", "ollama"),
             ("MiMo 云端识图", "mimo"),
@@ -387,7 +388,7 @@ class PetWindowChromeMixin:
         vision_menu.addSeparator()
         if vision_backend != "mimo":
             for label, model_name in (
-                ("模型 · qwen3.5:4b", "qwen3.5:4b"),
+                (f"模型 · {DEFAULT_OLLAMA_VISION_MODEL}", DEFAULT_OLLAMA_VISION_MODEL),
             ):
                 action = QAction(label, self)
                 action.setCheckable(True)

@@ -61,7 +61,12 @@ def main():
             _emit_json({"ok": False, "error": "GSV root not found"})
             return
 
-        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+        # Keep Hugging Face on its normal endpoint unless the user explicitly
+        # selects a mirror. This subprocess inherits HF_ENDPOINT unchanged.
+        if not os.environ.get("HF_ENDPOINT"):
+            configured_endpoint = os.environ.get("MEAPET_HF_ENDPOINT", "").strip()
+            if configured_endpoint:
+                os.environ["HF_ENDPOINT"] = configured_endpoint
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
         t0 = time.time()

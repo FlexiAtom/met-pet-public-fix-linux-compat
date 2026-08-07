@@ -18,8 +18,8 @@ a = Analysis(
     datas=[
         ("live2d", "live2d"),
         ("sprites", "sprites"),
-        ("models", "models"),
-        ("voice_cache", "voice_cache"),
+        ("models/GPT_weights", "models/GPT_weights"),
+        ("models/SoVITS_weights", "models/SoVITS_weights"),
         ("GPT-Sovits", "GPT-Sovits"),
         ("config.example.json", "."),
         ("vits_models", "vits_models"),

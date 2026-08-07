@@ -29,7 +29,7 @@ class TestRedactSecrets(unittest.TestCase):
     def test_mask_and_redact_text(self):
         from meapet.utils import mask_secret, redact_text, redact_mapping
 
-        key = "sk-0000000000000000000000000000dead"
+        key = "sk-test-redaction-placeholder-not-real"
         masked = mask_secret(key)
         self.assertNotIn(key, masked)
         self.assertIn("…", masked)

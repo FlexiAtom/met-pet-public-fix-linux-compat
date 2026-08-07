@@ -18,7 +18,8 @@ from meapet.utils import (
 from meapet.desktop.audio import bubble_duration_for_audio
 
 
-# 分区语音目录（相对于 PROJECT_ROOT/voice_cache/）
+# Shipped interaction clips live in package assets. User-generated clips and
+# TTS output stay in the writable runtime voice_cache directory.
 _ZONE_DIRS = {
     "upper": "upper",
     "lower_left": "lower_left",
@@ -34,16 +35,30 @@ def _text_from_filename(name: str) -> str:
 
 class PetInteractionMixin:
     def _pick_zone_audio(self, zone: str) -> tuple[str, str] | None:
-        """从 ``voice_cache/{zone}/`` 随机挑一条预制语音，返回 (路径, 显示文本)。"""
-        from meapet.paths import project_path
-        d = project_path("voice_cache", _ZONE_DIRS.get(zone, ""))
-        if not os.path.isdir(d):
+        """Pick a zone clip, preferring user overrides over bundled assets."""
+        relative = _ZONE_DIRS.get(zone)
+        if not relative:
             return None
-        files = [f for f in os.listdir(d) if f.endswith(".wav")]
-        if not files:
-            return None
-        chosen = random.choice(files)
-        return os.path.join(d, chosen), _text_from_filename(chosen)
+
+        from meapet.paths import data_path, project_path
+
+        directories = (
+            data_path("voice_cache", relative),
+            project_path("meapet", "assets", "interaction_voices", relative),
+        )
+        for directory in directories:
+            if not os.path.isdir(directory):
+                continue
+            files = [
+                name
+                for name in os.listdir(directory)
+                if name.lower().endswith(".wav")
+            ]
+            if not files:
+                continue
+            chosen = random.choice(files)
+            return os.path.join(directory, chosen), _text_from_filename(chosen)
+        return None
 
     def _on_zone_triggered(self, zone: str) -> bool:
         """从分区目录随机播一条语音并显示文字气泡。
@@ -66,7 +81,7 @@ class PetInteractionMixin:
         return True
 
     def _on_head_patted(self):
-        """上半区：优先 ``voice_cache/upper/`` 预制语音；目录为空时回退文案 + 扁平缓存/TTS。"""
+        """上半区：优先用户/内置预制语音，目录为空时回退到 TTS。"""
         try:
             if self._on_zone_triggered("upper"):
                 return
@@ -157,12 +172,18 @@ class PetInteractionMixin:
         return audio_cache_key(text)
 
     def _get_cached_interaction(self, text: str, lang: str = "jp") -> Optional[str]:
-        """获取互动语音缓存（根目录扁平命名；本地 WAV 不依赖 TTS 实例）。"""
+        """获取运行时互动语音缓存（根目录扁平命名）。"""
         safe = self._safe_name(text)
         if not safe:
             return None
-        from meapet.paths import project_path
-        cache_dir = project_path("voice_cache")
+        from meapet.paths import data_path, project_path
+        cache_dirs: list[str] = []
+        for candidate in (
+            data_path("voice_cache"),
+            project_path("voice_cache"),
+        ):
+            if candidate not in cache_dirs:
+                cache_dirs.append(candidate)
         prefixes: list[str] = []
         for candidate in (
             lang,
@@ -172,17 +193,18 @@ class PetInteractionMixin:
             prefix = str(candidate or "").strip()
             if prefix and prefix not in prefixes:
                 prefixes.append(prefix)
-        for prefix in prefixes:
-            path = os.path.join(cache_dir, f"{prefix}_{safe}.wav")
-            if os.path.exists(path):
-                return path
-        legacy = legacy_audio_cache_name(text)
-        if not legacy:
-            return None
-        for prefix in prefixes:
-            legacy_path = os.path.join(cache_dir, f"{prefix}_{legacy}.wav")
-            if os.path.exists(legacy_path):
-                return legacy_path
+        for cache_dir in cache_dirs:
+            for prefix in prefixes:
+                path = os.path.join(cache_dir, f"{prefix}_{safe}.wav")
+                if os.path.exists(path):
+                    return path
+            legacy = legacy_audio_cache_name(text)
+            if not legacy:
+                continue
+            for prefix in prefixes:
+                legacy_path = os.path.join(cache_dir, f"{prefix}_{legacy}.wav")
+                if os.path.exists(legacy_path):
+                    return legacy_path
         return None
 
     def _idle_action(self):

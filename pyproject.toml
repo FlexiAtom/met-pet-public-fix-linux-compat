@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mea-pet"
 description = "梅尔桌宠 — 一个会说话、会吐槽、会记住你的桌面宠物"
-version = "1.0.0"
+dynamic = ["version"]
 license = "MIT"
 authors = [
     { name = "祘Il", email = "3132190387@qq.com" },
@@ -99,6 +99,9 @@ Issues = "https://github.com/suan-11/mea-pet-public/issues"
 include = ["meapet*", "wizard*"]
 exclude = ["tests*"]
 
+[tool.setuptools.dynamic]
+version = { attr = "meapet.__version__" }
+
 [tool.setuptools.package-data]
 "*" = [
     "*.png",
@@ -109,6 +112,7 @@ exclude = ["tests*"]
     "assets/fonts/*.ttf",
     "assets/fonts/*.txt",
     "assets/icons/*.svg",
+    "assets/interaction_voices/**/*.wav",
 ]
 
 [tool.pytest.ini_options]

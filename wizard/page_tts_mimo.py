@@ -5,6 +5,7 @@ import json
 import os
 
 from meapet.config.defaults import DEFAULT_MIMO_API_BASE
+from meapet.paths import data_path
 from wizard.platform_info import CONFIG_PATH
 from wizard.styles import set_status, styled_open_file
 
@@ -213,7 +214,7 @@ class TtsPageMimoMixin:
         path = styled_open_file(
             self,
             "选择 voice-clone 参考音频",
-            os.path.join(os.path.dirname(CONFIG_PATH), "voice_cache"),
+            data_path("voice_cache"),
             "Audio (*.wav *.mp3);;All (*.*)",
         )
         if path and hasattr(self, "mimo_clone_ref_input"):

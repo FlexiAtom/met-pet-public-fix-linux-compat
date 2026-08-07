@@ -1,14 +1,15 @@
-from meapet.paths import project_path, PROJECT_ROOT
 """
 预生成互动语音缓存（日语）
 运行一次后，摸头/摸尾巴等交互的语音秒出
 """
-import os, sys, json, time
+import json
+import os
+import time
 
-from meapet.paths import project_root as _pr
+from meapet.paths import data_path, project_root as _pr
 from meapet.utils import audio_cache_key
 PET_DIR = _pr()
-CACHE_DIR = os.path.join(PET_DIR, "voice_cache")
+CACHE_DIR = data_path("voice_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # 需要缓存的固定文本

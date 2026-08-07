@@ -180,7 +180,7 @@ def _install_modules(py_exe: str, packages: list[str],
         return False
     cmd = [py_exe, "-m", "pip", "install", "--timeout", "120"]
     if extra_index:
-        # 有专用 index（如 PyTorch）时用它做主源，清华做备用
+        # 有专用 index（如 PyTorch）时用它做主源，公共源可通过环境变量配置
         cmd.extend(["--index-url", extra_index])
         cmd.extend(["--extra-index-url", GSV_PIP_INDEX])
     else:
@@ -230,7 +230,7 @@ def auto_install_gsv_deps(py_exe: str, allow_download: bool = False) -> bool:
         return False
 
     log.info(f"缺少 {len(missing)} 个依赖，按需安装 …")
-    # 拆成两批：torch 系用 PyTorch 官方源，其余用清华源
+    # 拆成两批：torch 系用 PyTorch 官方源，其余使用可配置的公共包源
     torch_pkgs = [p for p in missing if p in ("torch", "torchaudio")]
     other_pkgs = [p for p in missing if p not in ("torch", "torchaudio")]
 

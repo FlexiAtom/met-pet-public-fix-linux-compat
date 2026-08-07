@@ -4,7 +4,7 @@
 （旧 parse_decision 仍保留供单测/兼容）
 
 支持切换视觉模型（config.json → vision.model）
-可用模型：minicpm-v (5.5G, 快) / qwen2.5vl:7b (6GB, 稍慢) MiMo V2.5（云端，超快）
+视觉模型名称由配置提供；Ollama 默认值集中在 ``config.defaults``。
 
 设计参考：Sakura（Rvosy/sakura）的主动搭话 prompt 架构
 """
@@ -12,7 +12,11 @@ import io
 import traceback
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from meapet.config.defaults import DEFAULT_OLLAMA_HOST
+from meapet.config.defaults import (
+    DEFAULT_OLLAMA_CHAT_MODEL,
+    DEFAULT_OLLAMA_HOST,
+    DEFAULT_OLLAMA_VISION_MODEL,
+)
 from meapet.log import get_color_logger
 from meapet.watcher.capture import capture_screen_image
 
@@ -218,8 +222,8 @@ class ScreenWatcher(QThread):
 
     def __init__(self,
                  api_base: str = "",
-                 vision_model: str = "minicpm-v",
-                 chat_model: str = "qwen2.5:7b",
+                 vision_model: str = DEFAULT_OLLAMA_VISION_MODEL,
+                 chat_model: str = DEFAULT_OLLAMA_CHAT_MODEL,
                  idle_minutes: float = 0,
                  api_key: str = "",
                  backend: str = "ollama",

@@ -27,6 +27,7 @@ DEFAULT_TRANSLATION_PROVIDERS = (
     "bing",
     "google",
 )
+_ALLOWED_TRANSLATOR_REGIONS = frozenset({"CN", "EN"})
 
 
 def _provider_language(value: object, *, fallback: str) -> str:
@@ -73,11 +74,26 @@ class TranslationService:
 
     @staticmethod
     def _load_translate_func() -> Callable[..., object] | None:
-        # translators 默认在 import 阶段访问 OneTrust 推断地区。固定地区可
-        # 避免一次与实际翻译无关的网络请求；用户仍可显式覆盖为 EN。
-        region = str(os.environ.get("translators_default_region") or "").upper()
-        if region not in {"CN", "EN"}:
-            os.environ["translators_default_region"] = "CN"
+        # translators may probe the network to infer a region during import.
+        # MeaPet targets Simplified Chinese users, so default to CN while still
+        # accepting an explicit project or legacy package override.
+        configured_region = os.environ.get("MEAPET_TRANSLATORS_REGION", "").strip()
+        package_region = os.environ.get("translators_default_region", "").strip()
+        region = configured_region.upper()
+        if configured_region and region not in _ALLOWED_TRANSLATOR_REGIONS:
+            log.warning(
+                "[translate] 忽略无效的 MEAPET_TRANSLATORS_REGION；"
+                "仅支持 CN 或 EN，已回退到默认地区"
+            )
+            region = ""
+        if not region:
+            legacy_region = package_region.upper()
+            region = (
+                legacy_region
+                if legacy_region in _ALLOWED_TRANSLATOR_REGIONS
+                else "CN"
+            )
+        os.environ["translators_default_region"] = region
         try:
             import translators as translators_package
         except ImportError:
@@ -188,7 +204,12 @@ class TranslationService:
             if not translated or relation == "mismatch":
                 log.warning(
                     f"[translate] provider={provider} invalid_result "
-                    f"relation={relation} chars={len(translated)}\n{translated}"
+                    f"relation={relation} chars={len(translated)}"
+                )
+                log.track(
+                    lambda value=translated: (
+                        f"[translate] invalid result [debug]:\n{value}"
+                    )
                 )
                 continue
 
@@ -197,7 +218,10 @@ class TranslationService:
                 self._next_provider_index = index
             log.info(
                 f"[translate] provider={provider} source={source} target={target_code} "
-                f"chars={len(translated)}\n{translated}"
+                f"chars={len(translated)}"
+            )
+            log.track(
+                lambda value=translated: f"[translate] result [debug]:\n{value}"
             )
             return translated
 

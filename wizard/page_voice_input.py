@@ -6,10 +6,8 @@
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
-import traceback
 
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -20,17 +18,21 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from meapet.dependencies import (
+    VOICE_INPUT_INSTALL_REQUIREMENTS,
+    resolve_pip_index_url,
+)
+from meapet.paths import (
+    VOICE_ASR_MODEL_REPO,
+    find_voice_asr_model_dir,
+    is_frozen,
+    voice_asr_cache_dir,
+)
 from wizard.styles import (
     STYLE_PAGE_CARD,
     set_status,
 )
 from wizard.widgets import WheelSafeComboBox
-
-_ASR_MODEL_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "models", "voice_asr",
-    "models", "pkufool--sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
-    "snapshots", "master",
-)
 
 
 class _InstallWorker(QThread):
@@ -39,9 +41,17 @@ class _InstallWorker(QThread):
     finished = pyqtSignal(bool, str)  # (success, detail)
 
     def run(self):
+        cmd = _voice_input_install_command()
+        if cmd is None:
+            self.finished.emit(
+                False,
+                "当前是冻结版程序，不支持运行时安装语音依赖或下载模型。"
+                "请在构建环境准备依赖和模型后重新打包。",
+            )
+            return
+
         # 步骤 1: pip install
-        self.progress.emit("正在安装 sherpa-onnx pyaudio…")
-        cmd = [sys.executable, "-m", "pip", "install", "sherpa-onnx", "pyaudio"]
+        self.progress.emit("正在安装语音识别依赖…")
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
@@ -61,21 +71,32 @@ class _InstallWorker(QThread):
             from modelscope import snapshot_download
 
             snapshot_download(
-                "pkufool/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
-                cache_dir=os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "..", "models", "voice_asr",
-                ),
+                VOICE_ASR_MODEL_REPO,
+                cache_dir=str(voice_asr_cache_dir()),
             )
             self.finished.emit(True, "安装完成！依赖 + 模型已就绪")
         except ImportError:
             self.finished.emit(
                 False,
-                "模型下载失败：modelscope 未安装。"
-                "请手动 pip install modelscope 后重试。",
+                "模型下载失败：modelscope 安装后仍无法导入，请检查安装日志。",
             )
         except Exception as exc:
             self.finished.emit(False, f"模型下载失败: {exc}")
+
+
+def _voice_input_install_command() -> list[str] | None:
+    """Return the source-runtime pip command; frozen EXEs cannot run pip."""
+    if is_frozen():
+        return None
+    return [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--index-url",
+        resolve_pip_index_url(),
+        *VOICE_INPUT_INSTALL_REQUIREMENTS,
+    ]
 
 
 class VoiceInputPage(QFrame):
@@ -193,10 +214,7 @@ class VoiceInputPage(QFrame):
 
     def _model_ok(self) -> bool:
         """检查 ASR 模型文件是否存在。"""
-        return (
-            os.path.isfile(os.path.join(_ASR_MODEL_DIR, "encoder-epoch-99-avg-1.int8.onnx"))
-            and os.path.isfile(os.path.join(_ASR_MODEL_DIR, "tokens.txt"))
-        )
+        return find_voice_asr_model_dir() is not None
 
     def _check_deps(self):
         missing = []
@@ -209,11 +227,24 @@ class VoiceInputPage(QFrame):
         except ImportError:
             missing.append("sherpa-onnx")
 
-        if not missing and self._model_ok():
+        model_ok = self._model_ok()
+        if not missing and model_ok:
             set_status(self.deps_status, "success", "依赖与模型已就绪")
             self.deps_status_detail.setText("可以正常使用语音输入功能")
             self.install_btn.setEnabled(False)
             self.install_btn.setText("已安装就绪")
+        elif is_frozen():
+            set_status(
+                self.deps_status,
+                "warning",
+                "冻结版缺少语音识别依赖或模型",
+            )
+            self.deps_status_detail.setText(
+                "当前冻结版不支持运行时安装或下载。"
+                "请在构建环境准备依赖和模型后重新打包。"
+            )
+            self.install_btn.setEnabled(False)
+            self.install_btn.setText("需重新打包")
         elif not missing:
             set_status(self.deps_status, "warning", "依赖已安装，但模型文件缺失")
             self.deps_status_detail.setText("点击按钮下载语音识别模型（约 220MB）")
@@ -230,6 +261,13 @@ class VoiceInputPage(QFrame):
             self.install_btn.setText("安装语音识别依赖与模型")
 
     def _install_deps(self):
+        if is_frozen():
+            self._on_install_finished(
+                False,
+                "当前是冻结版程序，不支持运行时安装语音依赖或下载模型。"
+                "请在构建环境准备依赖和模型后重新打包。",
+            )
+            return
         self.install_btn.setEnabled(False)
         self.install_btn.setText("安装中…")
         set_status(self.deps_status, "info", "第一步：安装 Python 依赖…")
@@ -245,8 +283,9 @@ class VoiceInputPage(QFrame):
             self._check_deps()
         else:
             set_status(self.deps_status, "error", detail)
-            self.install_btn.setEnabled(True)
-            self.install_btn.setText("重试安装")
+            frozen = is_frozen()
+            self.install_btn.setEnabled(not frozen)
+            self.install_btn.setText("需重新打包" if frozen else "重试安装")
 
     def apply_config(self, voice_cfg: dict):
         voice_cfg = voice_cfg or {}

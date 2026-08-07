@@ -17,7 +17,14 @@ MCP_REQUIREMENT = "mcp>=1.27,<2"
 UVICORN_REQUIREMENT = "uvicorn>=0.30"
 PYOPENGL_REQUIREMENT = "PyOpenGL>=3.1.0"
 TRANSLATORS_REQUIREMENT = "translators>=6.0.4,<7"
+VOICE_INPUT_INSTALL_REQUIREMENTS = (
+    "sherpa-onnx",
+    "pyaudio",
+    "modelscope",
+)
 
+# The project primarily serves users in mainland China. Keep the default in one
+# place and allow callers to select PyPI or another index through environment.
 DEFAULT_PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
 DEFAULT_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 

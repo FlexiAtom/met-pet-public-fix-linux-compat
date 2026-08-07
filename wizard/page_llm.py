@@ -26,11 +26,12 @@ from wizard.styles import (
 )
 from wizard.widgets import WheelSafeComboBox
 
+from meapet import PROJECT_URL, USER_AGENT
 from meapet.config.defaults import DEFAULT_OPENAI_API_BASE
 from meapet.config.providers import CUSTOM_ID, all_presets, preset_by_id
 
 # 查询模型列表时使用的 UA。不少网关（Cloudflare 等）会 403 掉无 UA 的请求。
-_MODELS_USER_AGENT = "MeaPet/1.0 (+https://github.com/suan-11/mea-pet-public)"
+_MODELS_USER_AGENT = f"{USER_AGENT} (+{PROJECT_URL})"
 # 自定义头不得篡改鉴权与协议语义。
 _FETCH_PROTECTED_HEADERS = frozenset(
     {"authorization", "x-api-key", "anthropic-version", "accept", "user-agent"}

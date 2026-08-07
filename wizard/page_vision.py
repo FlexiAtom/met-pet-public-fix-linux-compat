@@ -123,8 +123,8 @@ class VisionPage(QFrame):
         self.model_combo = WheelSafeComboBox()
         self.model_input = QLineEdit()
         self.model_combo.setObjectName("VisionModel")
-        self.model_input.setPlaceholderText("minicpm-v")
-        self.model_input.setText("minicpm-v")
+        self.model_input.setPlaceholderText(DEFAULT_OLLAMA_VISION_MODEL)
+        self.model_input.setText(DEFAULT_OLLAMA_VISION_MODEL)
         self.model_input.setStyleSheet(STYLE_INPUT)
         self.model_combo.setAccessibleName("本地视觉模型")
         self.advanced_layout.addWidget(self.model_input)
@@ -168,13 +168,15 @@ class VisionPage(QFrame):
         interval_label.setObjectName("FieldLabel")
         self.advanced_layout.addWidget(interval_label)
         row = QHBoxLayout()
-        self.min_min_input = QLineEdit("3")
+        default_min_minutes = DEFAULT_WATCHER_INTERVAL["min_ms"] // 60000
+        default_max_minutes = DEFAULT_WATCHER_INTERVAL["max_ms"] // 60000
+        self.min_min_input = QLineEdit(str(default_min_minutes))
         self.min_min_input.setObjectName("WatchIntervalMinimum")
         self.min_min_input.setMinimumWidth(80)
         self.min_min_input.setMaximumWidth(96)
         self.min_min_input.setStyleSheet(STYLE_INPUT)
         self.min_min_input.setAccessibleName("最小观察间隔（分钟）")
-        self.max_min_input = QLineEdit("6")
+        self.max_min_input = QLineEdit(str(default_max_minutes))
         self.max_min_input.setObjectName("WatchIntervalMaximum")
         self.max_min_input.setMinimumWidth(80)
         self.max_min_input.setMaximumWidth(96)
@@ -320,7 +322,7 @@ class VisionPage(QFrame):
         self.backend_combo.setCurrentIndex(idx)
         del blocker
 
-        model = vision_cfg.get("model") or "minicpm-v"
+        model = vision_cfg.get("model") or DEFAULT_OLLAMA_VISION_MODEL
         self.model_input.setText(model)
 
         host = (vision_cfg.get("host") or "").strip()
@@ -368,13 +370,29 @@ class VisionPage(QFrame):
             vision_backend_field = mode
 
         try:
-            min_m = max(1, int(float(self.min_min_input.text().strip() or "3")))
+            min_m = max(
+                1,
+                int(
+                    float(
+                        self.min_min_input.text().strip()
+                        or DEFAULT_WATCHER_INTERVAL["min_ms"] / 60000
+                    )
+                ),
+            )
         except Exception:
-            min_m = 3
+            min_m = max(1, DEFAULT_WATCHER_INTERVAL["min_ms"] // 60000)
         try:
-            max_m = max(min_m, int(float(self.max_min_input.text().strip() or "6")))
+            max_m = max(
+                min_m,
+                int(
+                    float(
+                        self.max_min_input.text().strip()
+                        or DEFAULT_WATCHER_INTERVAL["max_ms"] / 60000
+                    )
+                ),
+            )
         except Exception:
-            max_m = max(min_m, 6)
+            max_m = max(min_m, DEFAULT_WATCHER_INTERVAL["max_ms"] // 60000)
 
         vision = {
             "enabled": vision_mode != "disabled",
@@ -383,7 +401,7 @@ class VisionPage(QFrame):
                 self.main_model_vision_cb.isChecked()
             ),
             "backend": vision_backend_field if vision_mode == "relay" else "",
-            "model": self.model_input.text().strip() or "minicpm-v",
+            "model": self.model_input.text().strip() or DEFAULT_OLLAMA_VISION_MODEL,
             "host": self.host_input.text().strip(),
             "api_key": self.api_key_input.text().strip(),
             "api_base": self.api_base_input.text().strip(),

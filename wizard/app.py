@@ -49,6 +49,12 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import QShortcut
 
 from wizard.platform_info import CONFIG_PATH, PLATFORM
+from meapet.config.defaults import (
+    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MIMO_TTS_CLONE_MODEL,
+    DEFAULT_MIMO_TTS_MODEL,
+    DEFAULT_WATCHER_INTERVAL,
+)
 from wizard.styles import (
     WIZARD_STYLESHEET,
     prepare_accessible_page,
@@ -1304,8 +1310,18 @@ class SetupWizard(QWidget):
                 ):
                     watcher = dict(watcher)
                     watcher["interval"] = {
-                        "min_ms": int(watcher.get("min_ms", 180000)),
-                        "max_ms": int(watcher.get("max_ms", 360000)),
+                        "min_ms": int(
+                            watcher.get(
+                                "min_ms",
+                                DEFAULT_WATCHER_INTERVAL["min_ms"],
+                            )
+                        ),
+                        "max_ms": int(
+                            watcher.get(
+                                "max_ms",
+                                DEFAULT_WATCHER_INTERVAL["max_ms"],
+                            )
+                        ),
                     }
                 self.vision_page.apply_config(vision, watcher)
             except Exception as exc:
@@ -1472,7 +1488,7 @@ class SetupWizard(QWidget):
         if not tts_base:
             if llm_is_mimo:
                 tts_base = str(direct.get("api_base") or "")
-            tts_base = tts_base or "https://api.xiaomimimo.com/v1"
+            tts_base = tts_base or DEFAULT_MIMO_API_BASE
 
         gsv_python = self.tts_page.gsv_dir_input.text().strip()
         if gsv_python and os.path.isdir(gsv_python):
@@ -1505,11 +1521,11 @@ class SetupWizard(QWidget):
             "voice_clone": use_clone,
             "clone_ref": self.tts_page.mimo_clone_ref_input.text().strip(),
         }
-        model = str(tts.get("model") or "mimo-v2.5-tts")
+        model = str(tts.get("model") or DEFAULT_MIMO_TTS_MODEL)
         if use_clone:
-            patch["model"] = "mimo-v2.5-tts-voiceclone"
+            patch["model"] = DEFAULT_MIMO_TTS_CLONE_MODEL
         elif "voiceclone" in model.lower():
-            patch["model"] = "mimo-v2.5-tts"
+            patch["model"] = DEFAULT_MIMO_TTS_MODEL
         tts.update(patch)
 
     def _collect_conversation_fields(self, config: dict) -> None:

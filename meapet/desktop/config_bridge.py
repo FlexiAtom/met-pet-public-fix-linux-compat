@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+from meapet.config.defaults import DEFAULT_OLLAMA_VISION_MODEL
 from meapet.config.store import (
     load_config as store_load_config,
     save_config as store_save_config,
@@ -196,11 +197,11 @@ class PetConfigBridgeMixin:
         v = self.config.setdefault("vision", {})
         v["backend"] = backend
         if backend == "mimo":
-            if not v.get("model") or v.get("model") in ("qwen3.5:4b",):
+            if not v.get("model") or v.get("model") in (DEFAULT_OLLAMA_VISION_MODEL,):
                 v["model"] = "mimo"
         else:
             if not v.get("model") or v.get("model") in ("mimo",):
-                v["model"] = "qwen3.5:4b"
+                v["model"] = DEFAULT_OLLAMA_VISION_MODEL
         self._save_config()
         self._disconnect_watcher_signals()
         self._init_watcher()
