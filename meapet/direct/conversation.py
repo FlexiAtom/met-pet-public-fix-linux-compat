@@ -246,7 +246,7 @@ class DirectConversationAdapter:
                 log.info(
                     f"[direct] 模型返回文本 turn={turn} chars={len(raw_text)}"
                 )
-                log.track(
+                log.trace(
                     lambda t=raw_text: "[direct] reply-text:" + chr(10) + t
                 )
             else:

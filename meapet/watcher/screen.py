@@ -544,7 +544,7 @@ class ScreenWatcher(QThread):
         except Exception as exc:
             self.progress.emit(STAGE_ERROR)
             log.error(f"[run] exception: {type(exc).__name__}: {exc}")
-            log.track(lambda: f"[run] traceback:\n{traceback.format_exc()}")
+            log.trace(lambda: f"[run] traceback:\n{traceback.format_exc()}")
             safe_message = getattr(exc, "safe_message", "") or str(exc)
             self.error.emit(safe_message)
 

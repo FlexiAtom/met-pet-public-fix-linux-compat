@@ -117,7 +117,7 @@ class TtsVitsMixin:
                 log.warning(
                     f"VITS failed: rc={proc.returncode} stderr_chars={len(proc.stderr or '')}"
                 )
-                log.track(
+                log.trace(
                     lambda: f"VITS stderr [debug]: {(proc.stderr or '')[-400:]}"
                 )
                 if proc.stderr:
