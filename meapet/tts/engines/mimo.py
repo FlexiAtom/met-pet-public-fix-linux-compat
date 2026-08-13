@@ -117,7 +117,7 @@ class TtsMimoMixin:
                 f"MiMo TTS HTTP {resp.status_code} ({elapsed:.1f}s) "
                 f"body_len={len(resp.text or '')}"
             )
-            log.track(lambda: f"MiMo TTS error body [debug]: {(resp.text or '')[:300]}")
+            log.trace(lambda: f"MiMo TTS error body [debug]: {(resp.text or '')[:300]}")
             return None, ""
         try:
             data = resp.json()
@@ -301,7 +301,7 @@ class TtsMimoMixin:
             if ref_wav:
                 _add_candidate(ref_wav, base_score=2_000_000)
         except Exception as e:
-            log.track(lambda _e=e: f"  MiMo clone 获取 GPT-SoVITS 参考失败 [debug]: {_e}")
+            log.trace(lambda _e=e: f"  MiMo clone 获取 GPT-SoVITS 参考失败 [debug]: {_e}")
 
         # 再扫 GPT-Sovits 各情绪目录，避免只命中旧的 jp 样本
         try:

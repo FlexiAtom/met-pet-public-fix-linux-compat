@@ -206,7 +206,7 @@ class TranslationService:
                     f"[translate] provider={provider} invalid_result "
                     f"relation={relation} chars={len(translated)}"
                 )
-                log.track(
+                log.trace(
                     lambda value=translated: (
                         f"[translate] invalid result [debug]:\n{value}"
                     )
@@ -220,7 +220,7 @@ class TranslationService:
                 f"[translate] provider={provider} source={source} target={target_code} "
                 f"chars={len(translated)}"
             )
-            log.track(
+            log.trace(
                 lambda value=translated: f"[translate] result [debug]:\n{value}"
             )
             return translated

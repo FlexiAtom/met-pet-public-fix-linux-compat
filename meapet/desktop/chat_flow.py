@@ -95,7 +95,7 @@ def _log_private_text(label: str, text: str, *, suffix: str = "") -> None:
     """默认仅记录文本长度；显式调试时才记录正文。"""
     value = str(text or "")
     tail = f" {suffix}" if suffix else ""
-    log.track(lambda: f"{label}: chars={len(value)}{tail}\n{value}")
+    log.trace(lambda: f"{label}: chars={len(value)}{tail}\n{value}")
     log.debug(f"{label}: chars={len(value)}{tail}")
 
 
@@ -585,7 +585,7 @@ class PetChatFlowMixin:
                         log.info(
                             f"[reply] 模型返回文本 chars={len(reply_text)}"
                         )
-                        log.track(
+                        log.trace(
                             lambda text=reply_text: f"[reply] 模型返回文本:\n{text}"
                         )
                 except Exception as exc:
@@ -1216,7 +1216,7 @@ class PetChatFlowMixin:
         wav_path = value.rsplit("|", 1)[0] if "|" in value else value
         if not wav_path or not os.path.exists(wav_path):
             log.warning(f"[audio] TTS 未生成有效文件，回退文字: chars={len(value)}")
-            log.track(f"[audio] 无效 TTS 返回: {raw!r}")
+            log.trace(f"[audio] 无效 TTS 返回: {raw!r}")
             self._complete_pending_chat_reply()
             return
         self._complete_pending_chat_reply(wav_path)
@@ -1228,7 +1228,7 @@ class PetChatFlowMixin:
         _log_private_text("[chat] 错误", err)
         err_len = len(err or "")
         log.error(f"[chat] 对话错误: error_chars={err_len}")
-        log.track(lambda: f"[chat] 对话错误: error_chars={err_len} error_raw={redact_text(err)}")
+        log.trace(lambda: f"[chat] 对话错误: error_chars={err_len} error_raw={redact_text(err)}")
         if hasattr(self, '_chat_timeout'):
             self._chat_timeout.stop()
         timeline = getattr(self, "_conversation_timeline", None)

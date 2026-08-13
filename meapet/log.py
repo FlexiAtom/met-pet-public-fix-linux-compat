@@ -5,11 +5,10 @@ import logging.handlers
 import os
 import re
 import sys
-from pathlib import Path
 
 # ====================== 全局配置项 ======================
-CONSOLE_LOG_LEVEL = "INFO"    # 控制台默认 INFO；TRACK 载荷日志需显式调到 TRACK 或 MEAPET_DEBUG=1
-# 文件默认 INFO：DEBUG 与 TRACK（含用户聊天/长期记忆等隐私载荷）默认不落盘，
+CONSOLE_LOG_LEVEL = "TRACE"    # 控制台默认 INFO；TRACK 载荷日志需显式调到 TRACE 或 MEAPET_DEBUG=1
+# 文件默认 INFO：DEBUG 与 TRACE（含用户聊天/长期记忆等隐私载荷）默认不落盘，
 # 需排障时可设环境变量 MEAPET_DEBUG=1 临时提升。
 FILE_LOG_LEVEL = os.environ.get("MEAPET_FILE_LOG_LEVEL", "").strip().upper() or "INFO"
 
@@ -61,7 +60,7 @@ class ColorFormatter(logging.Formatter):
     """控制台彩色格式化器"""
 
     LEVEL_COLORS = {
-        'TRACK':    '\033[37m',   # 灰色
+        'TRACE':    '\033[37m',   # 灰色
         'DEBUG':    '\033[36m',   # 青色
         'INFO':     '\033[32m',   # 绿色
         'WARNING':  '\033[33m',   # 黄色
@@ -107,25 +106,25 @@ class ColorFormatter(logging.Formatter):
 
 
 # ====================== 自定义 Logger 类 ======================
-# 数值 5 < DEBUG(10)，确保只有显式设置为 TRACK 时才会输出
-TRACK = 5
-logging.addLevelName(TRACK, "TRACK")
+# 数值 5 < DEBUG(10)，确保只有显式设置为 TRACE 时才会输出
+TRACE = 5
+logging.addLevelName(TRACE, "TRACE")
 
 class ColorLogger(logging.Logger):
-    """支持 TRACK 级别的自定义 Logger"""
+    """支持 TRACE 级别的自定义 Logger"""
 
-    def track(self, message, *args, **kwargs):
+    def trace(self, message, *args, **kwargs):
         """
-        载荷级调试追踪。仅在 logger 级别 <= TRACK 时输出。
+        载荷级调试追踪。仅在 logger 级别 <= TRACE 时输出。
         支持 %s 惰性格式化；若需 f-string 惰性求值，请传入 lambda。
         """
-        if self.isEnabledFor(TRACK):
+        if self.isEnabledFor(TRACE):
             if callable(message):
                 try:
                     message = message()
                 except Exception as e:
-                    message = f"[LOG ERROR] TRACK BUILD ERROR: {e}"
-            self._log(TRACK, message, args, **kwargs)
+                    message = f"[LOG ERROR] TRACE BUILD ERROR: {e}"
+            self._log(TRACE, message, args, **kwargs)
 
 # 注册自定义 Logger 类，须在 getLogger 之前调用
 logging.setLoggerClass(ColorLogger)
@@ -152,7 +151,7 @@ def get_color_logger(name="app", log_dir=LOG_DIR, keep_days=LOG_KEEP_DAYS,
         file_level = FILE_LOG_LEVEL
 
     level_map = {
-        "TRACK": TRACK,
+        "TRACE": TRACE,
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
         "WARN": logging.WARNING,
@@ -163,7 +162,7 @@ def get_color_logger(name="app", log_dir=LOG_DIR, keep_days=LOG_KEEP_DAYS,
     file_level_num = level_map.get(file_level.upper(), logging.INFO)
 
     logger = logging.getLogger(name)
-    logger.setLevel(TRACK)
+    logger.setLevel(TRACE)
 
     # 仅在没有 Handler 时才进行配置
     if not logger.handlers:
