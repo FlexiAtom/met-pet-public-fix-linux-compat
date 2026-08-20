@@ -21,7 +21,7 @@
     "agent": {
       "kind": "hermes",
       "base_url": "ws://127.0.0.1:9119/api/ws",
-      "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
+      "auth_token": "$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN",
       "model": "",
       "device_id": "",
       "session_id": "",

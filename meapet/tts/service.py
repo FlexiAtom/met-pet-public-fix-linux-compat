@@ -19,7 +19,7 @@ from meapet.config.defaults import (
     DEFAULT_GSV_GPT_WEIGHTS_DIR,
     DEFAULT_GSV_SOVITS_MODEL,
     DEFAULT_GSV_SOVITS_WEIGHTS_DIR,
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_MIMO_TTS_CLONE_MODEL,
     DEFAULT_MIMO_TTS_MODEL,
 )
@@ -135,7 +135,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 优先使用配置文件或环境变量；若均未设置，自动检测常见安装路径。
         # 打包版里 sys.executable 是 MeaPet.exe，绝不能当 Python 用。
         self.python_exe = resolve_external_python(
-            tts_cfg.get("python_exe", "") or os.environ.get("GSV_PYTHON", "")
+            tts_cfg.get("python_exe", "") or os.environ.get("MEA_PET_GSV_PYTHON", "")
         )
 
         if not self.python_exe:
@@ -283,7 +283,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                     if (llm_cfg.get("backend") or "").lower() == "mimo"
                     else ""
                 )
-                or os.environ.get("MIMO_API_KEY", "")
+                or os.environ.get("MEA_PET_MIMO_API_KEY", "")
             )
         # 机器翻译使用 translators 的固定服务池；不复用任何 LLM 或模型密钥。
         self.translation_service = TranslationService()
@@ -325,7 +325,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self.mimo_api_base = (
             tts_cfg.get("api_base", "")
             or (llm_cfg.get("api_base", "") if llm_cfg.get("backend") == "mimo" else "")
-            or DEFAULT_MIMO_API_BASE
+            or DEFAULT_MEA_PET_MIMO_API_BASE
         )
         self.mimo_model = tts_cfg.get("model", DEFAULT_MIMO_TTS_MODEL)
         self.mimo_voice = tts_cfg.get("voice", "冰糖")
@@ -479,7 +479,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         return bool(all_ok and self._deps_ready)
 
     def _allow_auto_install(self) -> bool:
-        if os.environ.get("MEAPET_ALLOW_DOWNLOAD", "").strip() == "1":
+        if os.environ.get("MEA_PET_ALLOW_DOWNLOAD", "").strip() == "1":
             return True
         return bool(self.config.get("tts", {}).get("auto_install_deps", False))
 

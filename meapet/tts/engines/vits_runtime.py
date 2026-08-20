@@ -24,12 +24,12 @@ _CORE_READY = False
 
 
 def _ensure_openjtalk_dict() -> str:
-    """Point OPEN_JTALK_DICT_DIR at the bundled dictionary when present."""
+    """Point MEA_PET_OPEN_JTALK_DICT_DIR at the bundled dictionary when present."""
     builtin = project_path("dic", "open_jtalk_dic_utf_8-1.11")
     if os.path.isdir(builtin):
-        os.environ["OPEN_JTALK_DICT_DIR"] = builtin
+        os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = builtin
         return builtin
-    return os.environ.get("OPEN_JTALK_DICT_DIR", "")
+    return os.environ.get("MEA_PET_OPEN_JTALK_DICT_DIR", "")
 
 
 def _ensure_vits_core_on_path() -> str:

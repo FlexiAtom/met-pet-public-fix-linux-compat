@@ -14,10 +14,10 @@ from meapet.agent.base import AgentTurnRequest, TurnCancelled, TurnCompleted
 
 def _reply(text: str = "连接成功") -> str:
     return (
-        f"<MEAPET_SEGMENT><DISPLAY>{text}</DISPLAY>"
+        f"<MEA_PET_SEGMENT><DISPLAY>{text}</DISPLAY>"
         f'<META>{{"voice_text":"{text}","voice_language":"zh-CN",'
         '"mood":"happy","tts_style":""}</META>'
-        "</MEAPET_SEGMENT><MEAPET_DONE />"
+        "</MEA_PET_SEGMENT><MEA_PET_DONE />"
     )
 
 
@@ -274,13 +274,13 @@ class TestAgentLinkFactory(unittest.TestCase):
                 "agent": {
                     "kind": "agent_link",
                     "base_url": "ws://127.0.0.1:8766/agent-link",
-                    "auth_token": "$AGENT_LINK_TOKEN",
+                    "auth_token": "$MEA_PET_AGENT_LINK_TOKEN",
                 },
             }
         }
         with mock.patch.dict(
             os.environ,
-            {"AGENT_LINK_TOKEN": "agent-link-secret"},
+            {"MEA_PET_AGENT_LINK_TOKEN": "agent-link-secret"},
             clear=False,
         ):
             first = create_agent_adapter_from_config(config)

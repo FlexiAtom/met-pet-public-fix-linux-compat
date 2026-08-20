@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Dict, List, Tuple
 
 from meapet.config.defaults import (
     DEFAULT_DIRECT_MODEL,
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
 )
 from meapet.log import get_color_logger
@@ -155,7 +155,7 @@ class ChatEngine:
         self._cancelled = True
 
     def _debug_dump(self, label: str, payload, limit: int = 2000) -> None:
-        """载荷级调试转储：仅 MEAPET_DEBUG=1 时输出，经 _safe_print 统一脱敏。"""
+        """载荷级调试转储：仅 MEA_PET_DEBUG=1 时输出，经 _safe_print 统一脱敏。"""
         if not debug_enabled():
             return
         try:
@@ -789,7 +789,7 @@ class ChatEngine:
         """MiMo OpenAI 兼容请求（content 为空时从 reasoning 弱兜底）。"""
         return await self._chat_openai_compatible_async(
             messages,
-            default_base=DEFAULT_MIMO_API_BASE,
+            default_base=DEFAULT_MEA_PET_MIMO_API_BASE,
             label="MiMo",
         )
 

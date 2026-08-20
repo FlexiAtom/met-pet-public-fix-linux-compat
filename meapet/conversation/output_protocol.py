@@ -10,10 +10,10 @@ from typing import Iterable, Optional, Tuple
 from .types import REPLY_REQUIRED_FIELDS, ReplySegment
 
 
-_SEGMENT_START_RE = re.compile(r"<MEAPET_SEGMENT\s*>", re.IGNORECASE)
-_SEGMENT_CLOSE_RE = re.compile(r"</MEAPET_SEGMENT\s*>", re.IGNORECASE)
+_SEGMENT_START_RE = re.compile(r"<MEA_PET_SEGMENT\s*>", re.IGNORECASE)
+_SEGMENT_CLOSE_RE = re.compile(r"</MEA_PET_SEGMENT\s*>", re.IGNORECASE)
 _SEGMENT_BLOCK_RE = re.compile(
-    r"<MEAPET_SEGMENT\s*>(.*?)</MEAPET_SEGMENT\s*>",
+    r"<MEA_PET_SEGMENT\s*>(.*?)</MEA_PET_SEGMENT\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 _DISPLAY_OPEN_RE = re.compile(r"<DISPLAY\s*>", re.IGNORECASE)
@@ -22,7 +22,7 @@ _DISPLAY_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _META_RE = re.compile(r"<META\s*>(.*?)</META\s*>", re.IGNORECASE | re.DOTALL)
-_DONE_RE = re.compile(r"<MEAPET_DONE\s*/\s*>", re.IGNORECASE)
+_DONE_RE = re.compile(r"<MEA_PET_DONE\s*/\s*>", re.IGNORECASE)
 _TTS_RE = re.compile(r"<TTS>\s*(\{[^\r\n]*\})\s*</TTS>", re.IGNORECASE)
 _MOOD_RE = re.compile(r"^\s*\[([^\]\r\n]+)\]\s*")
 
@@ -283,9 +283,9 @@ class MeaPetOutputStreamParser:
         self._display_lengths: dict[int, int] = {}
         self._done_emitted = False
         self._closed = False
-        self._starts: list[tuple[int, int]] = []  # (start, end) of each <MEAPET_SEGMENT>
+        self._starts: list[tuple[int, int]] = []  # (start, end) of each <MEA_PET_SEGMENT>
         self._last_scan = 0  # bytes of self._raw already scanned for starts
-        self._last_close_count = 0  # count of </MEAPET_SEGMENT seen (avoid re-scan)
+        self._last_close_count = 0  # count of </MEA_PET_SEGMENT seen (avoid re-scan)
         self._overflowed = False
 
     @property
@@ -313,7 +313,7 @@ class MeaPetOutputStreamParser:
         self._raw += value
         events = []
 
-        # --- 增量扫描 <MEAPET_SEGMENT> 标签 ---
+        # --- 增量扫描 <MEA_PET_SEGMENT> 标签 ---
         # 从 last_scan 前回退一个窗口，确保跨块边界的标签也能被匹配
         scan_from = max(0, self._last_scan - self._BOUNDARY_WINDOW)
         new_portion = self._raw[scan_from:]
@@ -354,8 +354,8 @@ class MeaPetOutputStreamParser:
                 events.append(SegmentTextDelta(index, visible[previous:]))
                 self._display_lengths[index] = len(visible)
 
-        # --- 跟踪 </MEAPET_SEGMENT> 完整闭标签的出现次数 ---
-        # 与完整解析用同一容错规则（允许 "</MEAPET_SEGMENT >"），
+        # --- 跟踪 </MEA_PET_SEGMENT> 完整闭标签的出现次数 ---
+        # 与完整解析用同一容错规则（允许 "</MEA_PET_SEGMENT >"），
         # 否则带空白的合法闭标签不会实时触发 SegmentCompleted。
         close_count = len(_SEGMENT_CLOSE_RE.findall(self._raw))
         if close_count > self._last_close_count:
@@ -367,7 +367,7 @@ class MeaPetOutputStreamParser:
                 events.append(SegmentCompleted(segment))
                 self._completed_count += 1
 
-        # --- MEAPET_DONE 只检查一次 ---
+        # --- MEA_PET_DONE 只检查一次 ---
         if not self._done_emitted and _DONE_RE.search(self._raw):
             events.append(ProtocolCompleted())
             self._done_emitted = True

@@ -141,11 +141,11 @@ class PNGStartupTests(unittest.TestCase):
     # ── 回退路径 ────────────────────────────────────────────────────
 
     def test_force_png_skips_live2d_and_is_ready_immediately(self) -> None:
-        """设置 MEAPET_FORCE_PNG=1 时，应跳过 Live2D 直接走 PNG。"""
+        """设置 MEA_PET_FORCE_PNG=1 时，应跳过 Live2D 直接走 PNG。"""
         with tempfile.TemporaryDirectory() as model_dir:
             host = self._host(model_dir)
             with (
-                mock.patch.dict(os.environ, {"MEAPET_FORCE_PNG": "1"}),
+                mock.patch.dict(os.environ, {"MEA_PET_FORCE_PNG": "1"}),
                 mock.patch("meapet.desktop.render_host.SpriteRenderer", _SpriteRendererStub),  # ← 新增
             ):
                 host.init_renderer()

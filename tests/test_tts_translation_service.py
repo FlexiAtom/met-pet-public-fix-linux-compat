@@ -66,7 +66,7 @@ class TestTranslationService(unittest.TestCase):
             {"translators": fake_package},
         ):
             os.environ.pop("translators_default_region", None)
-            os.environ.pop("MEAPET_TRANSLATORS_REGION", None)
+            os.environ.pop("MEA_PET_TRANSLATORS_REGION", None)
             loaded = TranslationService._load_translate_func()
             selected_region = os.environ.get("translators_default_region")
 
@@ -80,7 +80,7 @@ class TestTranslationService(unittest.TestCase):
         fake_package = SimpleNamespace(translate_text=translate)
         with mock.patch.dict(
             os.environ,
-            {"MEAPET_TRANSLATORS_REGION": "en"},
+            {"MEA_PET_TRANSLATORS_REGION": "en"},
             clear=False,
         ), mock.patch.dict(sys.modules, {"translators": fake_package}):
             os.environ.pop("translators_default_region", None)
@@ -98,7 +98,7 @@ class TestTranslationService(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "MEAPET_TRANSLATORS_REGION": "ap-southeast-1",
+                "MEA_PET_TRANSLATORS_REGION": "ap-southeast-1",
                 "translators_default_region": "CN",
             },
             clear=False,
@@ -119,7 +119,7 @@ class TestTranslationService(unittest.TestCase):
             {"translators_default_region": "en"},
             clear=False,
         ), mock.patch.dict(sys.modules, {"translators": fake_package}):
-            os.environ.pop("MEAPET_TRANSLATORS_REGION", None)
+            os.environ.pop("MEA_PET_TRANSLATORS_REGION", None)
             loaded = TranslationService._load_translate_func()
             selected_region = os.environ.get("translators_default_region")
 

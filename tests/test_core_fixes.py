@@ -208,12 +208,12 @@ class TestChatBackendInit(unittest.TestCase):
 
 # 会污染密钥解析的环境变量（测试必须隔离）
 _SECRET_ENV_KEYS = (
-    "MIMO_API_KEY",
-    "XIAOMIMIMO_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "MEAPET_API_KEY",
-    "OPENAI_API_KEY",
-    "TRANSLATE_API_KEY",
+    "MEA_PET_MIMO_API_KEY",
+    "XIAOMIMEA_PET_MIMO_API_KEY",
+    "MEA_PET_DEEPSEEK_API_KEY",
+    "MEA_PET_API_KEY",
+    "MEA_PET_OPENAI_API_KEY",
+    "MEA_PET_TRANSLATE_API_KEY",
 )
 
 
@@ -378,14 +378,14 @@ class TestConfigStoreSecrets(unittest.TestCase):
         from meapet.config.store import resolve_llm_api_key, resolve_secret, scrub_secrets
 
         # resolve_llm_api_key 只接受 llm_cfg dict（无 backend 参数）
-        os.environ["MEAPET_API_KEY"] = "sk-env-test-key-12345678"
+        os.environ["MEA_PET_API_KEY"] = "sk-env-test-key-12345678"
         try:
             key = resolve_llm_api_key({"api_key": "sk-file-should-not-win-xxxx"})
             self.assertEqual(key, "sk-env-test-key-12345678")
             # placeholder
-            key2 = resolve_secret("$ENV", ("MEAPET_API_KEY",))
+            key2 = resolve_secret("$ENV", ("MEA_PET_API_KEY",))
             self.assertEqual(key2, "sk-env-test-key-12345678")
-            key3 = resolve_secret("${MEAPET_API_KEY}", ())
+            key3 = resolve_secret("${MEA_PET_API_KEY}", ())
             self.assertEqual(key3, "sk-env-test-key-12345678")
             scrubbed = scrub_secrets({
                 "llm": {"api_key": "sk-x"},
@@ -395,14 +395,14 @@ class TestConfigStoreSecrets(unittest.TestCase):
             self.assertEqual(scrubbed["llm"]["api_key"], "")
             self.assertEqual(scrubbed["tts"]["api_key"], "")
         finally:
-            os.environ.pop("MEAPET_API_KEY", None)
+            os.environ.pop("MEA_PET_API_KEY", None)
 
     def test_file_used_when_no_env(self):
         import os
         from meapet.config.store import resolve_llm_api_key
-        os.environ.pop("DEEPSEEK_API_KEY", None)
-        os.environ.pop("MEAPET_API_KEY", None)
-        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("MEA_PET_DEEPSEEK_API_KEY", None)
+        os.environ.pop("MEA_PET_API_KEY", None)
+        os.environ.pop("MEA_PET_OPENAI_API_KEY", None)
         key = resolve_llm_api_key({"api_key": "sk-only-in-file-abcdef"})
         self.assertEqual(key, "sk-only-in-file-abcdef")
 

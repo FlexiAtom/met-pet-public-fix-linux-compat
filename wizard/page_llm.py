@@ -189,7 +189,7 @@ class LLMPage(QFrame):
         self.direct_api_key_input.setAccessibleDescription(
             "凭据只会保存到本机配置文件，也可填写环境变量占位符"
         )
-        self.direct_api_key_input.setPlaceholderText("例如 $MEAPET_API_KEY 或 sk-...")
+        self.direct_api_key_input.setPlaceholderText("例如 $MEA_PET_API_KEY 或 sk-...")
         key_row = QHBoxLayout()
         key_row.addWidget(self.direct_api_key_input, 1)
         self.api_key_visibility = QPushButton("显示 Key")

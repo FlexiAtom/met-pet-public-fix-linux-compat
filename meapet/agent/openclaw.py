@@ -1082,7 +1082,7 @@ class OpenClawAdapter:
                     # 初次 chat.send 只回 started；重连后用同一幂等键重发，
                     # 已完成请求会直接回 ok，但错过的 chat 事件不会重播。
                     # 此时从持久化历史对账恢复，避免重复执行或空等超时。
-                    if "<MEAPET_DONE" in raw_output.upper():
+                    if "<MEA_PET_DONE" in raw_output.upper():
                         break
                     recovered = await self._recover_completed_reply(
                         request,

@@ -831,7 +831,7 @@ class UiRefactorTests(unittest.TestCase):
         second._animate_in()
         self.assertEqual(second._opacity, before)
 
-        with patch.dict(os.environ, {"MEAPET_REDUCED_MOTION": "1"}):
+        with patch.dict(os.environ, {"MEA_PET_REDUCED_MOTION": "1"}):
             reduced = self._track(ChatInputBox())
         self.assertTrue(reduced._reduced_motion)
         self.assertEqual(reduced._opacity, 1.0)
@@ -1183,7 +1183,7 @@ class UiRefactorTests(unittest.TestCase):
         reduced = self._track(DialogueBox())
         reduced.show_text("减少动态效果。", duration_ms=0)
         reduced.mark_stack_entry()
-        with patch.dict(os.environ, {"MEAPET_REDUCED_MOTION": "1"}):
+        with patch.dict(os.environ, {"MEA_PET_REDUCED_MOTION": "1"}):
             reduced.animate_to(reduced_target, 0.76, animate=True)
         self.assertEqual(reduced.pos(), reduced_target)
         self.assertAlmostEqual(reduced.visualOpacity, 0.76)
@@ -2883,15 +2883,15 @@ class UiRefactorTests(unittest.TestCase):
         from meapet.ui_theme import resolve_reduced_motion
         import os
 
-        os.environ.pop("MEAPET_REDUCED_MOTION", None)
+        os.environ.pop("MEA_PET_REDUCED_MOTION", None)
         self.assertTrue(resolve_reduced_motion(True))
-        self.assertFalse(resolve_reduced_motion(False) and os.environ.get("MEAPET_REDUCED_MOTION") == "force")
+        self.assertFalse(resolve_reduced_motion(False) and os.environ.get("MEA_PET_REDUCED_MOTION") == "force")
 
     def test_reduced_motion_dismisses_bubble_without_fade_timer(self) -> None:
         from meapet.desktop.widgets import DialogueBox
 
         dismissed = []
-        with patch.dict(os.environ, {"MEAPET_REDUCED_MOTION": "1"}):
+        with patch.dict(os.environ, {"MEA_PET_REDUCED_MOTION": "1"}):
             bubble = self._track(DialogueBox())
             bubble.dismissed.connect(lambda: dismissed.append(True))
             bubble.show_text("立即消失", duration_ms=0)

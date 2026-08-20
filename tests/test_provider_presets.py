@@ -47,7 +47,7 @@ class ProviderPresetRegistryTests(unittest.TestCase):
                     self.assertTrue(p.env_keys, f"{p.id} 缺少 env_keys")
                 # 中立兜底变量始终存在
                 if p.env_keys:
-                    self.assertIn("MEAPET_API_KEY", p.family_env_keys)
+                    self.assertIn("MEA_PET_API_KEY", p.family_env_keys)
 
     def test_preset_lookup(self):
         self.assertIsNone(preset_by_id(CUSTOM_ID))
@@ -96,7 +96,7 @@ class StoreIntegrationTests(unittest.TestCase):
                     PROTOCOL_BY_ENDPOINT_FAMILY.get(pid), PROTO_OPENAI
                 )
                 env = ENV_LLM_KEY_BY_FAMILY.get(pid)
-                self.assertTrue(env and "MEAPET_API_KEY" in env)
+                self.assertTrue(env and "MEA_PET_API_KEY" in env)
 
     def test_builtin_families_are_not_overridden(self):
         # 注册表合并用 setdefault，既有内置 family 行为必须原样保留
@@ -105,7 +105,7 @@ class StoreIntegrationTests(unittest.TestCase):
         self.assertEqual(PROTOCOL_BY_ENDPOINT_FAMILY["custom"], PROTO_OPENAI)
         self.assertEqual(
             ENV_LLM_KEY_BY_FAMILY["deepseek"],
-            ("DEEPSEEK_API_KEY", "MEAPET_API_KEY"),
+            ("MEA_PET_DEEPSEEK_API_KEY", "MEA_PET_API_KEY"),
         )
 
     def test_typed_urls_detect_new_providers(self):

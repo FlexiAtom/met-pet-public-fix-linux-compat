@@ -371,7 +371,7 @@ class MeaPet(
         QTimer.singleShot(1200, self._maybe_show_first_run_hint)
 
     def _apply_motion_preference(self) -> None:
-        """合并配置 / 环境 / 系统启发式，同步到 MEAPET_REDUCED_MOTION。"""
+        """合并配置 / 环境 / 系统启发式，同步到 MEA_PET_REDUCED_MOTION。"""
         from meapet.ui_theme import apply_reduced_motion_env, resolve_reduced_motion
 
         reduced = resolve_reduced_motion(
@@ -648,7 +648,7 @@ def main():
 
     log.info(f"[boot] python={sys.version.split()[0]} exe={sys.executable}")
     log.info(f"[boot] cwd={os.getcwd()} root={PROJECT_ROOT} data={get_data_dir()}")
-    log.info(f"[boot] FORCE_PNG={os.environ.get('MEAPET_FORCE_PNG', '')}")
+    log.info(f"[boot] FORCE_PNG={os.environ.get('MEA_PET_FORCE_PNG', '')}")
 
     # Live2D 透明窗：在 QApplication 之前请求 alpha+stencil，并在 Windows 上优先
     # 桌面 OpenGL，减轻打包后 ANGLE/软 GL 把 QOpenGLWidget 合成成不透明矩形。

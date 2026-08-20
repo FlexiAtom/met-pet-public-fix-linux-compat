@@ -60,16 +60,16 @@ _HERMES_HELP = dedent(
 
        $token = python -c "import secrets; print(secrets.token_urlsafe(32))"
        [Environment]::SetEnvironmentVariable(
-           "HERMES_DASHBOARD_SESSION_TOKEN", $token, "User"
+           "MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN", $token, "User"
        )
-       $env:HERMES_DASHBOARD_SESSION_TOKEN = $token
+       $env:MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN = $token
        hermes serve --host 127.0.0.1 --port 9119
 
     3. 在当前 Agent 配置中填写
 
        Agent 类型：Hermes Agent
        WebSocket 地址：{DEFAULT_HERMES_WS_URL}
-       访问令牌：$HERMES_DASHBOARD_SESSION_TOKEN
+       访问令牌：$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN
        当前会话 ID / 长期记忆 Key：首次接入时留空
        最近对话轮数：保持 5 即可
 
@@ -112,15 +112,15 @@ _OPENCLAW_HELP = dedent(
 
        $gatewayToken = "<当前 Gateway 实际使用的 token>"
        [Environment]::SetEnvironmentVariable(
-           "OPENCLAW_GATEWAY_TOKEN", $gatewayToken, "User"
+           "MEA_PET_OPENCLAW_GATEWAY_TOKEN", $gatewayToken, "User"
        )
-       $env:OPENCLAW_GATEWAY_TOKEN = $gatewayToken
+       $env:MEA_PET_OPENCLAW_GATEWAY_TOKEN = $gatewayToken
 
     3. 在当前 Agent 配置中填写
 
        Agent 类型：OpenClaw Gateway
        WebSocket 地址：{DEFAULT_OPENCLAW_WS_URL}
-       访问令牌：$OPENCLAW_GATEWAY_TOKEN
+       访问令牌：$MEA_PET_OPENCLAW_GATEWAY_TOKEN
        当前会话 ID / 长期记忆 Key：首次接入时留空
 
        MeaPet 中的令牌必须与 Gateway 实际使用的令牌完全一致。

@@ -16,10 +16,10 @@ sys.path.insert(0, str(ROOT))
 
 def _valid_output(text="你好，主人"):
     return (
-        f"<MEAPET_SEGMENT><DISPLAY>{text}</DISPLAY>"
+        f"<MEA_PET_SEGMENT><DISPLAY>{text}</DISPLAY>"
         f'<META>{{"voice_text":"{text}","voice_language":"zh",'
         f'"mood":"happy","tts_style":"轻声"}}</META>'
-        "</MEAPET_SEGMENT><MEAPET_DONE />"
+        "</MEA_PET_SEGMENT><MEA_PET_DONE />"
     )
 
 
@@ -108,10 +108,10 @@ class TestDirectConversationAdapter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(canonical.model, "model-test")
         self.assertEqual(canonical.max_tokens, 900)
         self.assertTrue(canonical.stream)
-        # system prompt 包含 "你是梅尔" 和输出协议标记 <MEAPET_SEGMENT>
+        # system prompt 包含 "你是梅尔" 和输出协议标记 <MEA_PET_SEGMENT>
         system = canonical.messages[0]["content"]
         self.assertIn("你是梅尔", system)
-        self.assertIn("<MEAPET_SEGMENT>", system)  # 协议标记已集成在 system prompt 中
+        self.assertIn("<MEA_PET_SEGMENT>", system)  # 协议标记已集成在 system prompt 中
         self.assertEqual(canonical.messages[-1], {"role": "user", "content": "现在几点"})
         text = "".join(
             event.delta for event in events if isinstance(event, SegmentTextDelta)
@@ -235,7 +235,7 @@ class TestDirectEngineFactory(unittest.TestCase):
                         "api_base": "https://api.anthropic.test/v1",
                         "host": "",
                         "model": "claude-test",
-                        "api_key": "$CUSTOM_MODEL_KEY",
+                        "api_key": "$MEA_PET_CUSTOM_MODEL_KEY",
                         "temperature": 0.25,
                         "max_tokens": 1234,
                     },
@@ -245,7 +245,7 @@ class TestDirectEngineFactory(unittest.TestCase):
 
         with mock.patch.dict(
             os.environ,
-            {"CUSTOM_MODEL_KEY": "env-secret"},
+            {"MEA_PET_CUSTOM_MODEL_KEY": "env-secret"},
             clear=False,
         ):
             engine = create_engine_from_config(config)

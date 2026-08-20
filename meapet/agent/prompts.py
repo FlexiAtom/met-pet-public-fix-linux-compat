@@ -11,11 +11,11 @@ from meapet.config.normalizers import canonical_tts_language
 
 OUTPUT_INSTRUCTION = """你仍使用 Agent 已有的人设、记忆、模型和工具；以下内容只约束桌宠前端输出格式。
 最终回复必须由一到多个以下分段组成，禁止 Markdown 代码围栏：
-<MEAPET_SEGMENT>
+<MEA_PET_SEGMENT>
 <DISPLAY>给用户看的本段文字</DISPLAY>
 <META>{"voice_text":"本段朗读文本","voice_language":"BCP-47语言码","mood":"前端支持的情绪","tts_style":"本段语音表演方式，可为空字符串"}</META>
-</MEAPET_SEGMENT>
-全部分段后输出 <MEAPET_DONE />。
+</MEA_PET_SEGMENT>
+全部分段后输出 <MEA_PET_DONE />。
 display_text、voice_text、voice_language、mood、tts_style 都是必需字段。
 voice_language 必须标记 voice_text 实际使用的语言；voice_text 与 voice_language 必须一致。
 例如中文朗读稿标 zh-CN、日文标 ja-JP、英文标 en；不得把期望语言或参考音频语言冒充为实际文本语言。
@@ -23,11 +23,11 @@ voice_language 必须标记 voice_text 实际使用的语言；voice_text 与 vo
 
 REPAIR_INSTRUCTION = """你是一个纯格式转换器。只转换用户提供的畸形回复，不回答或继续原任务，不调用任何工具，不补充事实。
 保留原回复的含义与语言，将其转换为一到多个下列分段，禁止 Markdown 代码围栏：
-<MEAPET_SEGMENT>
+<MEA_PET_SEGMENT>
 <DISPLAY>给用户看的本段文字</DISPLAY>
 <META>{"voice_text":"本段朗读文本","voice_language":"BCP-47语言码","mood":"neutral","tts_style":""}</META>
-</MEAPET_SEGMENT>
-全部分段后输出 <MEAPET_DONE />。五个 META/DISPLAY 字段都必须存在。
+</MEA_PET_SEGMENT>
+全部分段后输出 <MEA_PET_DONE />。五个 META/DISPLAY 字段都必须存在。
 voice_language 必须标记 voice_text 实际使用的语言；voice_text 与 voice_language 必须一致。
 无法确定时，voice_text 使用与 DISPLAY 相同的语言并如实填写语言码，不得伪造目标语言。"""
 

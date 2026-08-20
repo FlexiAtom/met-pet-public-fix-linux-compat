@@ -50,7 +50,7 @@ from PyQt5.QtWidgets import QShortcut
 
 from wizard.platform_info import CONFIG_PATH, PLATFORM
 from meapet.config.defaults import (
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_MIMO_TTS_CLONE_MODEL,
     DEFAULT_MIMO_TTS_MODEL,
     DEFAULT_WATCHER_INTERVAL,
@@ -1488,7 +1488,7 @@ class SetupWizard(QWidget):
         if not tts_base:
             if llm_is_mimo:
                 tts_base = str(direct.get("api_base") or "")
-            tts_base = tts_base or DEFAULT_MIMO_API_BASE
+            tts_base = tts_base or DEFAULT_MEA_PET_MIMO_API_BASE
 
         gsv_python = self.tts_page.gsv_dir_input.text().strip()
         if gsv_python and os.path.isdir(gsv_python):
