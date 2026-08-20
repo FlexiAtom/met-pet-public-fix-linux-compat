@@ -36,7 +36,7 @@ from meapet.config.defaults import (
     DEFAULT_HERMES_WS_URL,
     DEFAULT_LIVE2D_WINDOW_MASK,
     DEFAULT_LIVE2D_WINDOW_SHAPE,
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
     DEFAULT_OPENAI_API_BASE,
     DEFAULT_OPENCLAW_WS_URL,
@@ -454,7 +454,7 @@ def resolve_vision_api_base(
         if inherited:
             return inherited
     if backend == "mimo":
-        return DEFAULT_MIMO_API_BASE
+        return DEFAULT_MEA_PET_MIMO_API_BASE
     return DEFAULT_API_BASE
 
 

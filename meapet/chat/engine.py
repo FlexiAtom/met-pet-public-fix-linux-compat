@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Dict, List, Tuple
 
 from meapet.config.defaults import (
     DEFAULT_DIRECT_MODEL,
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
 )
 from meapet.log import get_color_logger
@@ -789,7 +789,7 @@ class ChatEngine:
         """MiMo OpenAI 兼容请求（content 为空时从 reasoning 弱兜底）。"""
         return await self._chat_openai_compatible_async(
             messages,
-            default_base=DEFAULT_MIMO_API_BASE,
+            default_base=DEFAULT_MEA_PET_MIMO_API_BASE,
             label="MiMo",
         )
 

@@ -24,7 +24,7 @@ from wizard.page_tts_gsv import TtsPageGsvMixin
 from wizard.page_tts_mimo import TtsPageMimoMixin
 from wizard.page_tts_vits import TtsPageVitsMixin
 from meapet.config.defaults import (
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_MIMO_TTS_CLONE_MODEL,
     DEFAULT_MIMO_TTS_MODEL,
 )
@@ -131,9 +131,9 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         mimo_base_label = QLabel("API Base：")
         mimo_base_label.setObjectName("FieldLabel")
         mimo_layout.addWidget(mimo_base_label)
-        self.mimo_api_base_input = QLineEdit(DEFAULT_MIMO_API_BASE)
+        self.mimo_api_base_input = QLineEdit(DEFAULT_MEA_PET_MIMO_API_BASE)
         self.mimo_api_base_input.setObjectName("MimoTtsApiBase")
-        self.mimo_api_base_input.setPlaceholderText(DEFAULT_MIMO_API_BASE)
+        self.mimo_api_base_input.setPlaceholderText(DEFAULT_MEA_PET_MIMO_API_BASE)
         self.mimo_api_base_input.setStyleSheet(STYLE_INPUT)
         self.mimo_api_base_input.setAccessibleName("MiMo TTS API 地址")
         mimo_layout.addWidget(self.mimo_api_base_input)

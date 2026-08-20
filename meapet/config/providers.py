@@ -14,7 +14,7 @@ from typing import Tuple
 
 from meapet.config.defaults import (
     DEFAULT_DIRECT_MODEL,
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
     DEFAULT_OPENAI_API_BASE,
 )
@@ -131,7 +131,7 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
         models=("MiniMax-Text-01", "abab6.5s-chat"),
     ),
     ProviderPreset(
-        "mimo", "小米 MiMo", DEFAULT_MIMO_API_BASE,
+        "mimo", "小米 MiMo", DEFAULT_MEA_PET_MIMO_API_BASE,
         env_keys=("MEA_PET_MIMO_API_KEY", "XIAOMIMEA_PET_MIMO_API_KEY"),
         url_signatures=("xiaomimimo", "mimo.mi.com"),
     ),

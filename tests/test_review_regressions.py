@@ -125,7 +125,7 @@ class TestProviderKeyIsolation(unittest.TestCase):
     def test_vision_api_base_falls_back_to_default_when_both_empty(self):
         """未指定时视觉默认 ollama host；mimo 空地址回退 MiMo 默认。"""
         from meapet.config.store import (
-            DEFAULT_MIMO_API_BASE,
+            DEFAULT_MEA_PET_MIMO_API_BASE,
             DEFAULT_OLLAMA_HOST,
             resolve_vision_api_base,
         )
@@ -139,7 +139,7 @@ class TestProviderKeyIsolation(unittest.TestCase):
             {"api_base": "", "backend": "mimo"},
             {"api_base": ""},
         )
-        self.assertEqual(mimo_base, DEFAULT_MIMO_API_BASE)
+        self.assertEqual(mimo_base, DEFAULT_MEA_PET_MIMO_API_BASE)
 
     def test_mimo_tts_reuses_mimo_llm_key_only(self):
         from meapet.config.store import resolve_tts_api_key

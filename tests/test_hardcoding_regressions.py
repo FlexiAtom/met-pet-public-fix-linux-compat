@@ -32,7 +32,7 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
         DEFAULT_LIVE2D_PLACEMENT_ANCHOR,
         DEFAULT_LIVE2D_WINDOW_MASK,
         DEFAULT_LIVE2D_WINDOW_SHAPE,
-        DEFAULT_MIMO_API_BASE,
+        DEFAULT_MEA_PET_MIMO_API_BASE,
         DEFAULT_MIMO_TTS_MODEL,
         DEFAULT_OLLAMA_HOST,
         DEFAULT_OPENAI_API_BASE,
@@ -47,7 +47,7 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
     assert direct["api_base"] == DEFAULT_OPENAI_API_BASE
     assert direct["model"] == DEFAULT_DIRECT_MODEL
     assert example["llm"]["agent"]["base_url"] == DEFAULT_HERMES_WS_URL
-    assert example["tts"]["api_base"] == DEFAULT_MIMO_API_BASE
+    assert example["tts"]["api_base"] == DEFAULT_MEA_PET_MIMO_API_BASE
     assert example["tts"]["model"] == DEFAULT_MIMO_TTS_MODEL
     assert example["tts"]["gpt_model"] == DEFAULT_GSV_GPT_MODEL
     assert example["tts"]["sovits_model"] == DEFAULT_GSV_SOVITS_MODEL
@@ -74,7 +74,7 @@ def test_public_defaults_are_canonical_and_match_the_example_config():
 
     assert preset_by_id("openai").api_base == DEFAULT_OPENAI_API_BASE
     assert preset_by_id("ollama").api_base == DEFAULT_OLLAMA_HOST
-    assert preset_by_id("mimo").api_base == DEFAULT_MIMO_API_BASE
+    assert preset_by_id("mimo").api_base == DEFAULT_MEA_PET_MIMO_API_BASE
     assert normalize_config({})["live2d"]["window_mask"] == dict(
         DEFAULT_LIVE2D_WINDOW_MASK
     )
@@ -245,7 +245,7 @@ def test_default_endpoint_literals_resolve_to_known_defaults():
     """
     from meapet.config.defaults import (
         DEFAULT_OPENAI_API_BASE,
-        DEFAULT_MIMO_API_BASE,
+        DEFAULT_MEA_PET_MIMO_API_BASE,
         DEFAULT_OLLAMA_HOST,
         DEFAULT_HERMES_WS_URL,
     )
@@ -256,7 +256,7 @@ def test_default_endpoint_literals_resolve_to_known_defaults():
     assert example["llm"]["direct"]["api_base"] == DEFAULT_OPENAI_API_BASE
 
     # Mimo TTS 端点
-    assert example["tts"]["api_base"] == DEFAULT_MIMO_API_BASE
+    assert example["tts"]["api_base"] == DEFAULT_MEA_PET_MIMO_API_BASE
 
     # Ollama 本地端点
     assert DEFAULT_OLLAMA_HOST == "http://127.0.0.1:11434"

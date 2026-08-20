@@ -12,7 +12,7 @@ from types import MappingProxyType
 
 DEFAULT_OPENAI_API_BASE = "https://api.openai.com/v1"
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
-DEFAULT_MIMO_API_BASE = "https://api.xiaomimimo.com/v1"
+DEFAULT_MEA_PET_MIMO_API_BASE = "https://api.xiaomimimo.com/v1"
 
 DEFAULT_HERMES_WS_URL = "ws://127.0.0.1:9119/api/ws"
 DEFAULT_OPENCLAW_WS_URL = "ws://127.0.0.1:18789"

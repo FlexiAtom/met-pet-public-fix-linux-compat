@@ -19,7 +19,7 @@ from wizard.styles import (
 )
 from wizard.widgets import WheelSafeComboBox
 from meapet.config.defaults import (
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
     DEFAULT_OLLAMA_VISION_MODEL,
     DEFAULT_WATCHER_INTERVAL,
@@ -157,7 +157,7 @@ class VisionPage(QFrame):
         cloud_base_label = QLabel("API Base：")
         cloud_base_label.setObjectName("FieldLabel")
         cloud_l.addWidget(cloud_base_label)
-        self.api_base_input = QLineEdit(DEFAULT_MIMO_API_BASE)
+        self.api_base_input = QLineEdit(DEFAULT_MEA_PET_MIMO_API_BASE)
         self.api_base_input.setObjectName("VisionCloudApiBase")
         self.api_base_input.setStyleSheet(STYLE_INPUT)
         self.api_base_input.setAccessibleName("云端识图 API 地址")
@@ -423,7 +423,7 @@ class VisionPage(QFrame):
                     else ""
                 )
                 vision["api_base"] = (
-                    inherited_base or DEFAULT_MIMO_API_BASE
+                    inherited_base or DEFAULT_MEA_PET_MIMO_API_BASE
                 )
         elif backend == "ollama":
             if vision["model"] in ("mimo", ""):
