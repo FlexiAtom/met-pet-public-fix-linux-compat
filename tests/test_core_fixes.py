@@ -208,12 +208,12 @@ class TestChatBackendInit(unittest.TestCase):
 
 # 会污染密钥解析的环境变量（测试必须隔离）
 _SECRET_ENV_KEYS = (
-    "MIMO_API_KEY",
-    "XIAOMIMIMO_API_KEY",
-    "DEEPSEEK_API_KEY",
+    "MEA_PET_MIMO_API_KEY",
+    "XIAOMIMEA_PET_MIMO_API_KEY",
+    "MEA_PET_DEEPSEEK_API_KEY",
     "MEA_PET_API_KEY",
-    "OPENAI_API_KEY",
-    "TRANSLATE_API_KEY",
+    "MEA_PET_OPENAI_API_KEY",
+    "MEA_PET_TRANSLATE_API_KEY",
 )
 
 
@@ -400,9 +400,9 @@ class TestConfigStoreSecrets(unittest.TestCase):
     def test_file_used_when_no_env(self):
         import os
         from meapet.config.store import resolve_llm_api_key
-        os.environ.pop("DEEPSEEK_API_KEY", None)
+        os.environ.pop("MEA_PET_DEEPSEEK_API_KEY", None)
         os.environ.pop("MEA_PET_API_KEY", None)
-        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("MEA_PET_OPENAI_API_KEY", None)
         key = resolve_llm_api_key({"api_key": "sk-only-in-file-abcdef"})
         self.assertEqual(key, "sk-only-in-file-abcdef")
 

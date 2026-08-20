@@ -274,13 +274,13 @@ class TestAgentLinkFactory(unittest.TestCase):
                 "agent": {
                     "kind": "agent_link",
                     "base_url": "ws://127.0.0.1:8766/agent-link",
-                    "auth_token": "$AGENT_LINK_TOKEN",
+                    "auth_token": "$MEA_PET_AGENT_LINK_TOKEN",
                 },
             }
         }
         with mock.patch.dict(
             os.environ,
-            {"AGENT_LINK_TOKEN": "agent-link-secret"},
+            {"MEA_PET_AGENT_LINK_TOKEN": "agent-link-secret"},
             clear=False,
         ):
             first = create_agent_adapter_from_config(config)

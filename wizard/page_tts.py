@@ -103,7 +103,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         mimo_layout.setSpacing(10)
         mimo_description = QLabel(
             f"小米 MiMo 语音合成（{DEFAULT_MIMO_TTS_MODEL}）。\n"
-            "会自动检测：对话页 Key / config.json / 环境变量 MIMO_API_KEY。\n"
+            "会自动检测：对话页 Key / config.json / 环境变量 MEA_PET_MIMO_API_KEY。\n"
             "音色示例：冰糖 / 茉莉 / 苏打 / 白桦 / Chloe / Mia"
         )
         mimo_description.setObjectName("HelperText")

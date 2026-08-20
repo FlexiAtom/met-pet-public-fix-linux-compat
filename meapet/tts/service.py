@@ -135,7 +135,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 优先使用配置文件或环境变量；若均未设置，自动检测常见安装路径。
         # 打包版里 sys.executable 是 MeaPet.exe，绝不能当 Python 用。
         self.python_exe = resolve_external_python(
-            tts_cfg.get("python_exe", "") or os.environ.get("GSV_PYTHON", "")
+            tts_cfg.get("python_exe", "") or os.environ.get("MEA_PET_GSV_PYTHON", "")
         )
 
         if not self.python_exe:
@@ -283,7 +283,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                     if (llm_cfg.get("backend") or "").lower() == "mimo"
                     else ""
                 )
-                or os.environ.get("MIMO_API_KEY", "")
+                or os.environ.get("MEA_PET_MIMO_API_KEY", "")
             )
         # 机器翻译使用 translators 的固定服务池；不复用任何 LLM 或模型密钥。
         self.translation_service = TranslationService()

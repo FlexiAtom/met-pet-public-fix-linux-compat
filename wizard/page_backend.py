@@ -152,7 +152,7 @@ class BackendPage(QFrame):
         self.agent_auth_token.setStyleSheet(STYLE_INPUT)
         self.agent_auth_token.setEchoMode(QLineEdit.Password)
         self.agent_auth_token.setPlaceholderText(
-            "可填 $HERMES_DASHBOARD_SESSION_TOKEN"
+            "可填 $MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN"
         )
         _field(
             agent_layout,
@@ -421,7 +421,7 @@ class BackendPage(QFrame):
         if kind == "hermes":
             self.agent_base_url.setPlaceholderText(defaults["hermes"])
             self.agent_auth_token.setPlaceholderText(
-                "可填 $HERMES_DASHBOARD_SESSION_TOKEN"
+                "可填 $MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN"
             )
             self.agent_transport_hint.setText(
                 "启动 hermes serve，并连接 /api/ws；跨机器请使用 SSH "
@@ -433,7 +433,7 @@ class BackendPage(QFrame):
         elif kind == "openclaw":
             self.agent_base_url.setPlaceholderText(defaults["openclaw"])
             self.agent_auth_token.setPlaceholderText(
-                "可填 $OPENCLAW_GATEWAY_TOKEN 或 $MEA_PET_AGENT_TOKEN"
+                "可填 $MEA_PET_OPENCLAW_GATEWAY_TOKEN 或 $MEA_PET_AGENT_TOKEN"
             )
             self.agent_transport_hint.setText(
                 "连接 OpenClaw Gateway（默认 18789）。Agent 模式不使用 "
@@ -445,7 +445,7 @@ class BackendPage(QFrame):
         else:
             self.agent_base_url.setPlaceholderText(defaults["agent_link"])
             self.agent_auth_token.setPlaceholderText(
-                "可填 $AGENT_LINK_TOKEN 或 $MEA_PET_AGENT_TOKEN"
+                "可填 $MEA_PET_AGENT_LINK_TOKEN 或 $MEA_PET_AGENT_TOKEN"
             )
             self.agent_transport_hint.setText(
                 "MeaPet 主动连接该地址；一条 Agent Link v1 连接同时承载"

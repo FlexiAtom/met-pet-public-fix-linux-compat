@@ -27,7 +27,7 @@ export QTWEBENGINE_DISABLE_SANDBOX=1
 
 # --- TTS (GPT-SoVITS) ---
 # 如果你有独立的 GPT-SoVITS Python 环境，设置此变量指向其 python 解释器
-# export GSV_PYTHON="$HOME/GPT-SoVITS/.venv/bin/python3"
+# export MEA_PET_GSV_PYTHON="$HOME/GPT-SoVITS/.venv/bin/python3"
 
 # --- HuggingFace / tokenizer options ---
 # Set HF_ENDPOINT or MEA_PET_HF_ENDPOINT explicitly when a local mirror is needed.

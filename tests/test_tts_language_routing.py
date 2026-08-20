@@ -221,8 +221,8 @@ class TestMeaTtsLanguageOverride(unittest.TestCase):
             with mock.patch.dict(
                 os.environ,
                 {
-                    "MIMO_API_KEY": "",
-                    "XIAOMIMIMO_API_KEY": "",
+                    "MEA_PET_MIMO_API_KEY": "",
+                    "XIAOMIMEA_PET_MIMO_API_KEY": "",
                     "MEA_PET_API_KEY": "",
                 },
                 clear=False,

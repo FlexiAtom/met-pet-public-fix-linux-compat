@@ -115,7 +115,7 @@ class TestAgentFactory(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "HERMES_DASHBOARD_SESSION_TOKEN": "hermes-secret",
+                "MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN": "hermes-secret",
                 "MEA_PET_AGENT_TOKEN": "openclaw-secret",
             },
             clear=False,
@@ -127,7 +127,7 @@ class TestAgentFactory(unittest.TestCase):
                         "agent": {
                             "kind": "hermes",
                             "base_url": "ws://127.0.0.1:9119/api/ws",
-                            "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
+                            "auth_token": "$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN",
                         },
                     }
                 }

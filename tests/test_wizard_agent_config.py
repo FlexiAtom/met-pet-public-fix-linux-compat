@@ -59,7 +59,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         page.model_combo.setEditText("custom-reply-model")
         page.temperature_input.setValue(0.35)
         page.max_tokens_input.setValue(2048)
-        page.direct_api_key_input.setText("$CUSTOM_MODEL_KEY")
+        page.direct_api_key_input.setText("$MEA_PET_CUSTOM_MODEL_KEY")
 
         config = self.wizard.collect_config()
 
@@ -72,7 +72,7 @@ class TestWizardConversationConfig(unittest.TestCase):
                 "api_base": "https://models.example.test/v1",
                 "host": "",
                 "model": "custom-reply-model",
-                "api_key": "$CUSTOM_MODEL_KEY",
+                "api_key": "$MEA_PET_CUSTOM_MODEL_KEY",
                 "temperature": 0.35,
                 "max_tokens": 2048,
             },
@@ -273,7 +273,7 @@ class TestWizardConversationConfig(unittest.TestCase):
                     "api_base": "https://saved.example/v1",
                     "host": "",
                     "model": "saved-model",
-                    "api_key": "$SAVED_KEY",
+                    "api_key": "$MEA_PET_SAVED_KEY",
                     "temperature": 0.2,
                     "max_tokens": 900,
                 },
@@ -283,7 +283,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         page.agent_radio.setChecked(True)
         page.set_agent_kind("hermes")
         page.agent_base_url.setText("wss://agent.example.test/api/ws")
-        page.agent_auth_token.setText("$HERMES_DASHBOARD_SESSION_TOKEN")
+        page.agent_auth_token.setText("$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN")
         page.agent_history_turns.setValue(5)
         page.timeline_turns.setValue(9)
         page.control_enabled.setChecked(True)
@@ -301,7 +301,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         self.assertEqual(agent["base_url"], "wss://agent.example.test/api/ws")
         self.assertEqual(
             agent["auth_token"],
-            "$HERMES_DASHBOARD_SESSION_TOKEN",
+            "$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN",
         )
         self.assertEqual(agent["history_turns"], 5)
         
@@ -332,7 +332,7 @@ class TestWizardConversationConfig(unittest.TestCase):
                 "agent": {
                     "kind": "agent_link",
                     "base_url": DEFAULT_AGENT_LINK_WS_URL,
-                    "auth_token": "$AGENT_LINK_TOKEN",
+                    "auth_token": "$MEA_PET_AGENT_LINK_TOKEN",
                     "device_id": "device-existing",
                     "session_id": "session-existing",
                     "extensions": {
@@ -384,7 +384,7 @@ class TestWizardConversationConfig(unittest.TestCase):
                 "agent": {
                     "kind": "hermes",
                     "base_url": "ws://127.0.0.1:9119/api/ws",
-                    "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
+                    "auth_token": "$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN",
                     "model": "",
                     "history_turns": 7,
                     "timeout_seconds": 120,
@@ -452,7 +452,7 @@ class TestWizardConversationConfig(unittest.TestCase):
                 "agent": {
                     "kind": "hermes",
                     "base_url": "ws://127.0.0.1:9119/api/ws",
-                    "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
+                    "auth_token": "$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN",
                 },
             }
         }
@@ -486,7 +486,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         )
         self.assertEqual(
             agent["auth_token"],
-            "$HERMES_DASHBOARD_SESSION_TOKEN",
+            "$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN",
         )
 
     # ------------------------------------------------------------------

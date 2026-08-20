@@ -235,7 +235,7 @@ class TestDirectEngineFactory(unittest.TestCase):
                         "api_base": "https://api.anthropic.test/v1",
                         "host": "",
                         "model": "claude-test",
-                        "api_key": "$CUSTOM_MODEL_KEY",
+                        "api_key": "$MEA_PET_CUSTOM_MODEL_KEY",
                         "temperature": 0.25,
                         "max_tokens": 1234,
                     },
@@ -245,7 +245,7 @@ class TestDirectEngineFactory(unittest.TestCase):
 
         with mock.patch.dict(
             os.environ,
-            {"CUSTOM_MODEL_KEY": "env-secret"},
+            {"MEA_PET_CUSTOM_MODEL_KEY": "env-secret"},
             clear=False,
         ):
             engine = create_engine_from_config(config)

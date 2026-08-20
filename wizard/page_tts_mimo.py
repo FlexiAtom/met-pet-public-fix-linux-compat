@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 
-from meapet.config.defaults import DEFAULT_MIMO_API_BASE
+from meapet.config.defaults import DEFAULT_MEA_PET_MIMO_API_BASE
 from meapet.paths import data_path
 from wizard.platform_info import CONFIG_PATH
 from wizard.styles import set_status, styled_open_file
@@ -96,17 +96,17 @@ class TtsPageMimoMixin:
 
         # 3) 环境变量
         env_key = (
-            os.environ.get("MIMO_API_KEY", "")
-            or os.environ.get("XIAOMIMIMO_API_KEY", "")
+            os.environ.get("MEA_PET_MIMO_API_KEY", "")
+            or os.environ.get("XIAOMIMEA_PET_MIMO_API_KEY", "")
             or ""
         ).strip()
         env_base = (
-            os.environ.get("MIMO_API_BASE", "")
-            or os.environ.get("XIAOMIMIMO_API_BASE", "")
+            os.environ.get("MEA_PET_MIMO_API_BASE", "")
+            or os.environ.get("XIAOMIMEA_PET_MIMO_API_BASE", "")
             or ""
         ).strip()
         if env_key:
-            candidates.append((4, "环境变量 MIMO_API_KEY", env_key, env_base))
+            candidates.append((4, "环境变量 MEA_PET_MIMO_API_KEY", env_key, env_base))
 
         if not candidates:
             return {"key": "", "base": "", "source": ""}
@@ -114,7 +114,7 @@ class TtsPageMimoMixin:
         candidates.sort(key=lambda x: x[0])
         _prio, source, key, base = candidates[0]
         if not base:
-            base = DEFAULT_MIMO_API_BASE
+            base = DEFAULT_MEA_PET_MIMO_API_BASE
         return {"key": key, "base": base, "source": source}
 
     def _refresh_mimo_key_status(self):
@@ -169,7 +169,7 @@ class TtsPageMimoMixin:
 
         found = self._find_existing_mimo_credentials()
         key = found.get("key") or ""
-        base = found.get("base") or DEFAULT_MIMO_API_BASE
+        base = found.get("base") or DEFAULT_MEA_PET_MIMO_API_BASE
         source = found.get("source") or ""
 
         current = self.mimo_api_key_input.text().strip()
@@ -195,7 +195,7 @@ class TtsPageMimoMixin:
                 force
                 or not self.mimo_api_base_input.text().strip()
                 or self.mimo_api_base_input.text().strip()
-                == DEFAULT_MIMO_API_BASE
+                == DEFAULT_MEA_PET_MIMO_API_BASE
             ):
                 self.mimo_api_base_input.setText(base)
 

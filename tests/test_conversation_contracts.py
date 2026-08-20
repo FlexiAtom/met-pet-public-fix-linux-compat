@@ -213,7 +213,7 @@ class TestConversationConfigMigration(unittest.TestCase):
                     "backend": "deepseek",
                     "api_base": "https://deepseek.example/v1",
                     "model": "deepseek-test",
-                    "api_key": "$DEEPSEEK_API_KEY",
+                    "api_key": "$MEA_PET_DEEPSEEK_API_KEY",
                     "temperature": 0.4,
                 }
             }
@@ -229,7 +229,7 @@ class TestConversationConfigMigration(unittest.TestCase):
                 "api_base": "https://deepseek.example/v1",
                 "host": "",
                 "model": "deepseek-test",
-                "api_key": "$DEEPSEEK_API_KEY",
+                "api_key": "$MEA_PET_DEEPSEEK_API_KEY",
                 "temperature": 0.4,
                 "max_tokens": 4096,
             },
@@ -308,11 +308,11 @@ class TestConversationConfigMigration(unittest.TestCase):
             },
         }
         env = {
-            "DEEPSEEK_API_KEY": "ds-from-env",
-            "OPENAI_API_KEY": "",
+            "MEA_PET_DEEPSEEK_API_KEY": "ds-from-env",
+            "MEA_PET_OPENAI_API_KEY": "",
             "MEA_PET_API_KEY": "",
-            "MIMO_API_KEY": "",
-            "XIAOMIMIMO_API_KEY": "",
+            "MEA_PET_MIMO_API_KEY": "",
+            "XIAOMIMEA_PET_MIMO_API_KEY": "",
         }
         with mock.patch.dict(os.environ, env, clear=False):
             self.assertEqual(resolve_direct_api_key(llm), "ds-from-env")
@@ -356,7 +356,7 @@ class TestConversationConfigMigration(unittest.TestCase):
                     "api_base": "https://models.example.test/v1",
                     "model": "stale-top-level-mirror",
                     "agent": {
-                        "api_key": "$MODEL_API_KEY",
+                        "api_key": "$MEA_PET_MODEL_API_KEY",
                         "model": "example-model",
                         "temperature": 0.25,
                         "max_tokens": 2048,
@@ -371,7 +371,7 @@ class TestConversationConfigMigration(unittest.TestCase):
             direct["api_base"],
             "https://models.example.test/v1",
         )
-        self.assertEqual(direct["api_key"], "$MODEL_API_KEY")
+        self.assertEqual(direct["api_key"], "$MEA_PET_MODEL_API_KEY")
         self.assertEqual(direct["model"], "example-model")
         self.assertEqual(direct["temperature"], 0.25)
         self.assertEqual(direct["max_tokens"], 2048)
@@ -390,7 +390,7 @@ class TestConversationConfigMigration(unittest.TestCase):
             {
                 "llm": {
                     "backend": "hermes",
-                    "api_key": "$HERMES_API_SERVER_KEY",
+                    "api_key": "$MEA_PET_HERMES_API_SERVER_KEY",
                     "model": "hermes-model-override",
                 }
             }
@@ -398,7 +398,7 @@ class TestConversationConfigMigration(unittest.TestCase):
 
         self.assertEqual(cfg["llm"]["mode"], "agent")
         agent = cfg["llm"]["agent"]
-        self.assertEqual(agent["auth_token"], "$HERMES_API_SERVER_KEY")
+        self.assertEqual(agent["auth_token"], "$MEA_PET_HERMES_API_SERVER_KEY")
         self.assertEqual(agent["model"], "hermes-model-override")
         self.assertEqual(
             agent["base_url"],

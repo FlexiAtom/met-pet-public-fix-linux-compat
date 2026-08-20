@@ -112,7 +112,7 @@ class TestConfigStoreMore(unittest.TestCase):
             resolve_vision_api_key,
         )
 
-        for k in ("DEEPSEEK_API_KEY", "MIMO_API_KEY", "MEA_PET_API_KEY", "TRANSLATE_API_KEY"):
+        for k in ("MEA_PET_DEEPSEEK_API_KEY", "MEA_PET_MIMO_API_KEY", "MEA_PET_API_KEY", "MEA_PET_TRANSLATE_API_KEY"):
             os.environ.pop(k, None)
 
         # LLM key: 文件值优先于空环境变量
@@ -129,24 +129,24 @@ class TestConfigStoreMore(unittest.TestCase):
             ),
             "",
         )
-        # TTS key: 通过 MIMO_API_KEY 环境变量解析
-        os.environ["MIMO_API_KEY"] = "sk-mimo-tts"
+        # TTS key: 通过 MEA_PET_MIMO_API_KEY 环境变量解析
+        os.environ["MEA_PET_MIMO_API_KEY"] = "sk-mimo-tts"
         try:
             self.assertEqual(
                 resolve_tts_api_key({"api_key": ""}, {}),
                 "sk-mimo-tts",
             )
         finally:
-            os.environ.pop("MIMO_API_KEY", None)
+            os.environ.pop("MEA_PET_MIMO_API_KEY", None)
         # Translate key: 独立环境变量
-        os.environ["TRANSLATE_API_KEY"] = "sk-translate"
+        os.environ["MEA_PET_TRANSLATE_API_KEY"] = "sk-translate"
         try:
             self.assertEqual(
                 resolve_translate_api_key({}, {}),
                 "sk-translate",
             )
         finally:
-            os.environ.pop("TRANSLATE_API_KEY", None)
+            os.environ.pop("MEA_PET_TRANSLATE_API_KEY", None)
         # Vision key: ollama 默认不消费云端密钥；mimo 才读 ENV_VISION_KEY
         os.environ["MEA_PET_API_KEY"] = "sk-vision"
         try:

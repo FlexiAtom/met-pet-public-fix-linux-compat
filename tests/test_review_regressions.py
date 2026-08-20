@@ -17,12 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 _SECRET_ENV_KEYS = {
-    "MIMO_API_KEY": "",
-    "XIAOMIMIMO_API_KEY": "",
-    "DEEPSEEK_API_KEY": "",
+    "MEA_PET_MIMO_API_KEY": "",
+    "XIAOMIMEA_PET_MIMO_API_KEY": "",
+    "MEA_PET_DEEPSEEK_API_KEY": "",
     "MEA_PET_API_KEY": "",
-    "OPENAI_API_KEY": "",
-    "TRANSLATE_API_KEY": "",
+    "MEA_PET_OPENAI_API_KEY": "",
+    "MEA_PET_TRANSLATE_API_KEY": "",
 }
 
 
@@ -44,7 +44,7 @@ class TestProviderKeyIsolation(unittest.TestCase):
         from meapet.config.store import resolve_tts_api_key
 
         env = dict(_SECRET_ENV_KEYS)
-        env["DEEPSEEK_API_KEY"] = "deepseek-env-test-key"
+        env["MEA_PET_DEEPSEEK_API_KEY"] = "deepseek-env-test-key"
         with mock.patch.dict(os.environ, env, clear=False):
             key = resolve_tts_api_key({"api_key": "mimo-file-test-key"}, {})
         self.assertEqual(key, "mimo-file-test-key")
@@ -75,7 +75,7 @@ class TestProviderKeyIsolation(unittest.TestCase):
         from meapet.config.store import resolve_llm_api_key
 
         env = dict(_SECRET_ENV_KEYS)
-        env["OPENAI_API_KEY"] = "openai-test-key"
+        env["MEA_PET_OPENAI_API_KEY"] = "openai-test-key"
         with mock.patch.dict(os.environ, env, clear=False):
             key = resolve_llm_api_key({"api_key": ""})
         self.assertEqual(key, "openai-test-key")

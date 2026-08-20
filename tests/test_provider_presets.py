@@ -105,7 +105,7 @@ class StoreIntegrationTests(unittest.TestCase):
         self.assertEqual(PROTOCOL_BY_ENDPOINT_FAMILY["custom"], PROTO_OPENAI)
         self.assertEqual(
             ENV_LLM_KEY_BY_FAMILY["deepseek"],
-            ("DEEPSEEK_API_KEY", "MEA_PET_API_KEY"),
+            ("MEA_PET_DEEPSEEK_API_KEY", "MEA_PET_API_KEY"),
         )
 
     def test_typed_urls_detect_new_providers(self):

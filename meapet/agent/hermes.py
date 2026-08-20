@@ -350,7 +350,7 @@ class HermesAdapter:
         if not self.config.auth_token:
             raise ValueError(
                 "Hermes WebSocket token is required; start hermes serve with "
-                "HERMES_DASHBOARD_SESSION_TOKEN"
+                "MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN"
             )
         generation = await self._transport.ensure_connected()
         ready = self._ready_events.setdefault(generation, asyncio.Event())

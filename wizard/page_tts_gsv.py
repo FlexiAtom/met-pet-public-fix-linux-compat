@@ -71,7 +71,7 @@ class TtsPageGsvMixin:
     def _check_gsv(self):
         """检测 GPT-SoVITS 整合包环境状态"""
         saved = self.gsv_dir_input.text().strip()
-        gsv_python = os.environ.get("GSV_PYTHON", "")
+        gsv_python = os.environ.get("MEA_PET_GSV_PYTHON", "")
 
         def _has_gsv_module(py_path):
             if not py_path or not os.path.isfile(py_path):
@@ -103,12 +103,12 @@ class TtsPageGsvMixin:
                 )
         elif gsv_python and os.path.isfile(gsv_python):
             if _has_gsv_module(gsv_python):
-                set_status(self.gsv_status, "success", "已配置 GSV_PYTHON，语音可用")
+                set_status(self.gsv_status, "success", "已配置 MEA_PET_GSV_PYTHON，语音可用")
             else:
                 set_status(
                     self.gsv_status,
                     "warning",
-                    "GSV_PYTHON 已指定，但缺少 GPT_SoVITS 模块",
+                    "MEA_PET_GSV_PYTHON 已指定，但缺少 GPT_SoVITS 模块",
                 )
         else:
             set_status(self.gsv_status, "muted", "尚未配置语音；关闭语音也可以正常使用")

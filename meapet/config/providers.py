@@ -78,12 +78,12 @@ class ProviderPreset:
 PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
     ProviderPreset(
         "openai", "OpenAI", DEFAULT_OPENAI_API_BASE,
-        env_keys=("OPENAI_API_KEY",), url_signatures=("api.openai.com",),
+        env_keys=("MEA_PET_OPENAI_API_KEY",), url_signatures=("api.openai.com",),
         models=(DEFAULT_DIRECT_MODEL, "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "o3-mini"),
     ),
     ProviderPreset(
         "deepseek", "DeepSeek 深度求索", "https://api.deepseek.com/v1",
-        env_keys=("DEEPSEEK_API_KEY",), url_signatures=("deepseek.com",),
+        env_keys=("MEA_PET_DEEPSEEK_API_KEY",), url_signatures=("deepseek.com",),
         models=("deepseek-chat", "deepseek-reasoner"),
     ),
     ProviderPreset(
@@ -132,7 +132,7 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
     ),
     ProviderPreset(
         "mimo", "小米 MiMo", DEFAULT_MIMO_API_BASE,
-        env_keys=("MIMO_API_KEY", "XIAOMIMIMO_API_KEY"),
+        env_keys=("MEA_PET_MIMO_API_KEY", "XIAOMIMEA_PET_MIMO_API_KEY"),
         url_signatures=("xiaomimimo", "mimo.mi.com"),
     ),
     ProviderPreset(
@@ -195,7 +195,7 @@ PROVIDER_PRESETS: Tuple[ProviderPreset, ...] = (
     ),
     ProviderPreset(
         "azure", "Azure OpenAI", "",
-        env_keys=("AZURE_OPENAI_API_KEY",),
+        env_keys=("AZURE_MEA_PET_OPENAI_API_KEY",),
         note="填写你的 Azure 部署地址，形如 https://<资源名>.openai.azure.com/openai/deployments/<部署名>",
     ),
 )
