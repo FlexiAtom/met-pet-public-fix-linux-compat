@@ -223,7 +223,7 @@ class TestMeaTtsLanguageOverride(unittest.TestCase):
                 {
                     "MIMO_API_KEY": "",
                     "XIAOMIMIMO_API_KEY": "",
-                    "MEAPET_API_KEY": "",
+                    "MEA_PET_API_KEY": "",
                 },
                 clear=False,
             ):

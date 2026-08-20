@@ -85,23 +85,23 @@ class TestConfigStoreMore(unittest.TestCase):
     def test_resolve_secret_placeholders(self):
         from meapet.config.store import resolve_secret
 
-        os.environ["MEAPET_TEST_KEY"] = "from-env-value"
+        os.environ["MEA_PET_TEST_KEY"] = "from-env-value"
         try:
             self.assertEqual(
-                resolve_secret("$ENV", ("MEAPET_TEST_KEY",)), "from-env-value"
+                resolve_secret("$ENV", ("MEA_PET_TEST_KEY",)), "from-env-value"
             )
             self.assertEqual(
-                resolve_secret("${MEAPET_TEST_KEY}", ()), "from-env-value"
+                resolve_secret("${MEA_PET_TEST_KEY}", ()), "from-env-value"
             )
             self.assertEqual(
-                resolve_secret("$MEAPET_TEST_KEY", ()), "from-env-value"
+                resolve_secret("$MEA_PET_TEST_KEY", ()), "from-env-value"
             )
             self.assertEqual(
-                resolve_secret("file-key", ("MEAPET_TEST_KEY",)),
+                resolve_secret("file-key", ("MEA_PET_TEST_KEY",)),
                 "from-env-value",
             )
         finally:
-            os.environ.pop("MEAPET_TEST_KEY", None)
+            os.environ.pop("MEA_PET_TEST_KEY", None)
 
     def test_resolve_keys_by_backend(self):
         """OpenAI 兼容后：所有 resolve_*_api_key 都走统一环境变量。"""
@@ -112,7 +112,7 @@ class TestConfigStoreMore(unittest.TestCase):
             resolve_vision_api_key,
         )
 
-        for k in ("DEEPSEEK_API_KEY", "MIMO_API_KEY", "MEAPET_API_KEY", "TRANSLATE_API_KEY"):
+        for k in ("DEEPSEEK_API_KEY", "MIMO_API_KEY", "MEA_PET_API_KEY", "TRANSLATE_API_KEY"):
             os.environ.pop(k, None)
 
         # LLM key: 文件值优先于空环境变量
@@ -148,7 +148,7 @@ class TestConfigStoreMore(unittest.TestCase):
         finally:
             os.environ.pop("TRANSLATE_API_KEY", None)
         # Vision key: ollama 默认不消费云端密钥；mimo 才读 ENV_VISION_KEY
-        os.environ["MEAPET_API_KEY"] = "sk-vision"
+        os.environ["MEA_PET_API_KEY"] = "sk-vision"
         try:
             self.assertEqual(
                 resolve_vision_api_key({"api_key": ""}, {}),
@@ -159,7 +159,7 @@ class TestConfigStoreMore(unittest.TestCase):
                 "sk-vision",
             )
         finally:
-            os.environ.pop("MEAPET_API_KEY", None)
+            os.environ.pop("MEA_PET_API_KEY", None)
 
     def test_scrub_and_secret_status(self):
         from meapet.config.store import scrub_secrets, secret_status

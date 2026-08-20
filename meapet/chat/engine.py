@@ -155,7 +155,7 @@ class ChatEngine:
         self._cancelled = True
 
     def _debug_dump(self, label: str, payload, limit: int = 2000) -> None:
-        """载荷级调试转储：仅 MEAPET_DEBUG=1 时输出，经 _safe_print 统一脱敏。"""
+        """载荷级调试转储：仅 MEA_PET_DEBUG=1 时输出，经 _safe_print 统一脱敏。"""
         if not debug_enabled():
             return
         try:

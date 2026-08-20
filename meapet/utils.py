@@ -32,8 +32,8 @@ _KEY_VALUE_RE = re.compile(
 
 
 def debug_enabled() -> bool:
-    """仅在用户显式设置 MEAPET_DEBUG=1 时启用载荷级调试日志。"""
-    return os.environ.get("MEAPET_DEBUG", "").strip() == "1"
+    """仅在用户显式设置 MEA_PET_DEBUG=1 时启用载荷级调试日志。"""
+    return os.environ.get("MEA_PET_DEBUG", "").strip() == "1"
 
 
 def safe_print(*args, **kwargs):

@@ -433,7 +433,7 @@ class BackendPage(QFrame):
         elif kind == "openclaw":
             self.agent_base_url.setPlaceholderText(defaults["openclaw"])
             self.agent_auth_token.setPlaceholderText(
-                "可填 $OPENCLAW_GATEWAY_TOKEN 或 $MEAPET_AGENT_TOKEN"
+                "可填 $OPENCLAW_GATEWAY_TOKEN 或 $MEA_PET_AGENT_TOKEN"
             )
             self.agent_transport_hint.setText(
                 "连接 OpenClaw Gateway（默认 18789）。Agent 模式不使用 "
@@ -445,7 +445,7 @@ class BackendPage(QFrame):
         else:
             self.agent_base_url.setPlaceholderText(defaults["agent_link"])
             self.agent_auth_token.setPlaceholderText(
-                "可填 $AGENT_LINK_TOKEN 或 $MEAPET_AGENT_TOKEN"
+                "可填 $AGENT_LINK_TOKEN 或 $MEA_PET_AGENT_TOKEN"
             )
             self.agent_transport_hint.setText(
                 "MeaPet 主动连接该地址；一条 Agent Link v1 连接同时承载"

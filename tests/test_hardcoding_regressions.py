@@ -320,7 +320,7 @@ def test_python_package_index_is_overridable_and_not_repeated_in_ui():
 
     custom = "https://packages.example.invalid/simple"
     assert resolve_pip_index_url(
-        {"MEAPET_PIP_INDEX_URL": custom}
+        {"MEA_PET_PIP_INDEX_URL": custom}
     ) == custom
     assert resolve_pip_index_url(
         {"PIP_INDEX_URL": custom}

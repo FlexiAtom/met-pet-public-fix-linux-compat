@@ -11,15 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-VALID_MULTI_SEGMENT = """<MEAPET_SEGMENT>
+VALID_MULTI_SEGMENT = """<MEA_PET_SEGMENT>
 <DISPLAY>第一段，主人。</DISPLAY>
 <META>{"voice_text":"第一段，主人。","voice_language":"zh-CN","mood":"happy","tts_style":"轻声"}</META>
-</MEAPET_SEGMENT>
-<MEAPET_SEGMENT>
+</MEA_PET_SEGMENT>
+<MEA_PET_SEGMENT>
 <DISPLAY>おかえりにゃ</DISPLAY>
 <META>{"voice_text":"おかえりにゃ","voice_language":"jp","mood":"neutral","tts_style":""}</META>
-</MEAPET_SEGMENT>
-<MEAPET_DONE />"""
+</MEA_PET_SEGMENT>
+<MEA_PET_DONE />"""
 
 
 class TestReplyOutputContract(unittest.TestCase):
@@ -78,7 +78,7 @@ class TestReplyOutputContract(unittest.TestCase):
     def test_missing_done_is_recoverable_without_format_repair(self):
         from meapet.conversation.output_protocol import parse_reply_output
 
-        source = VALID_MULTI_SEGMENT.replace("\n<MEAPET_DONE />", "")
+        source = VALID_MULTI_SEGMENT.replace("\n<MEA_PET_DONE />", "")
         result = parse_reply_output(source)
 
         self.assertFalse(result.done)
@@ -89,11 +89,11 @@ class TestReplyOutputContract(unittest.TestCase):
     def test_voice_language_is_required_when_tts_is_enabled(self):
         from meapet.conversation.output_protocol import parse_reply_output
 
-        source = """<MEAPET_SEGMENT>
+        source = """<MEA_PET_SEGMENT>
 <DISPLAY>能显示的文字</DISPLAY>
 <META>{"voice_text":"能朗读的文字","mood":"neutral","tts_style":"自然"}</META>
-</MEAPET_SEGMENT>
-<MEAPET_DONE />"""
+</MEA_PET_SEGMENT>
+<MEA_PET_DONE />"""
         result = parse_reply_output(source)
 
         self.assertEqual(result.segments[0].missing_required_fields, ("voice_language",))
@@ -104,11 +104,11 @@ class TestReplyOutputContract(unittest.TestCase):
     def test_two_invalid_required_fields_trigger_repair_even_without_tts(self):
         from meapet.conversation.output_protocol import parse_reply_output
 
-        source = """<MEAPET_SEGMENT>
+        source = """<MEA_PET_SEGMENT>
 <DISPLAY>先保住文字</DISPLAY>
 <META>{"voice_text":"","voice_language":"","mood":"neutral","tts_style":""}</META>
-</MEAPET_SEGMENT>
-<MEAPET_DONE />"""
+</MEA_PET_SEGMENT>
+<MEA_PET_DONE />"""
         result = parse_reply_output(source)
 
         self.assertEqual(
@@ -310,7 +310,7 @@ class TestConversationConfigMigration(unittest.TestCase):
         env = {
             "DEEPSEEK_API_KEY": "ds-from-env",
             "OPENAI_API_KEY": "",
-            "MEAPET_API_KEY": "",
+            "MEA_PET_API_KEY": "",
             "MIMO_API_KEY": "",
             "XIAOMIMIMO_API_KEY": "",
         }

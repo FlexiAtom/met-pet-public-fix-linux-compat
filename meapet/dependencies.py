@@ -34,7 +34,7 @@ def resolve_pip_index_url(
 ) -> str:
     """返回安装依赖使用的索引；项目专用变量优先于 pip 全局变量。"""
     env = os.environ if environ is None else environ
-    for key in ("MEAPET_PIP_INDEX_URL", "PIP_INDEX_URL"):
+    for key in ("MEA_PET_PIP_INDEX_URL", "PIP_INDEX_URL"):
         value = str(env.get(key) or "").strip()
         if value:
             return value.rstrip("/")
@@ -46,7 +46,7 @@ def resolve_torch_index_url(
 ) -> str:
     """返回 PyTorch wheel 索引，允许项目或系统环境覆盖。"""
     env = os.environ if environ is None else environ
-    for key in ("MEAPET_TORCH_INDEX_URL", "TORCH_INDEX_URL"):
+    for key in ("MEA_PET_TORCH_INDEX_URL", "TORCH_INDEX_URL"):
         value = str(env.get(key) or "").strip()
         if value:
             return value.rstrip("/")

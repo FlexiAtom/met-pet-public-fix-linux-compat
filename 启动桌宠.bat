@@ -6,7 +6,7 @@ set "PYTHONUNBUFFERED=1"
 title MeaPet
 
 set "ERR=0"
-set "MEAPET_PY=3.12"
+set "MEA_PET_PY=3.12"
 set "VENV_DIR=%~dp0.venv"
 set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
 set "UV_CMD="
@@ -15,17 +15,17 @@ set "SYS_PY="
 
 if exist "%~dp0.python-version" (
     for /f "usebackq tokens=* delims=" %%i in ("%~dp0.python-version") do (
-        set "MEAPET_PY=%%i"
+        set "MEA_PET_PY=%%i"
         goto py_ver_done
     )
 )
 :py_ver_done
-for /f "delims=" %%i in ("!MEAPET_PY!") do set "MEAPET_PY=%%i"
+for /f "delims=" %%i in ("!MEA_PET_PY!") do set "MEA_PET_PY=%%i"
 
-if not defined UV_INDEX_URL if defined MEAPET_PIP_INDEX_URL set "UV_INDEX_URL=%MEAPET_PIP_INDEX_URL%"
+if not defined UV_INDEX_URL if defined MEA_PET_PIP_INDEX_URL set "UV_INDEX_URL=%MEA_PET_PIP_INDEX_URL%"
 if not defined UV_INDEX_URL if defined PIP_INDEX_URL set "UV_INDEX_URL=%PIP_INDEX_URL%"
 if not defined UV_INDEX_URL set "UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
-rem Use the China-friendly default; UV_INDEX_URL or MEAPET_PIP_INDEX_URL can override it.
+rem Use the China-friendly default; UV_INDEX_URL or MEA_PET_PIP_INDEX_URL can override it.
 rem Leave UV_PYTHON_INSTALL_MIRROR unset so uv uses its official source.
 
 if not exist "pet.py" goto missing_pet
@@ -53,8 +53,8 @@ echo [MeaPet] no .venv, creating...
 call :ensure_uv
 if defined UV_CMD (
     echo [MeaPet] uv: !UV_CMD!
-    echo [MeaPet] uv venv Python !MEAPET_PY!
-    "!UV_CMD!" venv --python "!MEAPET_PY!" "%VENV_DIR%"
+    echo [MeaPet] uv venv Python !MEA_PET_PY!
+    "!UV_CMD!" venv --python "!MEA_PET_PY!" "%VENV_DIR%"
     if errorlevel 1 (
         echo [MeaPet] uv venv failed, retry Python 3.12 official mirror
         set "UV_PYTHON_INSTALL_MIRROR="
@@ -82,7 +82,7 @@ echo.
 echo Fix options:
 echo   1. install uv: https://docs.astral.sh/uv/getting-started/installation/
 echo      powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
-echo   2. set MEAPET_ALLOW_DOWNLOAD=1 then re-run
+echo   2. set MEA_PET_ALLOW_DOWNLOAD=1 then re-run
 echo   3. install Python 3.10+ with Add to PATH ^(local VITS recommends 3.10-3.12^)
 echo   4. manual:
 echo      uv python install 3.12
@@ -237,8 +237,8 @@ if not defined UV_CMD if exist "%LOCALAPPDATA%\Programs\uv\uv.exe" set "UV_CMD=%
 if defined UV_CMD exit /b 0
 
 echo [MeaPet] uv not found
-if /I not "%MEAPET_ALLOW_DOWNLOAD%"=="1" (
-    echo [MeaPet] set MEAPET_ALLOW_DOWNLOAD=1 to auto-install uv
+if /I not "%MEA_PET_ALLOW_DOWNLOAD%"=="1" (
+    echo [MeaPet] set MEA_PET_ALLOW_DOWNLOAD=1 to auto-install uv
     echo [MeaPet] will try system Python next
     exit /b 1
 )

@@ -70,7 +70,7 @@ class ChatInputBox(QWidget):
         self._fade_step = 0.08
         self._closing = False
         self.voice_host = None
-        self._reduced_motion = os.environ.get("MEAPET_REDUCED_MOTION", "").lower() in {
+        self._reduced_motion = os.environ.get("MEA_PET_REDUCED_MOTION", "").lower() in {
             "1",
             "true",
             "yes",

@@ -49,20 +49,20 @@ from meapet.vision.policy import normalize_vision_mode
 
 
 # 通用 LLM 环境变量（未知/未标注 backend 时的兜底）。
-# MEAPET_API_KEY 是跨后端的通用兜底；厂商专属变量见 URL 探测。
-ENV_LLM_KEY = ("OPENAI_API_KEY", "MEAPET_API_KEY")
+# MEA_PET_API_KEY 是跨后端的通用兜底；厂商专属变量见 URL 探测。
+ENV_LLM_KEY = ("OPENAI_API_KEY", "MEA_PET_API_KEY")
 # 仅作 URL 级 env 探测复用；direct.provider 一律保存为 custom。
 ENV_LLM_KEY_BY_FAMILY = {
-    "deepseek": ("DEEPSEEK_API_KEY", "MEAPET_API_KEY"),
-    "mimo": ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY"),
-    "openai": ("OPENAI_API_KEY", "MEAPET_API_KEY"),
-    "anthropic": ("ANTHROPIC_API_KEY", "MEAPET_API_KEY"),
+    "deepseek": ("DEEPSEEK_API_KEY", "MEA_PET_API_KEY"),
+    "mimo": ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEA_PET_API_KEY"),
+    "openai": ("OPENAI_API_KEY", "MEA_PET_API_KEY"),
+    "anthropic": ("ANTHROPIC_API_KEY", "MEA_PET_API_KEY"),
 }
 # 旧名兼容：部分测试/调用仍引用 BY_BACKEND。
 ENV_LLM_KEY_BY_BACKEND = ENV_LLM_KEY_BY_FAMILY
-ENV_TTS_KEY = ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY")
+ENV_TTS_KEY = ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEA_PET_API_KEY")
 ENV_TRANSLATE_KEY = ("TRANSLATE_API_KEY",)
-ENV_VISION_KEY = ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY")
+ENV_VISION_KEY = ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEA_PET_API_KEY")
 
 # 直连协议默认；显式 protocol 始终优先。provider 品牌不再参与分流。
 PROTOCOL_BY_ENDPOINT_FAMILY = {
@@ -365,7 +365,7 @@ def resolve_direct_api_key(llm_cfg: dict) -> str:
     )
     url_names = _env_names_for_api_base(api_base, host)
     if url_names:
-        # 识别出厂商端点：只读该厂商专属变量 + 中立的 MEAPET_API_KEY，
+        # 识别出厂商端点：只读该厂商专属变量 + 中立的 MEA_PET_API_KEY，
         # 绝不并入 OPENAI_API_KEY，避免环境里的 OpenAI 密钥压过显式文件密钥
         # 并被发往 DeepSeek/MiMo/Anthropic 等第三方端点（跨厂商凭据泄露）。
         env_names = url_names

@@ -21,10 +21,10 @@ from meapet.agent.base import (
 
 def _reply(text: str = "你好，主人") -> str:
     return (
-        f"<MEAPET_SEGMENT><DISPLAY>{text}</DISPLAY>"
+        f"<MEA_PET_SEGMENT><DISPLAY>{text}</DISPLAY>"
         f'<META>{{"voice_text":"{text}","voice_language":"zh-CN",'
         '"mood":"happy","tts_style":""}</META>'
-        "</MEAPET_SEGMENT><MEAPET_DONE />"
+        "</MEA_PET_SEGMENT><MEA_PET_DONE />"
     )
 
 
@@ -116,7 +116,7 @@ class TestAgentFactory(unittest.TestCase):
             os.environ,
             {
                 "HERMES_DASHBOARD_SESSION_TOKEN": "hermes-secret",
-                "MEAPET_AGENT_TOKEN": "openclaw-secret",
+                "MEA_PET_AGENT_TOKEN": "openclaw-secret",
             },
             clear=False,
         ):
@@ -139,7 +139,7 @@ class TestAgentFactory(unittest.TestCase):
                         "agent": {
                             "kind": "openclaw",
                             "base_url": "ws://127.0.0.1:18789",
-                            "auth_token": "$MEAPET_AGENT_TOKEN",
+                            "auth_token": "$MEA_PET_AGENT_TOKEN",
                             "session_key": "agent:main:meapet:test",
                         },
                     }

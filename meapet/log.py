@@ -7,10 +7,10 @@ import re
 import sys
 
 # ====================== 全局配置项 ======================
-CONSOLE_LOG_LEVEL = "TRACE"    # 控制台默认 INFO；TRACK 载荷日志需显式调到 TRACE 或 MEAPET_DEBUG=1
+CONSOLE_LOG_LEVEL = "TRACE"    # 控制台默认 INFO；TRACK 载荷日志需显式调到 TRACE 或 MEA_PET_DEBUG=1
 # 文件默认 INFO：DEBUG 与 TRACE（含用户聊天/长期记忆等隐私载荷）默认不落盘，
-# 需排障时可设环境变量 MEAPET_DEBUG=1 临时提升。
-FILE_LOG_LEVEL = os.environ.get("MEAPET_FILE_LOG_LEVEL", "").strip().upper() or "INFO"
+# 需排障时可设环境变量 MEA_PET_DEBUG=1 临时提升。
+FILE_LOG_LEVEL = os.environ.get("MEA_PET_FILE_LOG_LEVEL", "").strip().upper() or "INFO"
 
 # 日志路径：打包便携模式下与配置/缓存同在 get_data_dir()（_internal）。
 from meapet.paths import get_data_dir as _get_data_dir

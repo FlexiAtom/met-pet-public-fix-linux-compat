@@ -482,7 +482,7 @@ class PetRenderHostMixin:
 
         l2d_cfg = self.config.get("live2d", {})
         model_dir = resolve_resource_path(l2d_cfg.get("model_dir", ""))
-        force_png = os.environ.get("MEAPET_FORCE_PNG", "").strip().lower()
+        force_png = os.environ.get("MEA_PET_FORCE_PNG", "").strip().lower()
         live2d_requested = (
             force_png not in ("1", "true", "yes")
             and l2d_cfg.get("enabled", False)
@@ -501,7 +501,7 @@ class PetRenderHostMixin:
                 return
 
         if force_png in ("1", "true", "yes"):
-            safe_print("[toggle] MEAPET_FORCE_PNG=1, skip Live2D")
+            safe_print("[toggle] MEA_PET_FORCE_PNG=1, skip Live2D")
         elif l2d_cfg.get("enabled", False) and not (model_dir and os.path.isdir(model_dir)):
             safe_print(f"[live2d] 模型目录不存在，使用 PNG: {model_dir}")
 

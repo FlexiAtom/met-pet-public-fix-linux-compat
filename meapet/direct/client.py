@@ -158,7 +158,7 @@ async def _iter_sse(response: httpx.Response) -> AsyncIterator[_SseEvent]:
             continue
         if line.startswith(":"):
             continue
-        # 原始 SSE 帧可能含 reasoning/对话；仅 MEAPET_DEBUG=1 时输出
+        # 原始 SSE 帧可能含 reasoning/对话；仅 MEA_PET_DEBUG=1 时输出
         if raw_line_count < 20:
             from meapet.utils import debug_enabled
             if debug_enabled():

@@ -14,10 +14,10 @@ from meapet.agent.base import AgentTurnRequest, TurnCancelled, TurnCompleted
 
 def _reply(text: str = "连接成功") -> str:
     return (
-        f"<MEAPET_SEGMENT><DISPLAY>{text}</DISPLAY>"
+        f"<MEA_PET_SEGMENT><DISPLAY>{text}</DISPLAY>"
         f'<META>{{"voice_text":"{text}","voice_language":"zh-CN",'
         '"mood":"happy","tts_style":""}</META>'
-        "</MEAPET_SEGMENT><MEAPET_DONE />"
+        "</MEA_PET_SEGMENT><MEA_PET_DONE />"
     )
 
 

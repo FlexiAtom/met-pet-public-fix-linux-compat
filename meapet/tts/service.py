@@ -479,7 +479,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         return bool(all_ok and self._deps_ready)
 
     def _allow_auto_install(self) -> bool:
-        if os.environ.get("MEAPET_ALLOW_DOWNLOAD", "").strip() == "1":
+        if os.environ.get("MEA_PET_ALLOW_DOWNLOAD", "").strip() == "1":
             return True
         return bool(self.config.get("tts", {}).get("auto_install_deps", False))
 

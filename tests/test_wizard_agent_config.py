@@ -290,7 +290,7 @@ class TestWizardConversationConfig(unittest.TestCase):
         page.control_listen_host.setText("192.168.50.10")
         page.control_allowed_ip.setText("192.168.50.20")
         page.control_port.setValue(8765)
-        page.control_auth_token.setText("$MEAPET_CONTROL_TOKEN")
+        page.control_auth_token.setText("$MEA_PET_CONTROL_TOKEN")
         page.control_allow_http.setChecked(True)
 
         config = self.wizard.collect_config()
@@ -314,7 +314,7 @@ class TestWizardConversationConfig(unittest.TestCase):
                 "listen_host": "192.168.50.10",
                 "port": 8765,
                 "allowed_agent_ip": "192.168.50.20",
-                "auth_token": "$MEAPET_CONTROL_TOKEN",
+                "auth_token": "$MEA_PET_CONTROL_TOKEN",
                 "allow_insecure_http": True,
                 "cert_file": "",
                 "key_file": "",

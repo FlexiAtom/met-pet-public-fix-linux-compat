@@ -77,12 +77,12 @@ class TranslationService:
         # translators may probe the network to infer a region during import.
         # MeaPet targets Simplified Chinese users, so default to CN while still
         # accepting an explicit project or legacy package override.
-        configured_region = os.environ.get("MEAPET_TRANSLATORS_REGION", "").strip()
+        configured_region = os.environ.get("MEA_PET_TRANSLATORS_REGION", "").strip()
         package_region = os.environ.get("translators_default_region", "").strip()
         region = configured_region.upper()
         if configured_region and region not in _ALLOWED_TRANSLATOR_REGIONS:
             log.warning(
-                "[translate] 忽略无效的 MEAPET_TRANSLATORS_REGION；"
+                "[translate] 忽略无效的 MEA_PET_TRANSLATORS_REGION；"
                 "仅支持 CN 或 EN，已回退到默认地区"
             )
             region = ""

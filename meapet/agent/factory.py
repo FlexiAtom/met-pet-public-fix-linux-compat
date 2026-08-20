@@ -108,7 +108,7 @@ def create_agent_adapter_from_config(
     if kind == "agent_link":
         token = _resolve_secret(
             raw_token,
-            ("AGENT_LINK_TOKEN", "MEAPET_AGENT_TOKEN"),
+            ("AGENT_LINK_TOKEN", "MEA_PET_AGENT_TOKEN"),
         )
         extensions = agent_cfg.get("extensions")
         extensions = extensions if isinstance(extensions, dict) else {}
@@ -132,7 +132,7 @@ def create_agent_adapter_from_config(
     if kind == "openclaw":
         token = _resolve_secret(
             raw_token,
-            ("OPENCLAW_GATEWAY_TOKEN", "MEAPET_AGENT_TOKEN"),
+            ("OPENCLAW_GATEWAY_TOKEN", "MEA_PET_AGENT_TOKEN"),
         )
         session_key = str(agent_cfg.get("session_key") or "").strip()
         if not session_key:
@@ -162,7 +162,7 @@ def create_agent_adapter_from_config(
         (
             "HERMES_DASHBOARD_SESSION_TOKEN",
             "HERMES_API_SERVER_KEY",
-            "MEAPET_AGENT_TOKEN",
+            "MEA_PET_AGENT_TOKEN",
         ),
     )
     return HermesAdapter(

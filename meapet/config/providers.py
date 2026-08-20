@@ -34,7 +34,7 @@ class ProviderPreset:
     name          下拉展示名。
     api_base      OpenAI 兼容基础地址；本地/自建（如 Azure）留空由用户填写。
     protocol      推荐直连协议（openai_chat / ollama_chat / anthropic_messages）。
-    env_keys      该厂商 API Key 的常见环境变量名（含中立的 MEAPET_API_KEY 兜底）。
+    env_keys      该厂商 API Key 的常见环境变量名（含中立的 MEA_PET_API_KEY 兜底）。
     url_signatures 地址中出现即可判定为本供应商的子串（供 store 反查 family）。
     requires_key  是否需要 API Key（本地推理如 Ollama 不需要）。
     models        该厂商常见模型 ID（首个作为选中预设时的默认模型）；
@@ -69,8 +69,8 @@ class ProviderPreset:
     def family_env_keys(self) -> Tuple[str, ...]:
         # 统一追加中立兜底变量，去重且保持顺序。
         keys = list(self.env_keys)
-        if "MEAPET_API_KEY" not in keys:
-            keys.append("MEAPET_API_KEY")
+        if "MEA_PET_API_KEY" not in keys:
+            keys.append("MEA_PET_API_KEY")
         return tuple(dict.fromkeys(keys))
 
 

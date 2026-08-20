@@ -752,7 +752,7 @@ class PetWindowChromeMixin:
         raw = str(
             (self.config.get("agent_control") or {}).get("auth_token") or ""
         ).strip()
-        token = resolve_secret(raw, ("MEAPET_CONTROL_TOKEN",))
+        token = resolve_secret(raw, ("MEA_PET_CONTROL_TOKEN",))
         if not token:
             self._show_bubble("当前没有可复制的 Agent 控制令牌。", 3500, mood=None)
             return

@@ -95,7 +95,7 @@ BUBBLE_SHADOW_LAYERS = ((3, 56), (2, 84))
 
 def _reduced_motion_enabled() -> bool:
     return os.environ.get(
-        "MEAPET_REDUCED_MOTION",
+        "MEA_PET_REDUCED_MOTION",
         "",
     ).strip().lower() in {"1", "true", "yes"}
 
