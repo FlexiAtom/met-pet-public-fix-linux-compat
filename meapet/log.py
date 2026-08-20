@@ -166,29 +166,39 @@ def get_color_logger(name="app", log_dir=LOG_DIR, keep_days=LOG_KEEP_DAYS,
 
     # 仅在没有 Handler 时才进行配置
     if not logger.handlers:
-        # 控制台彩色 Handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(console_level_num)
-        console_formatter = ColorFormatter(
-            "%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        console_handler.setFormatter(console_formatter)
-        logger.addHandler(console_handler)
+        # 控制台彩色 Handler。窗口化打包下 sys.stderr 为 None，此时
+        # StreamHandler 每条记录都会在 emit 里抛异常再被吞掉，直接跳过。
+        if sys.stderr is not None:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(console_level_num)
+            console_formatter = ColorFormatter(
+                "%(asctime)s [%(levelname)s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
+            console_handler.setFormatter(console_formatter)
+            logger.addHandler(console_handler)
 
         # 文件 Handler
         if enable_file:
-            os.makedirs(log_dir, exist_ok=True)
+            # 只读安装目录（如 C:\Program Files）下建目录会抛 PermissionError。
+            # 日志系统自身绝不能阻断启动，失败就只保留控制台 Handler。
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+            except OSError:
+                return logger
             log_path = os.path.join(log_dir, f"{name}.log")
 
-            file_handler = logging.handlers.TimedRotatingFileHandler(
-                filename=log_path,
-                when='midnight',
-                interval=1,
-                backupCount=keep_days,
-                encoding='utf-8',
-                utc=False,
-            )
+            try:
+                file_handler = logging.handlers.TimedRotatingFileHandler(
+                    filename=log_path,
+                    when='midnight',
+                    interval=1,
+                    backupCount=keep_days,
+                    encoding='utf-8',
+                    utc=False,
+                )
+            except OSError:
+                return logger
             file_handler.setLevel(file_level_num)
             file_handler.namer = _daily_namer
 

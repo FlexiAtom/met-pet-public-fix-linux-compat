@@ -38,6 +38,16 @@ class RuntimeDependency:
     purpose: str
 
 
+# 缺失后界面根本无法显示的依赖。只有这些才允许阻断启动。
+_CRITICAL_MODULES = frozenset({"PyQt5", "PIL", "jieba"})
+
+
+def is_critical(dependency: RuntimeDependency) -> bool:
+    """True 表示缺失它就没法把窗口显示出来，必须阻断启动。"""
+
+    return dependency.module in _CRITICAL_MODULES
+
+
 _BASE_DEPENDENCIES = (
     RuntimeDependency("PyQt5", PYQT_REQUIREMENT, "桌面界面"),
     RuntimeDependency("PIL", PILLOW_REQUIREMENT, "PNG 渲染与截图"),
@@ -86,6 +96,64 @@ _OPTIONAL_SOURCE_DEPENDENCIES = (
         "语音翻译",
     ),
 )
+
+
+def _is_frozen() -> bool:
+    """不导入 meapet.paths 也能判断冻结态，避免早期导入失败。"""
+
+    return bool(getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"))
+
+
+def startup_error_log_path() -> Path | None:
+    """启动错误日志路径：冻结态放在 exe 旁边，源码态放在项目根。"""
+
+    try:
+        if _is_frozen():
+            base = Path(sys.executable).resolve().parent
+        else:
+            base = Path(__file__).resolve().parents[1]
+        return base / "meapet_startup_error.log"
+    except Exception:
+        return None
+
+
+def emit_startup_error(message: str, *, stream: TextIO | None = None) -> None:
+    """把 GUI 出现之前的失败告知用户。
+
+    窗口化打包（``console=False``）下 ``sys.stdout``/``sys.stderr`` 都是
+    ``None``，此时 ``print`` 会静默丢弃内容 —— 这正是「双击 exe 没反应」的
+    成因。所以这里额外写日志文件，并在 Windows 冻结态弹出原生消息框。
+    每一步都独立兜底，保证这个函数自己永远不会成为新的崩溃源。
+    """
+
+    target = stream if stream is not None else sys.stderr
+    if target is not None:
+        try:
+            print(message, file=target)
+        except Exception:
+            pass
+
+    log_path = startup_error_log_path()
+    if log_path is not None:
+        try:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(message.rstrip("\n") + "\n\n")
+        except OSError:
+            pass
+
+    # 原生弹窗只用 ctypes，PyQt5 缺失时同样可用。
+    if stream is None and _is_frozen() and sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                message,
+                "MeaPet 启动失败",
+                0x10,  # MB_ICONERROR
+            )
+        except Exception:
+            pass
 
 
 def _deduplicate(
@@ -213,6 +281,22 @@ def format_missing_dependencies(
         f"  - {dependency.requirement}（{dependency.purpose}）"
         for dependency in missing
     )
+    if _is_frozen():
+        # 冻结版不能用自身的 MeaPet.exe -m pip 装依赖，给 pip 命令是错的。
+        log_path = startup_error_log_path()
+        lines.extend(
+            (
+                "",
+                "这个发行包构建不完整：上述依赖没有被打进程序内部。",
+                "请重新下载完整的发行包，或在补齐依赖后重新构建：",
+                '  python -m pip install -e ".[all]"',
+                "  powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1",
+            )
+        )
+        if log_path is not None:
+            lines.extend(("", f"本次启动日志：{log_path}"))
+        return "\n".join(lines)
+
     requirements = project_root / "linux_requirements.txt"
     lines.extend(
         (
@@ -228,6 +312,28 @@ def format_missing_dependencies(
     return "\n".join(lines)
 
 
+_DEGRADED: tuple[RuntimeDependency, ...] = ()
+
+
+def degraded_dependencies() -> tuple[RuntimeDependency, ...]:
+    """上次依赖检查中缺失、但已降级放行的子系统依赖。"""
+
+    return _DEGRADED
+
+
+def format_degraded_dependencies(
+    degraded: Sequence[RuntimeDependency],
+) -> str:
+    """生成降级说明，供启动日志与 GUI 非阻塞提示复用。"""
+
+    lines = ["[MeaPet] 以下可选子系统依赖缺失，相关功能已降级："]
+    lines.extend(
+        f"  - {dependency.requirement}（{dependency.purpose}）"
+        for dependency in degraded
+    )
+    return "\n".join(lines)
+
+
 def ensure_pet_dependencies(
     project_root: str | Path,
     *,
@@ -235,7 +341,14 @@ def ensure_pet_dependencies(
     stream: TextIO | None = None,
     find_spec: Callable[[str], object | None] = importlib.util.find_spec,
 ) -> bool:
-    """在导入桌面应用之前检查当前配置真正需要的依赖。"""
+    """在导入桌面应用之前检查当前配置真正需要的依赖。
+
+    只有界面本身跑不起来（``PyQt5``/``PIL``/``jieba``）才阻断启动。
+    ``websockets``/``mcp`` 之类子系统依赖都有回退路径，缺失时仅记录降级，
+    不能让整个桌宠打不开。
+    """
+
+    global _DEGRADED
 
     root = Path(project_root).resolve()
     resolved_config = Path(config_path) if config_path is not None else None
@@ -244,16 +357,23 @@ def ensure_pet_dependencies(
         required_runtime_dependencies(config),
         find_spec=find_spec,
     )
-    if not missing:
+    blocking = tuple(d for d in missing if is_critical(d))
+    _DEGRADED = tuple(d for d in missing if not is_critical(d))
+
+    if _DEGRADED:
+        emit_startup_error(
+            format_degraded_dependencies(_DEGRADED),
+            stream=stream,
+        )
+    if not blocking:
         return True
-    output = stream if stream is not None else sys.stderr
-    print(
+    emit_startup_error(
         format_missing_dependencies(
-            missing,
+            blocking,
             project_root=root,
             executable=Path(sys.executable),
         ),
-        file=output,
+        stream=stream,
     )
     return False
 
