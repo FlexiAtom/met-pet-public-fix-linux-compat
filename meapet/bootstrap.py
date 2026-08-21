@@ -44,7 +44,6 @@ _CRITICAL_MODULES = frozenset({"PyQt5", "PIL", "jieba"})
 
 def is_critical(dependency: RuntimeDependency) -> bool:
     """True 表示缺失它就没法把窗口显示出来，必须阻断启动。"""
-
     return dependency.module in _CRITICAL_MODULES
 
 
@@ -95,18 +94,18 @@ _OPTIONAL_SOURCE_DEPENDENCIES = (
         TRANSLATORS_REQUIREMENT,
         "语音翻译",
     ),
+    # MODIFIED: 显式加入 live2d-py 依赖，以便后续进行真实可用性检查
+    RuntimeDependency("live2d", "live2d-py", "Live2D 模型渲染"),
 )
 
 
 def _is_frozen() -> bool:
     """不导入 meapet.paths 也能判断冻结态，避免早期导入失败。"""
-
     return bool(getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"))
 
 
 def startup_error_log_path() -> Path | None:
     """启动错误日志路径：冻结态放在 exe 旁边，源码态放在项目根。"""
-
     try:
         if _is_frozen():
             base = Path(sys.executable).resolve().parent
@@ -118,14 +117,7 @@ def startup_error_log_path() -> Path | None:
 
 
 def emit_startup_error(message: str, *, stream: TextIO | None = None) -> None:
-    """把 GUI 出现之前的失败告知用户。
-
-    窗口化打包（``console=False``）下 ``sys.stdout``/``sys.stderr`` 都是
-    ``None``，此时 ``print`` 会静默丢弃内容 —— 这正是「双击 exe 没反应」的
-    成因。所以这里额外写日志文件，并在 Windows 冻结态弹出原生消息框。
-    每一步都独立兜底，保证这个函数自己永远不会成为新的崩溃源。
-    """
-
+    """把 GUI 出现之前的失败告知用户。"""
     target = stream if stream is not None else sys.stderr
     if target is not None:
         try:
@@ -141,16 +133,14 @@ def emit_startup_error(message: str, *, stream: TextIO | None = None) -> None:
         except OSError:
             pass
 
-    # 原生弹窗只用 ctypes，PyQt5 缺失时同样可用。
     if stream is None and _is_frozen() and sys.platform == "win32":
         try:
             import ctypes
-
             ctypes.windll.user32.MessageBoxW(
                 None,
                 message,
                 "MeaPet 启动失败",
-                0x10,  # MB_ICONERROR
+                0x10,
             )
         except Exception:
             pass
@@ -172,12 +162,7 @@ def _deduplicate(
 def required_runtime_dependencies(
     config: Mapping[str, object] | None,
 ) -> tuple[RuntimeDependency, ...]:
-    """返回当前配置在导入桌面应用前必须具备的依赖。
-
-    直连模式不会加载 WebSocket Agent 或 Companion MCP 栈。Agent 模式和
-    Companion 服务只有在配置明确启用时才加入对应依赖。
-    """
-
+    """返回当前配置在导入桌面应用前必须具备的依赖。"""
     config = config if isinstance(config, Mapping) else {}
     llm = config.get("llm")
     llm = llm if isinstance(llm, Mapping) else {}
@@ -216,7 +201,6 @@ def required_runtime_dependencies(
 
 def all_runtime_dependencies() -> tuple[RuntimeDependency, ...]:
     """返回启动器应安装并检查的完整源码运行环境。"""
-
     return _deduplicate(
         (
             *_BASE_DEPENDENCIES,
@@ -228,17 +212,56 @@ def all_runtime_dependencies() -> tuple[RuntimeDependency, ...]:
     )
 
 
+# ADDED: 对特定模块进行真实可用性验证（不仅检查模块存在，还尝试导入并调用轻量接口）
+def _verify_module_available(module_name: str) -> bool:
+    """尝试导入模块并执行一个最小可用性检查，返回 True 表示真正可用。
+
+    当前仅对 'live2d' 模块实施特殊验证（读取版本号），其他模块回退到
+    find_spec 的结果。此函数不会抛出异常，所有失败均视为不可用。
+    """
+    try:
+        spec = importlib.util.find_spec(module_name)
+        if spec is None:
+            return False
+        # 对 live2d 进行真实调用验证
+        if module_name == "live2d":
+            mod = importlib.import_module(module_name)
+            # 尝试获取版本号（多数 Python 包提供 __version__）
+            version = getattr(mod, "__version__", None)
+            if version is not None:
+                return True
+            # 如果没有 __version__，尝试调用一个无害的静态方法
+            if hasattr(mod, "version") and callable(mod.version):
+                ver = mod.version()
+                return ver is not None
+            # 最低限度：检查核心类是否存在（例如 LAppModel）
+            if hasattr(mod, "LAppModel"):
+                return True
+            # 以上都失败则视为不可用
+            return False
+        # 其他模块仅凭 find_spec 即可
+        return True
+    except Exception:
+        return False
+
+
 def find_missing_dependencies(
     dependencies: Iterable[RuntimeDependency],
     *,
     find_spec: Callable[[str], object | None] = importlib.util.find_spec,
 ) -> tuple[RuntimeDependency, ...]:
-    """只用模块规格探测依赖，不执行第三方模块代码。"""
+    """只用模块规格探测依赖，不执行第三方模块代码。
 
+    但对 live2d 模块会额外进行真实可用性检查（通过 _verify_module_available）。
+    """
     missing: list[RuntimeDependency] = []
     for dependency in dependencies:
         try:
+            # 基础检查：模块规格是否存在
             available = find_spec(dependency.module) is not None
+            # 对 live2d 进一步做真实可用性验证
+            if available and dependency.module == "live2d":
+                available = _verify_module_available(dependency.module)
         except (ImportError, ModuleNotFoundError, ValueError):
             available = False
         if not available:
@@ -271,7 +294,6 @@ def format_missing_dependencies(
     executable: Path,
 ) -> str:
     """生成不依赖 GUI 的、可直接复制命令的错误说明。"""
-
     lines = [
         "[MeaPet] 启动前依赖检查失败。",
         "",
@@ -282,7 +304,6 @@ def format_missing_dependencies(
         for dependency in missing
     )
     if _is_frozen():
-        # 冻结版不能用自身的 MeaPet.exe -m pip 装依赖，给 pip 命令是错的。
         log_path = startup_error_log_path()
         lines.extend(
             (
@@ -317,7 +338,6 @@ _DEGRADED: tuple[RuntimeDependency, ...] = ()
 
 def degraded_dependencies() -> tuple[RuntimeDependency, ...]:
     """上次依赖检查中缺失、但已降级放行的子系统依赖。"""
-
     return _DEGRADED
 
 
@@ -325,7 +345,6 @@ def format_degraded_dependencies(
     degraded: Sequence[RuntimeDependency],
 ) -> str:
     """生成降级说明，供启动日志与 GUI 非阻塞提示复用。"""
-
     lines = ["[MeaPet] 以下可选子系统依赖缺失，相关功能已降级："]
     lines.extend(
         f"  - {dependency.requirement}（{dependency.purpose}）"
@@ -345,14 +364,14 @@ def ensure_pet_dependencies(
 
     只有界面本身跑不起来（``PyQt5``/``PIL``/``jieba``）才阻断启动。
     ``websockets``/``mcp`` 之类子系统依赖都有回退路径，缺失时仅记录降级，
-    不能让整个桌宠打不开。
+    不能让整个桌宠打不开。对 live2d 模块会额外进行真实可用性验证。
     """
-
     global _DEGRADED
 
     root = Path(project_root).resolve()
     resolved_config = Path(config_path) if config_path is not None else None
     config = _read_startup_config(root, resolved_config)
+    # 使用增强的 find_missing_dependencies（已内置 live2d 真实检查）
     missing = find_missing_dependencies(
         required_runtime_dependencies(config),
         find_spec=find_spec,
@@ -422,3 +441,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
