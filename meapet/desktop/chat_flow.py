@@ -702,7 +702,7 @@ class PetChatFlowMixin:
             self._submit_agent_tts(action.segment, context=context)
             return
         if isinstance(action, PlayAudio):
-            self._play_audio(action.wav_path)
+            self._play_audio(action.wav_path, audio_type="sfx")
             QTimer.singleShot(
                 max(0, int(action.duration_ms)),
                 lambda index=action.index, current=context: (
@@ -1162,7 +1162,7 @@ class PetChatFlowMixin:
         if pending is None:
             # 兼容旧调用：没有等待文字时，仍允许单独播放有效音频。
             if wav_path:
-                self._play_audio(wav_path)
+                self._play_audio(wav_path, audio_type="tts")
             return
 
         try:
@@ -1208,7 +1208,7 @@ class PetChatFlowMixin:
         self._complete_turn_context(context)
 
         if wav_path:
-            self._play_audio(wav_path)
+            self._play_audio(wav_path, audio_type="tts")
 
     def _on_tts_audio(self, raw: str | None):
         """TTS 完成后再显示最终气泡；失败时显示无声文字兜底。"""
@@ -1316,7 +1316,7 @@ class PetChatFlowMixin:
                     duration_ms,
                 )
                 self.show_reply(text, mood, duration_ms=bubble_ms)
-                self._play_audio(cached)
+                self._play_audio(cached, audio_type="tts")
                 return
             self._pending_speak_reply = (text, duration_ms, mood)
             self._speak_worker = TTSWorker(tts, text, mood=mood)
@@ -1367,7 +1367,7 @@ class PetChatFlowMixin:
             bubble_ms = bubble_duration_for_audio(audio_ms, minimum_ms)
             self.show_reply(text, mood, duration_ms=bubble_ms)
         if valid_audio:
-            self._play_audio(wav_path)
+            self._play_audio(wav_path, audio_type="tts")
 
     def show_reply(self, text: str, mood: str = "neutral", duration_ms: int = None):
         if duration_ms is None:
