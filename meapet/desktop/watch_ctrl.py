@@ -304,7 +304,7 @@ class PetWatcherMixin:
         set_awaiting_reply_state(self, False)
         self._start_watcher_timer()
         if wav_path and os.path.exists(wav_path):
-            self._play_audio(wav_path)
+            self._play_audio(wav_path, audio_type="sfx")
 
     def _on_watch_tts_error(self, err: str):
         """屏幕吐槽 TTS 合成失败 —— 至少显示文字，不卡死"""

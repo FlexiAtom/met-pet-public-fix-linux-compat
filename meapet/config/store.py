@@ -1138,6 +1138,21 @@ def normalize_config(config: dict) -> dict:
     voice.setdefault("auto_send", False)
     cfg["voice_input"] = voice
 
+    # ---------- audio 音量规范化（0-100%） ----------
+    audio = cfg.get("audio") if isinstance(cfg.get("audio"), dict) else {}
+    audio.setdefault("sfx_volume_percent", 80)
+    audio.setdefault("tts_volume_percent", 90)
+    try:
+        audio["sfx_volume_percent"] = max(0, min(100, int(audio["sfx_volume_percent"])))
+    except (TypeError, ValueError):
+        audio["sfx_volume_percent"] = 80
+    try:
+        audio["tts_volume_percent"] = max(0, min(100, int(audio["tts_volume_percent"])))
+    except (TypeError, ValueError):
+        audio["tts_volume_percent"] = 90
+    cfg["audio"] = audio
+
+
     return cfg
 
 

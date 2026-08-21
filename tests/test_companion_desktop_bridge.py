@@ -287,7 +287,7 @@ class TestControlPresentation(unittest.IsolatedAsyncioTestCase):
             def _position_bubble(self):
                 self.positions += 1
 
-            def _play_audio(self, path):
+            def _play_audio(self, path, audio_type="sfx", **kwargs):
                 self.played = path
 
             def _confirm_control_capture(self, _request):

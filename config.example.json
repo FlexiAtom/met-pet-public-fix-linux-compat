@@ -47,6 +47,10 @@
     "key_file": "",
     "ca_file": ""
   },
+  "audio": {
+    "sfx_volume_percent": 60,
+    "tts_volume_percent": 61
+  },
   "ui": {
     "first_run_hint_shown": false,
     "timeline_turns": 5

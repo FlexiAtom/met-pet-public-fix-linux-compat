@@ -315,7 +315,7 @@ class TestAgentChatPolling(unittest.TestCase):
             def _safe_set_mood(self, mood):
                 self.last_mood = mood
 
-            def _play_audio(self, path):
+            def _play_audio(self, path, audio_type="sfx", **kwargs):
                 self.played.append(path)
 
             def _show_bubble(self, text, duration_ms=None, mood=None):

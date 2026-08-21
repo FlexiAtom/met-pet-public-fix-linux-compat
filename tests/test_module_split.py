@@ -356,7 +356,7 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
                 def _safe_name(self, _text):
                     return "cache_test"
 
-                def _play_audio(self, path):
+                def _play_audio(self, path, audio_type="sfx", **kwargs):
                     self.played.append(path)
 
                 def _position_bubble(self):

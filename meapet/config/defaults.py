@@ -132,3 +132,12 @@ def bubble_duration_ms(
         return max(0, int(durations.get(normalized_kind, default)))
     except (TypeError, ValueError):
         return int(default)
+
+
+DEFAULT_AUDIO = MappingProxyType({
+    "sfx_volume_percent": 60,
+    "tts_volume_percent": 61,
+})
+
+
+

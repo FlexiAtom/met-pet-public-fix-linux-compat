@@ -76,7 +76,7 @@ class PetInteractionMixin:
         wav_dur = self._get_wav_duration_ms(path)
         bubble_ms = bubble_duration_for_audio(wav_dur, dur)
         self.show_reply(text, "neutral", duration_ms=bubble_ms)
-        self._play_audio(path)
+        self._play_audio(path, audio_type="sfx")
         QTimer.singleShot(4000, lambda: self._safe_set_mood("neutral"))
         return True
 
@@ -148,7 +148,7 @@ class PetInteractionMixin:
                     duration_ms,
                 )
                 self.show_reply(text, mood, duration_ms=bubble_ms)
-                self._play_audio(cache_file)
+                self._play_audio(cache_file, audio_type="sfx")
             else:
                 self._speak_and_show(text, duration_ms, mood)
         except Exception as e:
