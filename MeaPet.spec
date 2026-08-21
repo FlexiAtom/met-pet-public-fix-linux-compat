@@ -34,6 +34,16 @@ a = Analysis(
         # certifi CA bundle (belt-and-suspenders; shared client uses OS trust store)
         "certifi",
         "pkg_resources",
+        # Agent WebSocket 传输：ws_transport 顶层导入 websockets.exceptions，
+        # 连接时才 import websockets.asyncio.client。漏打这些会让依赖门禁
+        # 判定 Agent 模式不可用，冻结版曾因此直接静默退出。
+        "websockets",
+        "websockets.exceptions",
+        "websockets.asyncio.client",
+        # Companion MCP 服务（agent_control.enabled 时按需导入）
+        "mcp",
+        "mcp.server",
+        "mcp.server.session",
         # wizard package (dynamically imported from _reopen_setup_wizard)
         "wizard.app",
         "wizard.pages",

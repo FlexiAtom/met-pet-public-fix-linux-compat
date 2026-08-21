@@ -328,7 +328,7 @@ def resolve_reduced_motion(config_value: object | None = None) -> bool:
 
     优先级：
     1. ``config_value`` 若为 True → 开启
-    2. 环境变量 ``MEAPET_REDUCED_MOTION``
+    2. 环境变量 ``MEA_PET_REDUCED_MOTION``
     3. Linux: ``gsettings`` / ``org.gnome.desktop.interface enable-animations``
     4. 默认 False
     """
@@ -336,13 +336,13 @@ def resolve_reduced_motion(config_value: object | None = None) -> bool:
         return True
     if config_value is False:
         # 用户在配置中明确关闭时，仍允许环境变量强制开启
-        env = os.environ.get("MEAPET_REDUCED_MOTION", "").strip().lower()
+        env = os.environ.get("MEA_PET_REDUCED_MOTION", "").strip().lower()
         if env in {"1", "true", "yes", "on"}:
             return True
         if env in {"0", "false", "no", "off"}:
             return False
     else:
-        env = os.environ.get("MEAPET_REDUCED_MOTION", "").strip().lower()
+        env = os.environ.get("MEA_PET_REDUCED_MOTION", "").strip().lower()
         if env in {"1", "true", "yes", "on"}:
             return True
         if env in {"0", "false", "no", "off"}:
@@ -377,7 +377,7 @@ def resolve_reduced_motion(config_value: object | None = None) -> bool:
 def apply_reduced_motion_env(enabled: bool) -> None:
     """把减少动画偏好写入进程环境，供气泡/输入等模块读取。"""
     if enabled:
-        os.environ["MEAPET_REDUCED_MOTION"] = "1"
+        os.environ["MEA_PET_REDUCED_MOTION"] = "1"
     else:
         # 仅在我们写入 1 时清理；若用户外部强制 0/1 也统一落到当前偏好
-        os.environ.pop("MEAPET_REDUCED_MOTION", None)
+        os.environ.pop("MEA_PET_REDUCED_MOTION", None)

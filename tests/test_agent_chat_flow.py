@@ -127,7 +127,7 @@ class TestAgentFactory(unittest.TestCase):
                     "agent": {
                         "kind": "hermes",
                         "base_url": "ws://192.168.1.8:9119/api/ws",
-                        "auth_token": "$HERMES_DASHBOARD_SESSION_TOKEN",
+                        "auth_token": "$MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN",
                         "history_turns": 5,
                         "timeout_seconds": 60.0,
                         "allow_insecure_ws": True,
@@ -138,7 +138,7 @@ class TestAgentFactory(unittest.TestCase):
         )
         with mock.patch.dict(
             os.environ,
-            {"HERMES_DASHBOARD_SESSION_TOKEN": "env-secret"},
+            {"MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN": "env-secret"},
             clear=False,
         ):
             adapter = create_agent_adapter_from_config(config)
@@ -315,7 +315,7 @@ class TestAgentChatPolling(unittest.TestCase):
             def _safe_set_mood(self, mood):
                 self.last_mood = mood
 
-            def _play_audio(self, path):
+            def _play_audio(self, path, audio_type="sfx", **kwargs):
                 self.played.append(path)
 
             def _show_bubble(self, text, duration_ms=None, mood=None):

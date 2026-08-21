@@ -121,7 +121,7 @@ class VoiceEngine(QThread):
             self.error.emit("pyaudio 未安装，请在配置页下载依赖")
         except Exception as exc:
             log.error(f"[voice] error: {type(exc).__name__}: {exc}")
-            log.track(lambda: traceback.format_exc())
+            log.trace(lambda: traceback.format_exc())
             self.error.emit(f"语音识别异常: {exc}")
 
     # ------------------------------------------------------------------
@@ -226,7 +226,7 @@ class VoiceEngine(QThread):
 
         except Exception as exc:
             log.error(f"[voice] transcription error: {exc}")
-            log.track(lambda: traceback.format_exc())
+            log.trace(lambda: traceback.format_exc())
             self.error.emit(f"转文字失败: {exc}")
             return ""
 

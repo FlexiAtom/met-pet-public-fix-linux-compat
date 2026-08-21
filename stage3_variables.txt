@@ -1,0 +1,2 @@
+./.venv/lib/python3.12/site-packages/pip/_internal/commands/install.py:202:                "platform. Typically ~/.local/, or %APPDATA%\\Python on "
+./.venv/lib/python3.12/site-packages/pip/_vendor/platformdirs/windows.py:150:        "CSIDL_APPDATA": "APPDATA",

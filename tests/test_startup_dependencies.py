@@ -136,10 +136,12 @@ def test_missing_dependency_message_is_available_before_gui_import(tmp_path):
     assert "Traceback" not in message
 
 
-def test_agent_preflight_reports_missing_websockets_without_importing_gui(
+def test_agent_preflight_degrades_instead_of_blocking_on_missing_websockets(
     tmp_path,
 ):
-    from meapet.bootstrap import ensure_pet_dependencies
+    """websockets 缺失只降级，绝不能让整个桌宠打不开。"""
+
+    from meapet.bootstrap import degraded_dependencies, ensure_pet_dependencies
 
     config_path = tmp_path / "config.json"
     config_path.write_text(
@@ -157,9 +159,51 @@ def test_agent_preflight_reports_missing_websockets_without_importing_gui(
         find_spec=fake_find_spec,
     )
 
-    assert ready is False
+    assert ready is True
     assert "websockets>=13,<16" in output.getvalue()
-    assert "启动桌宠.bat" in output.getvalue()
+    assert [d.module for d in degraded_dependencies()] == ["websockets"]
+
+
+def test_missing_gui_dependency_still_blocks_startup(tmp_path):
+    """PyQt5 这类关键依赖缺失仍必须阻断，并给出可见说明。"""
+
+    from meapet.bootstrap import ensure_pet_dependencies
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        '{"llm":{"mode":"direct"},"agent_control":{"enabled":false}}',
+        encoding="utf-8",
+    )
+    output = StringIO()
+
+    def fake_find_spec(module):
+        return None if module == "PyQt5" else object()
+
+    ready = ensure_pet_dependencies(
+        tmp_path,
+        stream=output,
+        find_spec=fake_find_spec,
+    )
+
+    assert ready is False
+    assert "PyQt5" in output.getvalue()
+
+
+def test_startup_error_survives_none_stdio(monkeypatch):
+    """窗口化打包下 stdout/stderr 均为 None，报错不能再被静默吞掉。"""
+
+    from meapet import bootstrap
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    # 不得抛异常（旧实现在这里静默 no-op，正是 exe 双击无反应的成因）
+    bootstrap.emit_startup_error("[MeaPet] unit-test startup failure")
+
+    log_path = bootstrap.startup_error_log_path()
+    assert log_path is not None
+    assert "unit-test startup failure" in log_path.read_text(encoding="utf-8")
+    log_path.unlink()
 
 
 def test_importing_config_store_does_not_import_websocket_agent_stack():
@@ -202,11 +246,54 @@ def test_pet_entry_checks_dependencies_before_importing_desktop_app():
     assert source.index("def main(") < desktop_import_at
 
 
+def test_agent_mode_falls_back_to_direct_without_websockets():
+    """传输层不可用时运行期降级 direct，且绝不回写用户配置。"""
+
+    source = (ROOT / "meapet" / "desktop" / "app.py").read_text(
+        encoding="utf-8"
+    )
+
+    fallback_at = source.index('if mode == "agent" and not _websockets_available()')
+    adapter_at = source.index("create_agent_adapter_from_config")
+
+    # 降级必须发生在构造 Agent 适配器之前
+    assert fallback_at < adapter_at
+
+    # 降级只改本次运行的局部变量，不得触碰 config 或触发保存
+    window = source[fallback_at:adapter_at]
+    assert 'mode = "direct"' in window
+    assert "_save_config" not in window
+    assert 'llm_config["mode"]' not in window
+
+
+def test_config_normalization_never_rewrites_mode_on_missing_websockets():
+    """websockets 缺失不能改写持久化配置，否则会毁掉用户的 agent 设置。"""
+
+    from meapet.config import store
+
+    normalized = store.normalize_config(
+        {"llm": {"mode": "agent", "backend": "hermes"}}
+    )
+    assert normalized["llm"]["mode"] == "agent"
+
+
 def test_module_entry_uses_the_same_pre_gui_bootstrap():
     source = (ROOT / "meapet" / "__main__.py").read_text(encoding="utf-8")
 
-    assert "from pet import main" in source
+    # _run 是 pet.py 里带可见化兜底的包装，main 本身没有 except 保护。
+    assert "from pet import _run" in source
     assert "from meapet.desktop.app import main" not in source
+
+
+def test_pet_entry_makes_pre_gui_failures_visible():
+    """GUI 出现前的异常必须走可见化通道，不能静默退出。"""
+
+    source = (ROOT / "pet.py").read_text(encoding="utf-8")
+
+    assert "emit_startup_error" in source
+    assert "except BaseException" in source
+    # 入口必须调用带兜底的 _run，而不是裸 main()
+    assert "SystemExit(_run())" in source
 
 
 def test_windows_launcher_checks_the_complete_runtime_environment():

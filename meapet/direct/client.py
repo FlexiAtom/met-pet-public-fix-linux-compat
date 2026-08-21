@@ -158,11 +158,11 @@ async def _iter_sse(response: httpx.Response) -> AsyncIterator[_SseEvent]:
             continue
         if line.startswith(":"):
             continue
-        # 原始 SSE 帧可能含 reasoning/对话；仅 MEAPET_DEBUG=1 时输出
+        # 原始 SSE 帧可能含 reasoning/对话；仅 MEA_PET_DEBUG=1 时输出
         if raw_line_count < 20:
             from meapet.utils import debug_enabled
             if debug_enabled():
-                log.track(
+                log.trace(
                     lambda l=line, n=raw_line_count: (
                         f"[sse] raw line #{n}: "
                         f"first_500={l[:500]!r}"
@@ -774,7 +774,7 @@ class DirectProtocolClient:
                 # 部分 SSE 实现（如 Ollama）不发 [DONE]，只靠 finish_reason 标记结尾
                 finish_reason = choice.get("finish_reason")
                 if finish_reason is not None and isinstance(finish_reason, str):
-                    log.track(
+                    log.trace(
                         lambda r=finish_reason: (
                             f"[openai_chat] finish_reason={r} 提前终止 SSE 流"
                         )
@@ -867,14 +867,14 @@ class DirectProtocolClient:
             lines_read += 1
             # 首行原始日志（带 data: 前缀等），用于诊断 SSE 与 NDJSON 格式混用
             if lines_read <= 3:
-                log.track(
+                log.trace(
                     lambda l=line: f"[ollama] raw line #{lines_read}: {l[:300]}"
                 )
             if line.startswith("data:"):
                 line = line[5:].lstrip()
                 error_lines += 1
                 if error_lines <= 3:
-                    log.track(
+                    log.trace(
                         lambda l=line, n=error_lines: (
                             f"[ollama] stripped data: prefix #{n}, "
                             f"json_len={len(l)} first_100={l[:100]}"
@@ -897,7 +897,7 @@ class DirectProtocolClient:
                     content_found = True
                     yield TextDelta(content)
             if bool(payload.get("done")):
-                log.track(
+                log.trace(
                     lambda m=bool(message), c=content_found, l=lines_read: (
                         f"[ollama] done=True lines={l} "
                         f"has_message={m} has_content={c}"
@@ -926,7 +926,7 @@ class DirectProtocolClient:
                 )
                 return
             raise DirectProtocolError("protocol", "Ollama NDJSON 流意外结束。")
-        log.track(
+        log.trace(
             lambda l=lines_read, e=error_lines: (
                 f"[ollama] stream finished lines={l} data_prefix_lines={e}"
             )

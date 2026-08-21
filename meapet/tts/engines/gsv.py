@@ -101,12 +101,12 @@ class TtsGsvMixin:
             log.info(f"子进程返回 (rc={proc.returncode}, {elapsed:.1f}s)")
             if stderr_text.strip():
                 log.warning(f"stderr chars={len(stderr_text.strip())}")
-                log.track(lambda: f"stderr [debug]: {stderr_text.strip()[-200:]}")
+                log.trace(lambda: f"stderr [debug]: {stderr_text.strip()[-200:]}")
 
             if proc.returncode != 0:
                 log.error(f"TTS subprocess failed: rc={proc.returncode}")
                 if stderr_text.strip():
-                    log.track(lambda: f"stderr [debug]: {stderr_text[:300]}")
+                    log.trace(lambda: f"stderr [debug]: {stderr_text[:300]}")
                 return None, ""
 
             # 取最后一行非空 JSON
@@ -120,11 +120,11 @@ class TtsGsvMixin:
             if not result.get("ok"):
                 err = result.get('error', 'unknown')
                 log.error(f"TTS subprocess error chars={len(str(err))}")
-                log.track(lambda: f"TTS subprocess error [debug]: {err}")
+                log.trace(lambda: f"TTS subprocess error [debug]: {err}")
                 if result.get("captured"):
                     captured = str(result["captured"])
                     log.warning(f"captured chars={len(captured)}")
-                    log.track(lambda: f"captured [debug]: {captured[:300]}")
+                    log.trace(lambda: f"captured [debug]: {captured[:300]}")
                 return None, ""
 
             duration = result.get("duration", 0)
@@ -138,12 +138,12 @@ class TtsGsvMixin:
         except json.JSONDecodeError as e:
             log.error(f"TTS JSON parse error: {type(e).__name__}")
             if 'last_line' in locals():
-                log.track(lambda: f"  last_line [debug]: {last_line[:200]}")
+                log.trace(lambda: f"  last_line [debug]: {last_line[:200]}")
             return None, ""
         except Exception as e:
             log.error(f"TTS subprocess error: {type(e).__name__}")
             import traceback
-            log.track(lambda: traceback.format_exc())
+            log.trace(lambda: traceback.format_exc())
             return None, ""
 
     def _get_ref_paths(

@@ -95,7 +95,7 @@ def _log_private_text(label: str, text: str, *, suffix: str = "") -> None:
     """默认仅记录文本长度；显式调试时才记录正文。"""
     value = str(text or "")
     tail = f" {suffix}" if suffix else ""
-    log.track(lambda: f"{label}: chars={len(value)}{tail}\n{value}")
+    log.trace(lambda: f"{label}: chars={len(value)}{tail}\n{value}")
     log.debug(f"{label}: chars={len(value)}{tail}")
 
 
@@ -585,7 +585,7 @@ class PetChatFlowMixin:
                         log.info(
                             f"[reply] 模型返回文本 chars={len(reply_text)}"
                         )
-                        log.track(
+                        log.trace(
                             lambda text=reply_text: f"[reply] 模型返回文本:\n{text}"
                         )
                 except Exception as exc:
@@ -702,7 +702,7 @@ class PetChatFlowMixin:
             self._submit_agent_tts(action.segment, context=context)
             return
         if isinstance(action, PlayAudio):
-            self._play_audio(action.wav_path)
+            self._play_audio(action.wav_path, audio_type="sfx")
             QTimer.singleShot(
                 max(0, int(action.duration_ms)),
                 lambda index=action.index, current=context: (
@@ -1162,7 +1162,7 @@ class PetChatFlowMixin:
         if pending is None:
             # 兼容旧调用：没有等待文字时，仍允许单独播放有效音频。
             if wav_path:
-                self._play_audio(wav_path)
+                self._play_audio(wav_path, audio_type="tts")
             return
 
         try:
@@ -1208,7 +1208,7 @@ class PetChatFlowMixin:
         self._complete_turn_context(context)
 
         if wav_path:
-            self._play_audio(wav_path)
+            self._play_audio(wav_path, audio_type="tts")
 
     def _on_tts_audio(self, raw: str | None):
         """TTS 完成后再显示最终气泡；失败时显示无声文字兜底。"""
@@ -1216,7 +1216,7 @@ class PetChatFlowMixin:
         wav_path = value.rsplit("|", 1)[0] if "|" in value else value
         if not wav_path or not os.path.exists(wav_path):
             log.warning(f"[audio] TTS 未生成有效文件，回退文字: chars={len(value)}")
-            log.track(f"[audio] 无效 TTS 返回: {raw!r}")
+            log.trace(f"[audio] 无效 TTS 返回: {raw!r}")
             self._complete_pending_chat_reply()
             return
         self._complete_pending_chat_reply(wav_path)
@@ -1228,7 +1228,7 @@ class PetChatFlowMixin:
         _log_private_text("[chat] 错误", err)
         err_len = len(err or "")
         log.error(f"[chat] 对话错误: error_chars={err_len}")
-        log.track(lambda: f"[chat] 对话错误: error_chars={err_len} error_raw={redact_text(err)}")
+        log.trace(lambda: f"[chat] 对话错误: error_chars={err_len} error_raw={redact_text(err)}")
         if hasattr(self, '_chat_timeout'):
             self._chat_timeout.stop()
         timeline = getattr(self, "_conversation_timeline", None)
@@ -1316,7 +1316,7 @@ class PetChatFlowMixin:
                     duration_ms,
                 )
                 self.show_reply(text, mood, duration_ms=bubble_ms)
-                self._play_audio(cached)
+                self._play_audio(cached, audio_type="tts")
                 return
             self._pending_speak_reply = (text, duration_ms, mood)
             self._speak_worker = TTSWorker(tts, text, mood=mood)
@@ -1367,7 +1367,7 @@ class PetChatFlowMixin:
             bubble_ms = bubble_duration_for_audio(audio_ms, minimum_ms)
             self.show_reply(text, mood, duration_ms=bubble_ms)
         if valid_audio:
-            self._play_audio(wav_path)
+            self._play_audio(wav_path, audio_type="tts")
 
     def show_reply(self, text: str, mood: str = "neutral", duration_ms: int = None):
         if duration_ms is None:

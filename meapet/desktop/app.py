@@ -68,6 +68,24 @@ from meapet.desktop import status_language
 
 os.environ.setdefault("QT_MULTIMEDIA_PREFERRED_PLUGINS", "windowsmediafoundation")
 
+_WEBSOCKETS_AVAILABLE = None
+
+
+def _websockets_available() -> bool:
+    """websockets 是否可导入（结果缓存，仅探测不执行模块代码）。"""
+    global _WEBSOCKETS_AVAILABLE
+    if _WEBSOCKETS_AVAILABLE is None:
+        try:
+            import importlib.util
+
+            _WEBSOCKETS_AVAILABLE = (
+                importlib.util.find_spec("websockets") is not None
+            )
+        except (ImportError, ValueError):
+            _WEBSOCKETS_AVAILABLE = False
+    return _WEBSOCKETS_AVAILABLE
+
+
 
 def _install_excepthook():
     import traceback
@@ -246,6 +264,14 @@ class MeaPet(
 
         llm_config = self.config.get("llm") or {}
         mode = str(llm_config.get("mode") or "direct").strip().lower()
+        if mode == "agent" and not _websockets_available():
+            # Agent 模式全靠 WebSocket 传输。发行包漏打 websockets 时降级直连，
+            # 至少让桌宠开得起来、聊得动。只改本次运行，绝不回写用户配置。
+            log.error(
+                "[boot] websockets 不可用，本次运行降级为 direct 模式；"
+                "用户配置保持不变"
+            )
+            mode = "direct"
         ui_config = self.config.get("ui") or {}
         try:
             timeline_turns = int(ui_config.get("timeline_turns", 5))
@@ -345,7 +371,7 @@ class MeaPet(
         QTimer.singleShot(1200, self._maybe_show_first_run_hint)
 
     def _apply_motion_preference(self) -> None:
-        """合并配置 / 环境 / 系统启发式，同步到 MEAPET_REDUCED_MOTION。"""
+        """合并配置 / 环境 / 系统启发式，同步到 MEA_PET_REDUCED_MOTION。"""
         from meapet.ui_theme import apply_reduced_motion_env, resolve_reduced_motion
 
         reduced = resolve_reduced_motion(
@@ -540,37 +566,53 @@ class MeaPet(
 
 
 def _ensure_jieba():
-    """启动时预检 jieba 依赖，缺失时弹出错误提示。"""
+    """预检 jieba 依赖，缺失时弹出错误提示。
+
+    必须在 QApplication 创建之后调用：show_message_dialog 会构造 QDialog，
+    而在 QApplication 之前创建任何 QWidget 会触发 Qt 的 qFatal -> abort()，
+    Python 层的 except 拦不住，窗口化打包下表现为静默猝死。
+    """
     try:
         import jieba  # noqa: F401
     except ImportError:
         log.error("[boot] jieba 未安装，中文分词功能不可用")
+        message = (
+            "缺少核心依赖 jieba（中文分词库）。\n\n"
+            "请在终端执行：\n"
+            "  pip install jieba\n\n"
+            "或使用 uv：\n"
+            "  uv pip install jieba\n\n"
+            "然后重新启动桌宠。"
+        )
+        shown = False
         try:
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt5.QtWidgets import QApplication as _QApp, QMessageBox
             from meapet.message_dialog import show_message_dialog
 
-            show_message_dialog(
-                None,
-                title="依赖缺失",
-                text=(
-                    "缺少核心依赖 jieba（中文分词库）。\n\n"
-                    "请在终端执行：\n"
-                    "  pip install jieba\n\n"
-                    "或使用 uv：\n"
-                    "  uv pip install jieba\n\n"
-                    "然后重新启动桌宠。"
-                ),
-                icon=QMessageBox.Critical,
-            )
+            if _QApp.instance() is not None:
+                show_message_dialog(
+                    None,
+                    title="依赖缺失",
+                    text=message,
+                    icon=QMessageBox.Critical,
+                )
+                shown = True
         except Exception:
             pass
+        if not shown:
+            # Qt 不可用时也要让用户看到原因，而不是静默退出。
+            try:
+                from meapet.bootstrap import emit_startup_error
+
+                emit_startup_error(f"[MeaPet] 启动失败：\n\n{message}")
+            except Exception:
+                pass
         raise SystemExit(1)
 
 
 def main():
     """启动桌宠：托盘 + 屏外保活 + boot 日志。"""
     _install_excepthook()
-    _ensure_jieba()
     import signal
     import traceback
     from datetime import datetime
@@ -606,7 +648,7 @@ def main():
 
     log.info(f"[boot] python={sys.version.split()[0]} exe={sys.executable}")
     log.info(f"[boot] cwd={os.getcwd()} root={PROJECT_ROOT} data={get_data_dir()}")
-    log.info(f"[boot] FORCE_PNG={os.environ.get('MEAPET_FORCE_PNG', '')}")
+    log.info(f"[boot] FORCE_PNG={os.environ.get('MEA_PET_FORCE_PNG', '')}")
 
     # Live2D 透明窗：在 QApplication 之前请求 alpha+stencil，并在 Windows 上优先
     # 桌面 OpenGL，减轻打包后 ANGLE/软 GL 把 QOpenGLWidget 合成成不透明矩形。
@@ -626,6 +668,22 @@ def main():
     except Exception:
         log.error(f"[boot] QApplication 创建失败:\n{traceback.format_exc()}")
         raise
+
+    # QApplication 就绪后才能安全弹 Qt 对话框。
+    _ensure_jieba()
+
+    # 子系统依赖降级只记日志，不阻断启动。
+    try:
+        from meapet.bootstrap import (
+            degraded_dependencies,
+            format_degraded_dependencies,
+        )
+
+        _degraded = degraded_dependencies()
+        if _degraded:
+            log.warning(f"[boot] {format_degraded_dependencies(_degraded)}")
+    except Exception:
+        pass
 
     from meapet.ui_theme import ensure_application_fonts, resolve_reduced_motion, apply_reduced_motion_env, set_ui_font_scale
 

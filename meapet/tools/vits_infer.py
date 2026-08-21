@@ -70,15 +70,15 @@ def _bootstrap() -> str:
 
     builtin_dic = os.path.join(base, "dic", "open_jtalk_dic_utf_8-1.11")
     if os.path.isdir(builtin_dic):
-        os.environ["OPEN_JTALK_DICT_DIR"] = builtin_dic
+        os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = builtin_dic
         print("  ✓ 使用项目内置日语词典", file=sys.stderr, flush=True)
     else:
         pyjt_dir = os.path.join(
-            os.environ.get("APPDATA", py_home), ".pyopenjtalk"
+            os.environ.get("MEA_PET_APPDATA", py_home), ".pyopenjtalk"
         )
         dic_dir = os.path.join(pyjt_dir, "open_jtalk_dic_utf_8-1.11")
         if os.path.isdir(dic_dir):
-            os.environ["OPEN_JTALK_DICT_DIR"] = dic_dir
+            os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = dic_dir
             print(f"  ✓ 使用已缓存日语词典: {dic_dir}", file=sys.stderr, flush=True)
         else:
             print("  ❌ 未找到日语词典 open_jtalk_dic_utf_8-1.11", file=sys.stderr, flush=True)

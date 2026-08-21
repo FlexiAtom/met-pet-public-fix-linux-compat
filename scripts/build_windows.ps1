@@ -71,6 +71,15 @@ if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller not installed. pip install pyinstaller"
 }
 
+# Never ship a bundle whose runtime dependencies were missing at build time.
+# A missing package here produces a silent no-op exe: the pre-GUI dependency
+# gate fails, and with console=False stderr is None so nothing is ever printed.
+Write-Host "Checking build environment dependencies ..." -ForegroundColor Cyan
+python -m meapet.bootstrap --check all
+if ($LASTEXITCODE -ne 0) {
+    throw "Build environment is missing runtime dependencies (see above). Run: python -m pip install -e "".[all]"""
+}
+
 Write-Host "Running pyinstaller MeaPet.spec ..." -ForegroundColor Cyan
 python -m PyInstaller --noconfirm MeaPet.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }

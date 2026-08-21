@@ -131,7 +131,7 @@ class _Composite:
     def _safe_set_mood(self, mood):
         self._safe_moods.append(mood)
 
-    def _play_audio(self, path):
+    def _play_audio(self, path, audio_type="sfx", **kwargs):
         self._played.append(path)
 
     def _position_bubble(self):
@@ -392,7 +392,7 @@ class TestFormattedChatToTtsFlow(unittest.TestCase):
                 return 1200
 
             @staticmethod
-            def _play_audio(path):
+            def _play_audio(path, audio_type="sfx", **kwargs):
                 captured["played"] = path
                 captured["events"].append("audio")
 
@@ -461,7 +461,7 @@ class TestFormattedChatToTtsFlow(unittest.TestCase):
                 captured["events"].append("bubble")
 
             @staticmethod
-            def _play_audio(path):
+            def _play_audio(path, audio_type="sfx", **kwargs):
                 captured["audio"] = path
                 captured["events"].append("audio")
 
@@ -495,7 +495,7 @@ class TestFormattedChatToTtsFlow(unittest.TestCase):
                 captured["bubble"] = (text, mood, duration_ms)
 
             @staticmethod
-            def _play_audio(path):
+            def _play_audio(path, audio_type="sfx", **kwargs):
                 captured["audio"] = path
 
             @staticmethod

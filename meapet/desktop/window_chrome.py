@@ -8,6 +8,7 @@ import uuid
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
+    QDialog,
     QMenu,
     QMessageBox,
     QSystemTrayIcon,
@@ -493,6 +494,13 @@ class PetWindowChromeMixin:
         timeline_action = QAction("对话时间线…", self)
         timeline_action.triggered.connect(self._show_timeline)
         settings_menu.addAction(timeline_action)
+
+        # ── 新增：音量调节 ──
+        volume_action = QAction("音量调节", self)
+        volume_action.setIcon(standard_icon("settings"))  # 可复用设置图标
+        volume_action.triggered.connect(self._show_volume_dialog)
+        settings_menu.addAction(volume_action)
+
         llm_mode = str(
             ((self.config.get("llm") or {}).get("mode") or "direct")
         ).strip().lower()
@@ -534,6 +542,13 @@ class PetWindowChromeMixin:
         quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
         return menu
+
+    def _show_volume_dialog(self):
+        """打开音量调节对话框，保存配置。"""
+        from meapet.desktop.dialogs import VolumeDialog
+        dialog = VolumeDialog(self.config, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self._save_config()
 
     def _show_context_menu(self, pos):
         """以独立可拖动窗口的形式打开右键菜单。"""
@@ -752,7 +767,7 @@ class PetWindowChromeMixin:
         raw = str(
             (self.config.get("agent_control") or {}).get("auth_token") or ""
         ).strip()
-        token = resolve_secret(raw, ("MEAPET_CONTROL_TOKEN",))
+        token = resolve_secret(raw, ("MEA_PET_CONTROL_TOKEN",))
         if not token:
             self._show_bubble("当前没有可复制的 Agent 控制令牌。", 3500, mood=None)
             return

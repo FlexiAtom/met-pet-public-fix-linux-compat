@@ -19,7 +19,7 @@ from meapet.config.defaults import (
     DEFAULT_GSV_GPT_WEIGHTS_DIR,
     DEFAULT_GSV_SOVITS_MODEL,
     DEFAULT_GSV_SOVITS_WEIGHTS_DIR,
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_MIMO_TTS_CLONE_MODEL,
     DEFAULT_MIMO_TTS_MODEL,
 )
@@ -135,7 +135,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 优先使用配置文件或环境变量；若均未设置，自动检测常见安装路径。
         # 打包版里 sys.executable 是 MeaPet.exe，绝不能当 Python 用。
         self.python_exe = resolve_external_python(
-            tts_cfg.get("python_exe", "") or os.environ.get("GSV_PYTHON", "")
+            tts_cfg.get("python_exe", "") or os.environ.get("MEA_PET_GSV_PYTHON", "")
         )
 
         if not self.python_exe:
@@ -283,7 +283,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                     if (llm_cfg.get("backend") or "").lower() == "mimo"
                     else ""
                 )
-                or os.environ.get("MIMO_API_KEY", "")
+                or os.environ.get("MEA_PET_MIMO_API_KEY", "")
             )
         # 机器翻译使用 translators 的固定服务池；不复用任何 LLM 或模型密钥。
         self.translation_service = TranslationService()
@@ -325,7 +325,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self.mimo_api_base = (
             tts_cfg.get("api_base", "")
             or (llm_cfg.get("api_base", "") if llm_cfg.get("backend") == "mimo" else "")
-            or DEFAULT_MIMO_API_BASE
+            or DEFAULT_MEA_PET_MIMO_API_BASE
         )
         self.mimo_model = tts_cfg.get("model", DEFAULT_MIMO_TTS_MODEL)
         self.mimo_voice = tts_cfg.get("voice", "冰糖")
@@ -479,7 +479,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         return bool(all_ok and self._deps_ready)
 
     def _allow_auto_install(self) -> bool:
-        if os.environ.get("MEAPET_ALLOW_DOWNLOAD", "").strip() == "1":
+        if os.environ.get("MEA_PET_ALLOW_DOWNLOAD", "").strip() == "1":
             return True
         return bool(self.config.get("tts", {}).get("auto_install_deps", False))
 
@@ -593,7 +593,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 f"[tts] 机器翻译完成: {source_language}->{target_language} "
                 f"chars={len(translated)}"
             )
-            log.track(
+            log.trace(
                 lambda value=translated: (
                     f"[tts] 机器翻译结果 {source_language}->{target_language}:\n{value}"
                 )
@@ -623,7 +623,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 f"[tts] 机器翻译完成: {source_language}->{target_language} "
                 f"chars={len(translated)}"
             )
-            log.track(
+            log.trace(
                 lambda value=translated: (
                     f"[tts] 机器翻译结果 {source_language}->{target_language}:\n{value}"
                 )
@@ -644,7 +644,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             requested_language,
         )
         log.info(f"[tts] 合成原文 chars={len(clean)}")
-        log.track(lambda value=clean: f"[tts] 合成原文:\n{value}")
+        log.trace(lambda value=clean: f"[tts] 合成原文:\n{value}")
         if action == "skip":
             log.warning(f"TTS: 跳过语音 reason={reason}")
             return None
@@ -672,7 +672,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             f"[tts] 翻译后文本 {source_lang}->{target_lang} "
             f"chars={len(translated)}"
         )
-        log.track(
+        log.trace(
             lambda value=translated: (
                 f"[tts] 翻译后文本 {source_lang}->{target_lang}:\n{value}"
             )
@@ -753,7 +753,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             requested_language,
         )
         log.info(f"[tts] 合成原文 chars={len(clean)}")
-        log.track(lambda value=clean: f"[tts] 合成原文:\n{value}")
+        log.trace(lambda value=clean: f"[tts] 合成原文:\n{value}")
         if action == "skip":
             log.warning(f"TTS: 跳过语音 reason={reason}")
             return None
@@ -785,7 +785,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             f"[tts] 翻译后文本 {source_lang}->{target_lang} "
             f"chars={len(translated)}"
         )
-        log.track(
+        log.trace(
             lambda value=translated: (
                 f"[tts] 翻译后文本 {source_lang}->{target_lang}:\n{value}"
             )
@@ -868,7 +868,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 检查文本是否包含任何可发音内容（字母、数字、汉字等）
         if not any(unicodedata.category(c).startswith(('L', 'N')) for c in clean):
             log.warning(f"TTS: 跳过无实际内容的文本 chars={len(clean)}")
-            log.track(lambda: f"TTS: 跳过文本 [debug]: {clean[:40]}")
+            log.trace(lambda: f"TTS: 跳过文本 [debug]: {clean[:40]}")
             return None, ""
 
         target_language = self._normalize_voice_lang(
@@ -878,7 +878,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             f"TTS: chars={len(clean)} mood={mood} engine={self.engine} "
             f"lang={target_language}"
         )
-        log.track(lambda: f"TTS [debug]: {clean[:60]}")
+        log.trace(lambda: f"TTS [debug]: {clean[:60]}")
 
         prepared = self._prepare_tts_text(clean, target_language)
         if prepared is None:
@@ -888,7 +888,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             f"[tts] 最终合成文本 lang={synthesis_language} "
             f"chars={len(tts_text)}"
         )
-        log.track(lambda value=tts_text: f"[tts] 最终合成文本:\n{value}")
+        log.trace(lambda value=tts_text: f"[tts] 最终合成文本:\n{value}")
 
         # 输出文件
         output_wav = self._new_output_wav_path()
@@ -897,7 +897,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         if self._mimo_mode:
             lang_tag = synthesis_language
             log.info(f"MiMo 合成: lang={lang_tag} chars={len(tts_text)}")
-            log.track(lambda: f"MiMo 合成: {tts_text[:60]}")
+            log.trace(lambda: f"MiMo 合成: {tts_text[:60]}")
             return self._speak_mimo(
                 tts_text,
                 output_wav,
@@ -922,7 +922,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             f"合成: lang={self._gsv_language_tag(text_lang)} "
             f"chars={len(tts_text)}"
         )
-        log.track(lambda: f"合成: {tts_text[:60]}")
+        log.trace(lambda: f"合成: {tts_text[:60]}")
 
         if self._vits_mode:
             return self._speak_vits(tts_text, output_wav)
@@ -978,7 +978,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 f"[tts] 最终合成文本 lang={lang_tag} "
                 f"chars={len(tts_text)}"
             )
-            log.track(lambda value=tts_text: f"[tts] 最终合成文本:\n{value}")
+            log.trace(lambda value=tts_text: f"[tts] 最终合成文本:\n{value}")
             return await self._speak_mimo_async(
                 tts_text,
                 output_wav,
@@ -1018,7 +1018,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 continue
             # 先合成才能知道语言——暂用临时名，合成完再改名
             log.info(f"[prerender] chars={len(text)} mood={mood}")
-            log.track(lambda: f"[prerender] text [debug]: {text!r}")
+            log.trace(lambda: f"[prerender] text [debug]: {text!r}")
             result = self.speak(text, mood)
             wav, tts_lang = result if result else (None, "")
             if wav and tts_lang:
@@ -1028,7 +1028,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 shutil.move(wav, cache_path)
                 results[text] = cache_path
                 log.info(f"[prerender] completed chars={len(text)} lang={tts_lang}")
-                log.track(lambda: f"[prerender] output [debug]: {cache_path}")
+                log.trace(lambda: f"[prerender] output [debug]: {cache_path}")
             else:
                 log.warning(f"[prerender] failed chars={len(text)}")
         return results

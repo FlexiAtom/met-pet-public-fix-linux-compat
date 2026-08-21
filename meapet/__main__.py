@@ -1,5 +1,5 @@
 """python -m meapet  -> desktop pet"""
-from pet import main
+from pet import _run
 
 if __name__ == "__main__":
-    raise SystemExit(main() or 0)
+    raise SystemExit(_run())

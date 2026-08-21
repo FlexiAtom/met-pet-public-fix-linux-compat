@@ -2,6 +2,8 @@
 梅尔桌宠 - Live2D 渲染模块
 基于 live2d-py (Cubism 3+) + QOpenGLWidget 透明窗口
 """
+from __future__ import annotations
+
 import os
 import sys
 import math

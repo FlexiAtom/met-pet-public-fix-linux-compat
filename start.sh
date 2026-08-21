@@ -27,10 +27,10 @@ export QTWEBENGINE_DISABLE_SANDBOX=1
 
 # --- TTS (GPT-SoVITS) ---
 # 如果你有独立的 GPT-SoVITS Python 环境，设置此变量指向其 python 解释器
-# export GSV_PYTHON="$HOME/GPT-SoVITS/.venv/bin/python3"
+# export MEA_PET_GSV_PYTHON="$HOME/GPT-SoVITS/.venv/bin/python3"
 
 # --- HuggingFace / tokenizer options ---
-# Set HF_ENDPOINT or MEAPET_HF_ENDPOINT explicitly when a local mirror is needed.
+# Set HF_ENDPOINT or MEA_PET_HF_ENDPOINT explicitly when a local mirror is needed.
 # export TOKENIZERS_PARALLELISM=false
 
 # --- 清理可能污染子进程的变量 ---
@@ -112,7 +112,7 @@ fi
 
 # ======== 4. 选择 pip 镜像 ========
 DEFAULT_PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
-MIRROR_URL="${MEAPET_PIP_INDEX_URL:-${PIP_INDEX_URL:-}}"
+MIRROR_URL="${MEA_PET_PIP_INDEX_URL:-${PIP_INDEX_URL:-}}"
 MIRROR_CHOICE="1"
 if [[ -n "$MIRROR_URL" ]]; then
     echo "[MeaPet] 使用环境变量配置的 pip 源"

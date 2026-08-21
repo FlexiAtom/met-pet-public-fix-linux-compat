@@ -36,7 +36,7 @@ from meapet.config.defaults import (
     DEFAULT_HERMES_WS_URL,
     DEFAULT_LIVE2D_WINDOW_MASK,
     DEFAULT_LIVE2D_WINDOW_SHAPE,
-    DEFAULT_MIMO_API_BASE,
+    DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
     DEFAULT_OPENAI_API_BASE,
     DEFAULT_OPENCLAW_WS_URL,
@@ -49,20 +49,20 @@ from meapet.vision.policy import normalize_vision_mode
 
 
 # 通用 LLM 环境变量（未知/未标注 backend 时的兜底）。
-# MEAPET_API_KEY 是跨后端的通用兜底；厂商专属变量见 URL 探测。
-ENV_LLM_KEY = ("OPENAI_API_KEY", "MEAPET_API_KEY")
+# MEA_PET_API_KEY 是跨后端的通用兜底；厂商专属变量见 URL 探测。
+ENV_LLM_KEY = ("MEA_PET_OPENAI_API_KEY", "MEA_PET_API_KEY")
 # 仅作 URL 级 env 探测复用；direct.provider 一律保存为 custom。
 ENV_LLM_KEY_BY_FAMILY = {
-    "deepseek": ("DEEPSEEK_API_KEY", "MEAPET_API_KEY"),
-    "mimo": ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY"),
-    "openai": ("OPENAI_API_KEY", "MEAPET_API_KEY"),
-    "anthropic": ("ANTHROPIC_API_KEY", "MEAPET_API_KEY"),
+    "deepseek": ("MEA_PET_DEEPSEEK_API_KEY", "MEA_PET_API_KEY"),
+    "mimo": ("MEA_PET_MIMO_API_KEY", "XIAOMIMEA_PET_MIMO_API_KEY", "MEA_PET_API_KEY"),
+    "openai": ("MEA_PET_OPENAI_API_KEY", "MEA_PET_API_KEY"),
+    "anthropic": ("ANTHROPIC_API_KEY", "MEA_PET_API_KEY"),
 }
 # 旧名兼容：部分测试/调用仍引用 BY_BACKEND。
 ENV_LLM_KEY_BY_BACKEND = ENV_LLM_KEY_BY_FAMILY
-ENV_TTS_KEY = ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY")
-ENV_TRANSLATE_KEY = ("TRANSLATE_API_KEY",)
-ENV_VISION_KEY = ("MIMO_API_KEY", "XIAOMIMIMO_API_KEY", "MEAPET_API_KEY")
+ENV_TTS_KEY = ("MEA_PET_MIMO_API_KEY", "XIAOMIMEA_PET_MIMO_API_KEY", "MEA_PET_API_KEY")
+ENV_TRANSLATE_KEY = ("MEA_PET_TRANSLATE_API_KEY",)
+ENV_VISION_KEY = ("MEA_PET_MIMO_API_KEY", "XIAOMIMEA_PET_MIMO_API_KEY", "MEA_PET_API_KEY")
 
 # 直连协议默认；显式 protocol 始终优先。provider 品牌不再参与分流。
 PROTOCOL_BY_ENDPOINT_FAMILY = {
@@ -352,7 +352,7 @@ def resolve_direct_api_key(llm_cfg: dict) -> str:
     """解析显式 direct profile；环境变量仍优先于文件值。
 
     provider 一律视为 custom；按 api_base/host URL 探测厂商专属 env
-   （DEEPSEEK_API_KEY / MIMO_API_KEY 等），再回落通用 MEAPET/OPENAI key。
+   （MEA_PET_DEEPSEEK_API_KEY / MEA_PET_MIMO_API_KEY 等），再回落通用 MEAPET/OPENAI key。
     """
     direct = llm_cfg.get("direct") if isinstance(llm_cfg.get("direct"), dict) else {}
     api_base = (
@@ -365,8 +365,8 @@ def resolve_direct_api_key(llm_cfg: dict) -> str:
     )
     url_names = _env_names_for_api_base(api_base, host)
     if url_names:
-        # 识别出厂商端点：只读该厂商专属变量 + 中立的 MEAPET_API_KEY，
-        # 绝不并入 OPENAI_API_KEY，避免环境里的 OpenAI 密钥压过显式文件密钥
+        # 识别出厂商端点：只读该厂商专属变量 + 中立的 MEA_PET_API_KEY，
+        # 绝不并入 MEA_PET_OPENAI_API_KEY，避免环境里的 OpenAI 密钥压过显式文件密钥
         # 并被发往 DeepSeek/MiMo/Anthropic 等第三方端点（跨厂商凭据泄露）。
         env_names = url_names
     else:
@@ -454,7 +454,7 @@ def resolve_vision_api_base(
         if inherited:
             return inherited
     if backend == "mimo":
-        return DEFAULT_MIMO_API_BASE
+        return DEFAULT_MEA_PET_MIMO_API_BASE
     return DEFAULT_API_BASE
 
 
@@ -1137,6 +1137,21 @@ def normalize_config(config: dict) -> dict:
     voice.setdefault("language", "zh")
     voice.setdefault("auto_send", False)
     cfg["voice_input"] = voice
+
+    # ---------- audio 音量规范化（0-100%） ----------
+    audio = cfg.get("audio") if isinstance(cfg.get("audio"), dict) else {}
+    audio.setdefault("sfx_volume_percent", 80)
+    audio.setdefault("tts_volume_percent", 90)
+    try:
+        audio["sfx_volume_percent"] = max(0, min(100, int(audio["sfx_volume_percent"])))
+    except (TypeError, ValueError):
+        audio["sfx_volume_percent"] = 80
+    try:
+        audio["tts_volume_percent"] = max(0, min(100, int(audio["tts_volume_percent"])))
+    except (TypeError, ValueError):
+        audio["tts_volume_percent"] = 90
+    cfg["audio"] = audio
+
 
     return cfg
 

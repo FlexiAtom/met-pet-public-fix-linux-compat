@@ -113,7 +113,7 @@ class PetControlBridgeMixin:
             self._attach_agent_link_control()
         else:
             raw_token = str(control.get("auth_token") or "").strip()
-            token = resolve_secret(raw_token, ("MEAPET_CONTROL_TOKEN",))
+            token = resolve_secret(raw_token, ("MEA_PET_CONTROL_TOKEN",))
             if not token and not raw_token:
                 token = ensure_control_token(control)
                 save = getattr(self, "_save_config", None)

@@ -23,10 +23,10 @@ from meapet.conversation.output_protocol import (
     SegmentCompleted,
 )
 
-# 用于从模型输出中提取最后一个 <MEAPET_SEGMENT> 块的局部正则
+# 用于从模型输出中提取最后一个 <MEA_PET_SEGMENT> 块的局部正则
 import re as _re
 _SEGMENT_BLOCK_LOCAL_RE = _re.compile(
-    r"<MEAPET_SEGMENT\s*>(.*?)</MEAPET_SEGMENT\s*>",
+    r"<MEA_PET_SEGMENT\s*>(.*?)</MEA_PET_SEGMENT\s*>",
     _re.IGNORECASE | _re.DOTALL,
 )
 from meapet.direct.client import DirectProtocolError
@@ -41,17 +41,17 @@ from meapet.direct.types import (
 
 log = get_color_logger("direct_conversation")
 
-# Direct 模式的紧凑输出格式说明（同 <MEAPET_SEGMENT> 协议，去掉了 Agent 特有内容）
+# Direct 模式的紧凑输出格式说明（同 <MEA_PET_SEGMENT> 协议，去掉了 Agent 特有内容）
 _DIRECT_OUTPUT_INSTRUCTION = (
     "不要进行推理，直接给出回复。\n"
     "不要输出推理过程。回复必须使用以下格式：\n"
-    "<MEAPET_SEGMENT>\n"
+    "<MEA_PET_SEGMENT>\n"
     "<DISPLAY>显示文本</DISPLAY>\n"
     "<META>{"
     '"voice_text":"朗读文本","voice_language":"BCP-47","mood":"情绪","tts_style":"表演方式"'
     "}</META>\n"
-    "</MEAPET_SEGMENT>\n"
-    "最后输出<MEAPET_DONE />。\n"
+    "</MEA_PET_SEGMENT>\n"
+    "最后输出<MEA_PET_DONE />。\n"
     "五个字段缺一不可。voice_language 必须与实际文本语言一致。"
 )
 
@@ -167,7 +167,7 @@ class DirectConversationAdapter:
                 f"history_tail_role={messages[-1].get('role') if messages else '-'}"
             )
             # 清理 assistant 消息中的旧格式残留（[mood] 行首或 <TTS> 标签），
-            # 避免 "请用 <MEAPET_SEGMENT>" 指令与旧版 3 行历史打架。
+            # 避免 "请用 <MEA_PET_SEGMENT>" 指令与旧版 3 行历史打架。
             for i, msg in enumerate(messages):
                 if msg.get("role") == "assistant":
                     raw = str(msg.get("content") or "")
@@ -246,7 +246,7 @@ class DirectConversationAdapter:
                 log.info(
                     f"[direct] 模型返回文本 turn={turn} chars={len(raw_text)}"
                 )
-                log.track(
+                log.trace(
                     lambda t=raw_text: "[direct] reply-text:" + chr(10) + t
                 )
             else:
@@ -260,9 +260,9 @@ class DirectConversationAdapter:
                 if blocks:
                     tail_start = blocks[-1].start()
                     tail_end = len(raw_text)
-                    done_pos = raw_text.rfind("<MEAPET_DONE")
+                    done_pos = raw_text.rfind("<MEA_PET_DONE")
                     if done_pos >= 0:
-                        tail_end = done_pos + len("<MEAPET_DONE />")
+                        tail_end = done_pos + len("<MEA_PET_DONE />")
                     else:
                         tail_end = blocks[-1].end()
                     cleaned = raw_text[tail_start:tail_end]

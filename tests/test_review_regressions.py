@@ -17,12 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 _SECRET_ENV_KEYS = {
-    "MIMO_API_KEY": "",
-    "XIAOMIMIMO_API_KEY": "",
-    "DEEPSEEK_API_KEY": "",
-    "MEAPET_API_KEY": "",
-    "OPENAI_API_KEY": "",
-    "TRANSLATE_API_KEY": "",
+    "MEA_PET_MIMO_API_KEY": "",
+    "XIAOMIMEA_PET_MIMO_API_KEY": "",
+    "MEA_PET_DEEPSEEK_API_KEY": "",
+    "MEA_PET_API_KEY": "",
+    "MEA_PET_OPENAI_API_KEY": "",
+    "MEA_PET_TRANSLATE_API_KEY": "",
 }
 
 
@@ -44,7 +44,7 @@ class TestProviderKeyIsolation(unittest.TestCase):
         from meapet.config.store import resolve_tts_api_key
 
         env = dict(_SECRET_ENV_KEYS)
-        env["DEEPSEEK_API_KEY"] = "deepseek-env-test-key"
+        env["MEA_PET_DEEPSEEK_API_KEY"] = "deepseek-env-test-key"
         with mock.patch.dict(os.environ, env, clear=False):
             key = resolve_tts_api_key({"api_key": "mimo-file-test-key"}, {})
         self.assertEqual(key, "mimo-file-test-key")
@@ -75,21 +75,21 @@ class TestProviderKeyIsolation(unittest.TestCase):
         from meapet.config.store import resolve_llm_api_key
 
         env = dict(_SECRET_ENV_KEYS)
-        env["OPENAI_API_KEY"] = "openai-test-key"
+        env["MEA_PET_OPENAI_API_KEY"] = "openai-test-key"
         with mock.patch.dict(os.environ, env, clear=False):
             key = resolve_llm_api_key({"api_key": ""})
         self.assertEqual(key, "openai-test-key")
 
     def test_mea_pet_key_is_used_for_vision_when_no_file_key(self):
-        """MiMo vision can use MEAPET_API_KEY; ollama vision needs no key."""
+        """MiMo vision can use MEA_PET_API_KEY; ollama vision needs no key."""
         from meapet.config.store import resolve_vision_api_key
 
         env = dict(_SECRET_ENV_KEYS)
-        env["MEAPET_API_KEY"] = "meapet-vision-key"
+        env["MEA_PET_API_KEY"] = "meapet-vision-key"
         with mock.patch.dict(os.environ, env, clear=False):
             # 默认视觉后端是 ollama：不消费云端密钥
             self.assertEqual(resolve_vision_api_key({"api_key": ""}, {}), "")
-            # 显式 mimo 才读取 ENV_VISION_KEY（含 MEAPET_API_KEY）
+            # 显式 mimo 才读取 ENV_VISION_KEY（含 MEA_PET_API_KEY）
             key = resolve_vision_api_key(
                 {"api_key": "", "backend": "mimo"},
                 {},
@@ -125,7 +125,7 @@ class TestProviderKeyIsolation(unittest.TestCase):
     def test_vision_api_base_falls_back_to_default_when_both_empty(self):
         """未指定时视觉默认 ollama host；mimo 空地址回退 MiMo 默认。"""
         from meapet.config.store import (
-            DEFAULT_MIMO_API_BASE,
+            DEFAULT_MEA_PET_MIMO_API_BASE,
             DEFAULT_OLLAMA_HOST,
             resolve_vision_api_base,
         )
@@ -139,7 +139,7 @@ class TestProviderKeyIsolation(unittest.TestCase):
             {"api_base": "", "backend": "mimo"},
             {"api_base": ""},
         )
-        self.assertEqual(mimo_base, DEFAULT_MIMO_API_BASE)
+        self.assertEqual(mimo_base, DEFAULT_MEA_PET_MIMO_API_BASE)
 
     def test_mimo_tts_reuses_mimo_llm_key_only(self):
         from meapet.config.store import resolve_tts_api_key
@@ -963,7 +963,7 @@ class TestPrivacySafeLogging(unittest.TestCase):
             self.assertNotIn(secret, redacted)
 
     def test_chat_debug_dump_is_opt_in(self):
-        """Without MEAPET_DEBUG, _safe_print is never called with the marker."""
+        """Without MEA_PET_DEBUG, _safe_print is never called with the marker."""
         try:
             from meapet.chat.engine import _safe_print
         except ImportError:
@@ -971,7 +971,7 @@ class TestPrivacySafeLogging(unittest.TestCase):
             from meapet.utils import safe_print as _safe_print
 
         marker = "private-conversation-marker"
-        with mock.patch.dict(os.environ, {"MEAPET_DEBUG": ""}, clear=False), mock.patch(
+        with mock.patch.dict(os.environ, {"MEA_PET_DEBUG": ""}, clear=False), mock.patch(
             "meapet.chat.engine._safe_print"
         ) as printer:
             _safe_print(marker)
@@ -998,7 +998,7 @@ class TestPrivacySafeLogging(unittest.TestCase):
             log_target = None
 
         if log_target:
-            with mock.patch.dict(os.environ, {"MEAPET_DEBUG": ""}, clear=False), mock.patch(
+            with mock.patch.dict(os.environ, {"MEA_PET_DEBUG": ""}, clear=False), mock.patch(
                 log_target
             ) as logger:
                 cf.PetChatFlowMixin._on_input_submit(fake_pet, marker)

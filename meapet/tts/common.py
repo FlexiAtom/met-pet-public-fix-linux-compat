@@ -226,7 +226,7 @@ def auto_install_gsv_deps(py_exe: str, allow_download: bool = False) -> bool:
 
     if not allow_download:
         log.warning(f"缺少 {len(missing)} 个依赖：{', '.join(missing[:6])}{'…' if len(missing)>6 else ''}")
-        log.warning("  → 默认不自动 pip 安装。请手动安装，或设置 MEAPET_ALLOW_DOWNLOAD=1 / tts.auto_install_deps=true")
+        log.warning("  → 默认不自动 pip 安装。请手动安装，或设置 MEA_PET_ALLOW_DOWNLOAD=1 / tts.auto_install_deps=true")
         return False
 
     log.info(f"缺少 {len(missing)} 个依赖，按需安装 …")

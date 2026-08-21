@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSpinBox,          # ← 新增导入
     QVBoxLayout,
 )
 
@@ -831,3 +832,113 @@ def confirm_capture_scope(
     if dialog.exec_() != QDialog.Accepted:
         return None
     return dialog.approval
+
+
+# ──────────────────────── 新增：音量调节对话框 ────────────────────────
+
+class VolumeDialog(QDialog):
+    """音量调节对话框（0-100%），沿用现有对话框风格。"""
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        ensure_application_fonts()
+        self.setObjectName("VolumeDialogRoot")
+        self.setWindowTitle("音量调节")
+        self.setWindowFlags(
+            Qt.Dialog
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+        )
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        set_scaled_stylesheet(self, CONSENT_DIALOG_STYLE)
+        self.setAccessibleName("音量调节")
+
+        self.config = config
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        card = QFrame()
+        card.setObjectName("CloudConsentCard")
+        outer.addWidget(card)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+
+        title_label = QLabel("音量调节")
+        title_label.setObjectName("ConsentTitle")
+        layout.addWidget(title_label)
+
+        # SFX 音量
+        sfx_layout = QHBoxLayout()
+        sfx_label = QLabel("点击音频音量（百分比）")
+        sfx_label.setObjectName("FieldLabel")
+        self.sfx_spin = QSpinBox()
+        self.sfx_spin.setRange(0, 100)
+        self.sfx_spin.setValue(config.get("audio", {}).get("sfx_volume_percent", 80))
+        self.sfx_spin.setSuffix("%")
+        self.sfx_spin.setMinimumHeight(MIN_TARGET_SIZE)
+        sfx_layout.addWidget(sfx_label)
+        sfx_layout.addWidget(self.sfx_spin)
+        layout.addLayout(sfx_layout)
+
+        # TTS 音量
+        tts_layout = QHBoxLayout()
+        tts_label = QLabel("TTS音频音量（百分比）")
+        tts_label.setObjectName("FieldLabel")
+        self.tts_spin = QSpinBox()
+        self.tts_spin.setRange(0, 100)
+        self.tts_spin.setValue(config.get("audio", {}).get("tts_volume_percent", 90))
+        self.tts_spin.setSuffix("%")
+        self.tts_spin.setMinimumHeight(MIN_TARGET_SIZE)
+        tts_layout.addWidget(tts_label)
+        tts_layout.addWidget(self.tts_spin)
+        layout.addLayout(tts_layout)
+
+        # 确定/取消
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        self.ok_button = QPushButton("确定")
+        self.ok_button.setObjectName("AllowUploadButton")
+        self.ok_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.ok_button.clicked.connect(self._on_ok)
+        buttons.addWidget(self.ok_button, 1)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setObjectName("CancelUploadButton")
+        self.cancel_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button, 1)
+        layout.addLayout(buttons)
+
+        resize_dialog_to_content(self, QSize(380, 180))
+
+    def _on_ok(self):
+        audio = self.config.setdefault("audio", {})
+        audio["sfx_volume_percent"] = self.sfx_spin.value()
+        audio["tts_volume_percent"] = self.tts_spin.value()
+        self.accept()
+
+    def accept(self):
+        super().accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        parent = self.parentWidget()
+        if parent is not None:
+            center = parent.frameGeometry().center()
+        else:
+            screen = QApplication.primaryScreen()
+            center = screen.availableGeometry().center() if screen is not None else None
+        if center is not None:
+            screen = QApplication.screenAt(center) or QApplication.primaryScreen()
+            x = center.x() - self.width() // 2
+            y = center.y() - self.height() // 2
+            if screen is not None:
+                available = screen.availableGeometry().adjusted(24, 24, -24, -24)
+                max_x = max(available.left(), available.right() - self.width() + 1)
+                max_y = max(available.top(), available.bottom() - self.height() + 1)
+                x = min(max(x, available.left()), max_x)
+                y = min(max(y, available.top()), max_y)
+            self.move(x, y)
+        self.cancel_button.setFocus(Qt.OtherFocusReason)
+

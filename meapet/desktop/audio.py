@@ -58,8 +58,8 @@ class PetAudioMixin:
             pass
         return 0
 
-    def _play_audio(self, wav_path: str):
-        """播放 wav 音频（Windows 原生优先）"""
+    def _play_audio(self, wav_path: str, audio_type: str = "sfx"):
+        """播放 wav 音频，audio_type 为 'sfx' 或 'tts'，音量从配置读取"""
         if not os.path.exists(wav_path):
             safe_print(f"[audio] 文件不存在: {wav_path}")
             return
@@ -71,16 +71,28 @@ class PetAudioMixin:
             pass
         safe_print(f"[audio] 准备播放: {abs_path} ({size} bytes)")
 
-        # Windows 原生播放（最可靠）
+        # 从配置读取音量
+        volume = 100  # 默认
+        try:
+            config_audio = self.config.get("audio", {})
+            if audio_type == "tts":
+                volume = int(config_audio.get("tts_volume_percent", 90))
+            else:
+                volume = int(config_audio.get("sfx_volume_percent", 80))
+            volume = max(0, min(100, volume))
+        except (TypeError, ValueError):
+            volume = 100
+
+        # Windows 原生播放（不支持音量控制）
         try:
             import winsound
             winsound.PlaySound(abs_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-            safe_print(f"[audio] winsound 播放: {os.path.basename(abs_path)}")
+            safe_print(f"[audio] winsound 播放: {os.path.basename(abs_path)} (音量设置无效)")
             return
         except Exception as e:
             safe_print(f"[audio] winsound 失败，尝试 Qt: {e}")
 
-        # 备用：PyQt5 QtMultimedia（必须保持引用，否则会被 GC 立刻停播）
+        # 备用：PyQt5 QtMultimedia（支持音量）
         try:
             from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
             from PyQt5.QtCore import QUrl
@@ -88,14 +100,14 @@ class PetAudioMixin:
                 self._media_player = QMediaPlayer(self)
             self._media_player.stop()
             self._media_player.setMedia(QMediaContent(QUrl.fromLocalFile(abs_path)))
-            self._media_player.setVolume(100)
+            self._media_player.setVolume(volume)
             self._media_player.play()
-            safe_print(f"[audio] Qt 播放: {os.path.basename(abs_path)}")
+            safe_print(f"[audio] Qt 播放: {os.path.basename(abs_path)}, volume={volume}")
             return
         except Exception as e:
             safe_print(f"[audio] Qt 播放失败: {e}")
 
-        # 再备用：系统默认播放器（阻塞风险低，异步 start）
+        # 再备用：系统默认播放器（不支持音量控制）
         try:
             import subprocess
             import sys as _sys

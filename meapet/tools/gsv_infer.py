@@ -64,7 +64,7 @@ def main():
         # Keep Hugging Face on its normal endpoint unless the user explicitly
         # selects a mirror. This subprocess inherits HF_ENDPOINT unchanged.
         if not os.environ.get("HF_ENDPOINT"):
-            configured_endpoint = os.environ.get("MEAPET_HF_ENDPOINT", "").strip()
+            configured_endpoint = os.environ.get("MEA_PET_HF_ENDPOINT", "").strip()
             if configured_endpoint:
                 os.environ["HF_ENDPOINT"] = configured_endpoint
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
