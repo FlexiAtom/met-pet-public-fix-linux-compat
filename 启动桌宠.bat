@@ -80,11 +80,8 @@ goto ready
 echo [MeaPet] failed to create .venv
 echo.
 echo Fix options:
-echo   1. install uv: https://docs.astral.sh/uv/getting-started/installation/
-echo      powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
-echo   2. set MEA_PET_ALLOW_DOWNLOAD=1 then re-run
-echo   3. install Python 3.10+ with Add to PATH ^(local VITS recommends 3.10-3.12^)
-echo   4. manual:
+echo   1. install Python 3.10+ with Add to PATH ^(local VITS recommends 3.10-3.12^)
+echo   2. manual:
 echo      uv python install 3.12
 echo      uv venv --python 3.12 .venv
 echo      uv pip install -r linux_requirements.txt --python .venv\Scripts\python.exe
@@ -234,22 +231,20 @@ if not errorlevel 1 (
 if not defined UV_CMD if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_CMD=%USERPROFILE%\.local\bin\uv.exe"
 if not defined UV_CMD if exist "%USERPROFILE%\.cargo\bin\uv.exe" set "UV_CMD=%USERPROFILE%\.cargo\bin\uv.exe"
 if not defined UV_CMD if exist "%LOCALAPPDATA%\Programs\uv\uv.exe" set "UV_CMD=%LOCALAPPDATA%\Programs\uv\uv.exe"
-if defined UV_CMD exit /b 0
-
-echo [MeaPet] uv not found
-if /I not "%MEA_PET_ALLOW_DOWNLOAD%"=="1" (
-    echo [MeaPet] set MEA_PET_ALLOW_DOWNLOAD=1 to auto-install uv
-    echo [MeaPet] will try system Python next
-    exit /b 1
+if defined UV_CMD (
+    echo [MeaPet] uv found: !UV_CMD!
+    exit /b 0
 )
 
-echo [MeaPet] installing uv...
+echo [MeaPet] uv not found, auto-installing...
 powershell -ExecutionPolicy Bypass -NoProfile -Command "try { irm https://astral.sh/uv/install.ps1 | iex } catch { exit 1 }"
 if errorlevel 1 (
-    echo [MeaPet] uv install failed, try pip
+    echo [MeaPet] powershell install failed, try pip...
     where python >nul 2>&1
     if not errorlevel 1 (
         python -m pip install -U uv -i "%UV_INDEX_URL%"
+    ) else (
+        echo [MeaPet] no python available to pip-install uv
     )
 )
 
@@ -261,8 +256,12 @@ if not errorlevel 1 (
 )
 if not defined UV_CMD if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_CMD=%USERPROFILE%\.local\bin\uv.exe"
 if not defined UV_CMD if exist "%USERPROFILE%\.cargo\bin\uv.exe" set "UV_CMD=%USERPROFILE%\.cargo\bin\uv.exe"
+if not defined UV_CMD if exist "%LOCALAPPDATA%\Programs\uv\uv.exe" set "UV_CMD=%LOCALAPPDATA%\Programs\uv\uv.exe"
 if defined UV_CMD (
     echo [MeaPet] uv ready: !UV_CMD!
     exit /b 0
 )
+
+echo [MeaPet] uv auto-install failed, will try system Python instead
 exit /b 1
+
