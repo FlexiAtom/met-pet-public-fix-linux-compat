@@ -15,7 +15,7 @@ try:
     enable_vt()
 except Exception:
     pass
-from meapet.log import get_color_logger
+from meapet.log import get_color_logger, log_text_attachments
 
 log = get_color_logger("app")
 
@@ -281,9 +281,21 @@ class MeaPet(
 
         def persist_turn(turn):
             try:
+                # 从 turn 对象中提取 text_attachments（由 chat_flow 附加到 turn 上），
+                # 以脱敏方式记录日志，并传递给 save_conversation_turn 持久化
+                # （db.py 的 save_conversation_turn 已支持 text_attachments 参数，
+                # 仅存储 file_name + sha256，不存全文）。
+                atts = getattr(turn, "text_attachments", None) or []
+                if atts:
+                    # 脱敏日志：仅记录文件名/字符数/sha256 前 8 位，不记录全文
+                    log_text_attachments(
+                        log, "INFO", atts,
+                        extra_msg="timeline 持久化"
+                    )
                 self.memory.save_conversation_turn(
                     turn,
                     max_turns=timeline_turns,
+                    text_attachments=atts,
                 )
             except Exception as exc:
                 log.warning(
@@ -561,7 +573,6 @@ class MeaPet(
         if hasattr(self, '_idle_timer') and self._idle_timer:
             self._idle_timer.stop()
         self.hide()
-
 
 
 

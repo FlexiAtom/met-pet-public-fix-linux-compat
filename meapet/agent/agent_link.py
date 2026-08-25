@@ -842,7 +842,18 @@ class AgentLinkAdapter:
             }
             for attachment in request.attachments
         ]
-        return make_agent_link_frame(
+        # 纯文本附件：与图片并列，附元数据（content 已在 gateway_user_message
+        # 中以 <<FILE>>...<<END FILE>> 隔离标记拼入 prompt 一次；此处再附结构化
+        # 元数据供远端审计/去重）。
+        for ta in (getattr(request, "text_attachments", None) or ()):
+            attachments.append({
+                "type": "text",
+                "file_name": ta.file_name,
+                "char_count": ta.char_count,
+                "sha256": ta.sha256_hash,
+                "content": ta.text_content,
+            })
+        frame = make_agent_link_frame(
             "chat.submit",
             {
                 "content": gateway_user_message(request),
@@ -857,6 +868,14 @@ class AgentLinkAdapter:
             session_id=self._remote_session_id,
             extensions=self.config.extensions,
         )
+        # 调试：打印即将发送的 frame（附件全文截断）
+        if (getattr(request, "text_attachments", None) or ()):
+            from meapet.agent.debug_dump import dump_frame
+            dump_frame(
+                f"AgentLink._chat_submit_frame (text_attachments={len(tuple(getattr(request, 'text_attachments', None) or ()))})",
+                frame,
+            )
+        return frame
 
     async def probe(self) -> AgentLinkCapabilities:
         await self.start()

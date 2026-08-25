@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 from dataclasses import dataclass, field
 from typing import Mapping, Tuple
 
@@ -13,6 +14,12 @@ from meapet.conversation.timeline import ConversationKey
 
 _IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+# 纯文本附件允许的扩展名白名单
+_TEXT_ATTACHMENT_EXTENSIONS = frozenset(
+    {"txt", "md", "csv", "json", "log", "yaml", "yml", "xml", "ini", "cfg", "env"}
+)
+_MAX_TEXT_FILE_NAME = 128
 
 
 @dataclass(frozen=True)
@@ -61,6 +68,86 @@ class ImageAttachment:
 
 
 @dataclass(frozen=True)
+class TextAttachment:
+    """纯文本文件附件：以直接拼接方式附加到请求。
+
+    仅存储解码后的文本内容、字符数与 SHA-256 哈希；不内嵌原始字节。
+    数量不限，是否可上传由调用方按上下文预算决定。
+    """
+
+    file_name: str
+    text_content: str
+    char_count: int
+    sha256_hash: str
+
+    def __post_init__(self) -> None:
+        file_name = str(self.file_name or "").strip()
+        if (
+            not file_name
+            or len(file_name) > _MAX_TEXT_FILE_NAME
+            or any(char in file_name for char in "/\\\r\n\x00")
+        ):
+            raise ValueError("text file_name is unsafe")
+        text = str(self.text_content or "")
+        char_count = int(self.char_count)
+        if char_count != len(text):
+            raise ValueError("text char_count mismatch")
+        sha = str(self.sha256_hash or "").strip().lower()
+        if len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+            raise ValueError("text sha256_hash must be a 64-char hex string")
+        object.__setattr__(self, "file_name", file_name)
+        object.__setattr__(self, "text_content", text)
+        object.__setattr__(self, "char_count", char_count)
+        object.__setattr__(self, "sha256_hash", sha)
+
+    @classmethod
+    def from_bytes(cls, file_name: str, raw: bytes) -> "TextAttachment":
+        """从原始字节构造：自动 BOM 探测解码为 UTF-8 文本。
+
+        BOM 探测顺序：UTF-8-SIG / UTF-16-LE / UTF-16-BE / GBK 回退。
+        若无 BOM 则按 UTF-8 解码，失败回退 GBK。
+        """
+        import codecs
+
+        name = str(file_name or "").strip()
+        # 扩展名白名单校验
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext not in _TEXT_ATTACHMENT_EXTENSIONS:
+            raise ValueError(f"text file extension '.{ext}' not in whitelist")
+
+        text: str
+        # BOM 探测
+        if raw.startswith(codecs.BOM_UTF8):
+            text = raw[len(codecs.BOM_UTF8):].decode("utf-8", errors="strict")
+        elif raw.startswith(codecs.BOM_UTF16_LE):
+            text = raw[len(codecs.BOM_UTF16_LE):].decode("utf-16-le", errors="strict")
+        elif raw.startswith(codecs.BOM_UTF16_BE):
+            text = raw[len(codecs.BOM_UTF16_BE):].decode("utf-16-be", errors="strict")
+        else:
+            # 无 BOM：先尝试 UTF-8，失败回退 GBK
+            try:
+                text = raw.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                text = raw.decode("gbk", errors="replace")
+        sha = hashlib.sha256(raw).hexdigest()
+        return cls(
+            file_name=name,
+            text_content=text,
+            char_count=len(text),
+            sha256_hash=sha,
+        )
+
+    def to_prompt_block(self) -> str:
+        """渲染为带隔离标记、可直接拼入 user message 的文本块。"""
+        return (
+            f"=== {self.file_name} ===\n"
+            f"<<FILE: {self.file_name}>>\n"
+            f"{self.text_content}\n"
+            f"<<END FILE>>"
+        )
+
+
+@dataclass(frozen=True)
 class AgentTurnRequest:
     turn_id: str
     user_text: str
@@ -68,6 +155,7 @@ class AgentTurnRequest:
     frontend_context: Mapping[str, object] = field(default_factory=dict)
     tts_enabled: bool = False
     attachments: Tuple[ImageAttachment, ...] = ()
+    text_attachments: Tuple[TextAttachment, ...] = ()
     conversation_key: ConversationKey | None = None
     generation_id: int = 0
 
@@ -101,6 +189,10 @@ class AgentTurnRequest:
         ):
             raise ValueError("attachments must contain at most four images")
         object.__setattr__(self, "attachments", attachments)
+        text_attachments = tuple(self.text_attachments or ())
+        if any(not isinstance(item, TextAttachment) for item in text_attachments):
+            raise ValueError("text_attachments must contain TextAttachment instances")
+        object.__setattr__(self, "text_attachments", text_attachments)
 
 
 @dataclass(frozen=True)

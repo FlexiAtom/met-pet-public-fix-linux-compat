@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import Future
 from queue import Empty, Queue
-from typing import Optional
+from typing import Optional, Sequence
 
 from meapet.async_runtime import submit
 from meapet.chat.engine import ChatEngine
@@ -15,9 +15,16 @@ from meapet.utils import log_error, safe_print
 class ChatWorker:
     """异步对话任务 — 兼容原 Thread worker 轮询接口（done / get_result / start）。"""
 
-    def __init__(self, engine: ChatEngine, message: str):
+    def __init__(
+        self,
+        engine: ChatEngine,
+        message: str,
+        text_attachments: Optional[Sequence] = None,
+    ):
         self.engine = engine
         self.message = message
+        # text_attachments: TextAttachment 序列（或任何含 to_prompt_block 的对象）
+        self.text_attachments = list(text_attachments) if text_attachments else []
         self._future: Optional[Future] = None
         self._done = False
         self._result = None
@@ -40,10 +47,28 @@ class ChatWorker:
         self._future.add_done_callback(_done_cb)
 
     async def _run(self):
+        # 构造参数：优先透传 text_attachments（engine.quick_chat_async 已支持该参数）
+        kwargs = {}
+        if self.text_attachments:
+            kwargs["text_attachments"] = self.text_attachments
+
         if hasattr(self.engine, "quick_chat_async"):
-            reply, mood = await self.engine.quick_chat_async(self.message)
+            if kwargs:
+                reply, mood = await self.engine.quick_chat_async(
+                    self.message, **kwargs
+                )
+            else:
+                reply, mood = await self.engine.quick_chat_async(self.message)
         else:
-            reply, mood = await asyncio.to_thread(self.engine.quick_chat, self.message)
+            # 同步回退路径：engine.quick_chat 同样支持 text_attachments
+            if kwargs:
+                reply, mood = await asyncio.to_thread(
+                    self.engine.quick_chat, self.message, **kwargs
+                )
+            else:
+                reply, mood = await asyncio.to_thread(
+                    self.engine.quick_chat, self.message
+                )
         return (reply, mood)
 
     @property

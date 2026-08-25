@@ -95,7 +95,7 @@ def detect_script_language(text: object) -> str:
 
     cjk = [ch for ch in value if "\u4e00" <= ch <= "\u9fff"]
     if cjk:
-        # 纯汉字既可能是中文，也可能是没有假名的日文（如“東京”“最高”）。
+        # 纯汉字既可能是中文，也可能是没有假名的日文（如"東京""最高"）。
         # 只有出现较明确的现代汉语信号时才确认中文，否则保留为 ambiguous。
         if any(ch in _CHINESE_SIGNAL_CHARS for ch in cjk):
             return "zh"
@@ -137,6 +137,35 @@ def voice_text_matches_language(voice_text: object, voice_language: object) -> b
     return voice_text_language_relation(voice_text, voice_language) == "match"
 
 
+def should_skip_tts_due_to_language_mismatch(
+    voice_text: object,
+    target_language: object,
+) -> bool:
+    """检测 voice_text 是否包含与目标语言明显不符的脚本特征。
+
+    判定规则（草案 §五）：文件触发的回复照常进入 TTS；但若检测到
+    voice_text 中出现**非目标语言**的明确脚本特征（如日语回复中混入
+    大段英文代码/中文），则跳过 TTS（不朗读），仅显示气泡。
+
+    - 返回 True  → 应跳过 TTS（语言不匹配）
+    - 返回 False → 可正常朗读（匹配 / 无法可靠判定时保守放行）
+
+    注意：不做文本清洗，仅做语言判定。
+    """
+    text = str(voice_text or "").strip()
+    target = canonical_tts_language(target_language)
+    if not text or not target:
+        # 文本为空或目标语言未知：保守放行（由上层其它逻辑决定是否跳过）
+        return False
+
+    observed = detect_script_language(text)
+    if observed == "unknown":
+        # 无法可靠判定（如纯标点/数字/单个词）：保守放行
+        return False
+    # 检测到的语言不是目标语言 → 跳过
+    return observed != target
+
+
 __all__ = [
     "TtsLanguagePlan",
     "canonical_tts_language",
@@ -144,4 +173,5 @@ __all__ = [
     "plan_tts_language",
     "voice_text_language_relation",
     "voice_text_matches_language",
+    "should_skip_tts_due_to_language_mismatch",
 ]

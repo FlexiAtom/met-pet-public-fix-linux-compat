@@ -1,6 +1,8 @@
 """
 梅尔桌宠 - 记忆与养成系统 v3
 语义检索（jieba 词级） · 嵌入缓存 · 生命周期管理 · 对话摘要 · CRUD · JSON 导入导出
+
+v3.1: conversation_turns 增加 file_attachments 字段（仅存 [{file_name, sha256}]，不存全文）
 """
 import sqlite3
 import json
@@ -20,9 +22,9 @@ log = get_color_logger("memory")
 from meapet.paths import data_path
 
 DB_PATH = data_path("mea_memory.db")
-SCHEMA_VERSION = 5  # v5: jieba 词级 embedding 替代 trigram hash
-VECTOR_DIM = 2048   # 词级 hash 空间更大减少碰撞
-MAX_MEMORIES = 2000 # 记忆总量软上限
+SCHEMA_VERSION = 6  # v6: conversation_turns 增加 file_attachments 列
+VECTOR_DIM = 2048
+MAX_MEMORIES = 2000
 
 # ========================
 # 好感度系统配置
@@ -56,7 +58,14 @@ PRUNE_IMPORTANCE_FLOOR = 1
 SUMMARIZE_EVERY_N = 20
 SUMMARY_CHAT_LIMIT = 20
 EXCHANGE_TRUNCATE = 150
-MAX_CONSOLIDATION_MEMORIES = 200  # 合并时只处理 top-N 高重要度记忆，避免 O(N²)
+MAX_CONSOLIDATION_MEMORIES = 200
+
+# ========================
+# 文件附件持久化配置
+# ========================
+# conversation_turns.file_attachments 存储格式：JSON 数组
+# 每个元素: {"file_name": str, "sha256": str}
+# 不存储文件全文，仅存储元数据供去重/审计
 
 
 _JIEBA_INITED = False
@@ -73,7 +82,6 @@ def _ensure_jieba():
 
 
 def _token_hash(token: str) -> int:
-    """将词 token 哈希到 VECTOR_DIM 桶中。"""
     h = 0
     for c in token:
         h = (h * 31 + ord(c)) & 0xFFFFFFFF
@@ -81,20 +89,17 @@ def _token_hash(token: str) -> int:
 
 
 def _compute_embedding(text: str) -> List[Tuple[int, float]]:
-    """混合嵌入：jieba 词级 + 字符级特征，保障 OOV 子词匹配。"""
     if not text or not text.strip():
         return []
     _ensure_jieba()
     cleaned = text.strip()
     freq = {}
-    # 词级特征（主信号）
     for w in jieba.lcut(cleaned):
         w = w.strip()
         if not w:
             continue
         idx = _token_hash(w)
         freq[idx] = freq.get(idx, 0) + 1.0
-    # 字符级特征（保障单字/OOV 子词匹配，权重 0.5）
     for ch in cleaned:
         if ch.strip():
             idx = _token_hash(ch)
@@ -128,13 +133,7 @@ def _cosine_similarity_sparse(
     return dot
 
 
-def _hybrid_score(
-    sim: float,
-    importance: int,
-    days_since_recall: float,
-    decay_factor: float,
-) -> float:
-    """混合语义相似度 + 重要度 + 时间衰减，永不回退到纯重要度排序。"""
+def _hybrid_score(sim, importance, days_since_recall, decay_factor):
     recency = max(0.3, 1.0 - days_since_recall * 0.02)
     return sim * (importance / 5.0) * decay_factor * recency + importance * 0.01
 
@@ -143,8 +142,49 @@ def _content_hash(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
+def _serialize_file_attachments(attachments) -> str:
+    """
+    将 TextAttachment 列表序列化为 JSON 字符串（仅 file_name + sha256）。
+    非 TextAttachment 的可迭代对象（含 dict）也会被尽量提取 file_name/sha256。
+    空/None 返回 '[]'。
+    """
+    if not attachments:
+        return "[]"
+    result = []
+    for att in attachments:
+        file_name = None
+        sha256 = None
+        if hasattr(att, "file_name") and hasattr(att, "sha256_hash"):
+            # TextAttachment 数据类
+            file_name = att.file_name
+            sha256 = att.sha256_hash
+        elif isinstance(att, dict):
+            file_name = att.get("file_name")
+            sha256 = att.get("sha256") or att.get("sha256_hash")
+        if file_name and sha256:
+            result.append({"file_name": file_name, "sha256": sha256})
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+
+def _deserialize_file_attachments(raw: str) -> List[Dict[str, str]]:
+    """将 file_attachments 的 JSON 字符串解析为 [{file_name, sha256}] 列表。"""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return [
+                {"file_name": item.get("file_name", ""), "sha256": item.get("sha256", "")}
+                for item in data
+                if isinstance(item, dict)
+            ]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
 class MeaMemory:
-    """梅尔的持久化记忆系统 v3（jieba 词级嵌入 · 嵌入缓存 · 混合排序）"""
+    """梅尔的持久化记忆系统 v3（jieba 词级嵌入 · 嵌入缓存 · 混合排序 · 文件附件元数据）"""
 
     def __init__(self):
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -156,21 +196,16 @@ class MeaMemory:
             pass
         self._lock = threading.RLock()
         self._emb_cache: Dict[int, List[Tuple[int, float]]] = {}
-        # 启动时不预热全量 embedding，避免 MeaPet.__init__ 在 app.exec_ 前
-        # 同步扫表导致首帧“未响应”。首次检索/维护时再加载。
         self._emb_cache_loaded = False
         self._init_tables()
         self._migrate_schema()
         self._ensure_defaults()
 
-    # ── 私有：加锁执行 ──
     def _write(self, func, *args, **kwargs):
         with self._lock:
             return func(*args, **kwargs)
 
-    # ── 嵌入缓存 ──
     def _ensure_emb_cache(self) -> None:
-        """惰性加载 embedding 缓存（幂等，可在锁内外调用）。"""
         if self._emb_cache_loaded:
             return
         with self._lock:
@@ -181,7 +216,6 @@ class MeaMemory:
             log.debug(f"[DB] 嵌入缓存已加载 ({count} 条)")
 
     def _load_emb_cache(self):
-        """从数据库加载全部 embedding 到内存缓存。调用方需持锁或接受竞态窗口。"""
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT id, embedding FROM memories")
@@ -196,26 +230,23 @@ class MeaMemory:
                         pass
             return count
 
-    def _emb_cache_put(self, mid: int, emb: List[Tuple[int, float]]):
+    def _emb_cache_put(self, mid: int, emb):
         self._emb_cache[mid] = emb
 
     def _emb_cache_remove(self, mid: int):
         self._emb_cache.pop(mid, None)
 
-    def _emb_cache_get(self, mid: int) -> List[Tuple[int, float]]:
+    def _emb_cache_get(self, mid: int):
         return self._emb_cache.get(mid, [])
 
     def _init_tables(self):
-        """建表"""
         c = self.conn.cursor()
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS memory_schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at REAL NOT NULL
             )
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,14 +257,12 @@ class MeaMemory:
                 summarized INTEGER DEFAULT 0
             )
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS mea_state (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS master_info (
                 key TEXT PRIMARY KEY,
@@ -241,7 +270,6 @@ class MeaMemory:
                 updated REAL NOT NULL
             )
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,7 +279,6 @@ class MeaMemory:
                 timestamp REAL NOT NULL
             )
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,7 +298,6 @@ class MeaMemory:
                 last_decay REAL DEFAULT 0
             )
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS conversation_turns (
                 mode TEXT NOT NULL,
@@ -282,6 +308,7 @@ class MeaMemory:
                 user_text TEXT NOT NULL DEFAULT '',
                 segments TEXT NOT NULL DEFAULT '[]',
                 system_entries TEXT NOT NULL DEFAULT '[]',
+                file_attachments TEXT NOT NULL DEFAULT '[]',
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 status TEXT NOT NULL,
@@ -295,12 +322,10 @@ class MeaMemory:
                 mode, profile_id, session_id, updated_at DESC
             )
         """)
-
         self.conn.commit()
         log.debug("[DB] 数据表初始化完成")
 
     def _migrate_schema(self):
-        """安全迁移：新增列或表结构变更"""
         c = self.conn.cursor()
         c.execute("SELECT version FROM memory_schema_version ORDER BY version DESC LIMIT 1")
         row = c.fetchone()
@@ -310,7 +335,6 @@ class MeaMemory:
             return
         log.debug(f"[DB] 开始数据库迁移：{current_version} → {SCHEMA_VERSION}")
 
-        # 迁移 1: 为旧 memories 表补充新列
         if current_version < 1:
             _add_cols = {
                 "tags": "TEXT DEFAULT '[]'",
@@ -328,25 +352,19 @@ class MeaMemory:
                 except sqlite3.OperationalError:
                     pass
 
-        # 迁移 2: 为旧 chat_history 补充 summarized 列
         if current_version < 2:
             try:
                 c.execute("ALTER TABLE chat_history ADD COLUMN summarized INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
 
-        # 迁移 3: 为 memories 补充 last_decay 列（衰减幂等检查点）
         if current_version < 3:
             try:
                 c.execute("ALTER TABLE memories ADD COLUMN last_decay REAL DEFAULT 0")
-                # 初始化 last_decay = last_recalled（兼容旧数据）
                 c.execute("UPDATE memories SET last_decay = COALESCE(last_recalled, created) WHERE last_decay IS NULL OR last_decay = 0")
             except sqlite3.OperationalError:
                 pass
 
-        # 迁移 4 的 conversation_turns 表由 _init_tables 幂等创建。
-
-        # 迁移 5: v4→v5，jieba 词级 embedding 替代 trigram hash + VECTOR_DIM 1024→2048
         if current_version < 5:
             log.debug(f"[DB] v4→v5 迁移：重算全部记忆的 embedding（jieba 词级, dim={VECTOR_DIM}）")
             c.execute("SELECT id, content FROM memories")
@@ -361,7 +379,14 @@ class MeaMemory:
                 log.debug(f"[DB] v5 迁移：已重算 {count} 条记忆的 embedding")
             self.conn.commit()
 
-        # 为没有 embedding 的记忆计算 embedding（兜底，仅旧数据或异常空值）
+        # 迁移 6: conversation_turns 增加 file_attachments 列
+        if current_version < 6:
+            try:
+                c.execute("ALTER TABLE conversation_turns ADD COLUMN file_attachments TEXT NOT NULL DEFAULT '[]'")
+                log.debug("[DB] v6 迁移：conversation_turns 增加 file_attachments 列")
+            except sqlite3.OperationalError:
+                pass
+
         c.execute("SELECT id, content FROM memories WHERE embedding IS NULL OR embedding = ''")
         rows = c.fetchall()
         for row in rows:
@@ -371,7 +396,6 @@ class MeaMemory:
         if rows:
             log.debug(f"[DB] 迁移中补齐了 {len(rows)} 条记忆的 embedding")
 
-        # 更新 schema version
         c.execute(
             "INSERT OR REPLACE INTO memory_schema_version (version, applied_at) VALUES (?, ?)",
             (SCHEMA_VERSION, time.time()),
@@ -380,7 +404,6 @@ class MeaMemory:
         log.debug(f"[DB] 数据库迁移完成 → v{SCHEMA_VERSION}")
 
     def _ensure_defaults(self):
-        """初始化默认状态"""
         c = self.conn.cursor()
         defaults = {
             "affection": "5",
@@ -395,28 +418,25 @@ class MeaMemory:
             "messages_since_summary": "0",
         }
         for key, val in defaults.items():
-            c.execute(
-                "INSERT OR IGNORE INTO mea_state (key, value) VALUES (?, ?)",
-                (key, val),
-            )
+            c.execute("INSERT OR IGNORE INTO mea_state (key, value) VALUES (?, ?)", (key, val))
         self.conn.commit()
         log.debug("[DB] 默认状态初始化完成")
 
     # ========================
     # 状态读写
     # ========================
-    def _get_state(self, key: str, default: str = "") -> str:
+    def _get_state(self, key, default=""):
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT value FROM mea_state WHERE key = ?", (key,))
             row = c.fetchone()
             return row["value"] if row else default
 
-    def _set_state(self, key: str, value: str):
+    def _set_state(self, key, value):
         with self._lock:
             self._set_state_unlocked(key, value)
 
-    def _set_state_unlocked(self, key: str, value: str):
+    def _set_state_unlocked(self, key, value):
         c = self.conn.cursor()
         c.execute("INSERT OR REPLACE INTO mea_state (key, value) VALUES (?, ?)", (key, value))
         self.conn.commit()
@@ -425,7 +445,7 @@ class MeaMemory:
     def get_affection(self) -> int:
         return int(self._get_state("affection", "5"))
 
-    def get_affection_tier(self) -> Tuple[int, str, str]:
+    def get_affection_tier(self):
         aff = self.get_affection()
         tier = AFFECTION_TIERS[0]
         for t in AFFECTION_TIERS:
@@ -433,13 +453,13 @@ class MeaMemory:
                 tier = t
         return tier
 
-    def add_affection(self, delta: int = 1):
+    def add_affection(self, delta=1):
         today = datetime.now().strftime("%Y-%m-%d")
         gained_key = f"affection_gained_{today}"
         with self._lock:
             gained_today = int(self._get_state(gained_key, "0"))
             if gained_today >= AFFECTION_DAILY_CAP:
-                log.debug(f"[DB] 好感度已达每日上限，跳过")
+                log.debug("[DB] 好感度已达每日上限，跳过")
                 return None
             actual = min(delta, AFFECTION_DAILY_CAP - gained_today)
             current = int(self._get_state("affection", "5"))
@@ -458,51 +478,49 @@ class MeaMemory:
             return upgrade_line
         return None
 
-    def _get_tier_for(self, affection: int) -> Tuple[int, str, str]:
+    def _get_tier_for(self, affection):
         tier = AFFECTION_TIERS[0]
         for t in AFFECTION_TIERS:
             if affection >= t[0]:
                 tier = t
         return tier
 
-    def get_mood(self) -> str:
+    def get_mood(self):
         return self._get_state("mood", "平静")
 
-    def set_mood(self, mood: str):
+    def set_mood(self, mood):
         with self._lock:
             old = self._get_state("mood", "平静")
             self._set_state_unlocked("mood", mood)
             self._set_state_unlocked("mood_updated", str(time.time()))
             log.debug(f"[DB] 心情变更 {old}→{mood}")
 
-    def get_last_chat_time(self) -> float:
+    def get_last_chat_time(self):
         return float(self._get_state("last_chat", "0"))
 
-    def get_total_chats(self) -> int:
+    def get_total_chats(self):
         return int(self._get_state("total_chats", "0"))
 
-    def get_total_days(self) -> int:
+    def get_total_days(self):
         return int(self._get_state("total_days", "0"))
 
-    def get_first_met(self) -> float:
+    def get_first_met(self):
         return float(self._get_state("first_met", str(time.time())))
 
-    def get_master_name(self) -> str:
+    def get_master_name(self):
         return self._get_state("master_name", "主人")
 
-    def get_nickname(self) -> str:
+    def get_nickname(self):
         return self._get_state("nickname", "")
 
     # ========================
     # 对话历史
     # ========================
-    def add_chat(self, role: str, content: str, mood: str = "neutral"):
+    def add_chat(self, role, content, mood="neutral"):
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                "INSERT INTO chat_history (role, content, mood, timestamp) VALUES (?, ?, ?, ?)",
-                (role, content, mood, time.time()),
-            )
+            c.execute("INSERT INTO chat_history (role, content, mood, timestamp) VALUES (?, ?, ?, ?)",
+                      (role, content, mood, time.time()))
             self.conn.commit()
         self._set_state("last_chat", str(time.time()))
         if role == "mea":
@@ -515,32 +533,20 @@ class MeaMemory:
             self._set_state("total_days", str(days))
         log.debug(f"[DB] 添加聊天记录 role={role} len={len(content)}")
 
-    def get_recent_chats(self, limit: int = 20, exclude_summarized: bool = True) -> List[Dict]:
+    def get_recent_chats(self, limit=20, exclude_summarized=True):
         with self._lock:
             c = self.conn.cursor()
             if exclude_summarized:
-                c.execute(
-                    "SELECT role, content, mood, timestamp FROM chat_history "
-                    "WHERE summarized = 0 ORDER BY id DESC LIMIT ?",
-                    (limit,),
-                )
+                c.execute("SELECT role, content, mood, timestamp FROM chat_history WHERE summarized = 0 ORDER BY id DESC LIMIT ?", (limit,))
             else:
-                c.execute(
-                    "SELECT role, content, mood, timestamp FROM chat_history "
-                    "ORDER BY id DESC LIMIT ?",
-                    (limit,),
-                )
+                c.execute("SELECT role, content, mood, timestamp FROM chat_history ORDER BY id DESC LIMIT ?", (limit,))
             rows = c.fetchall()
         result = []
         for r in reversed(rows):
-            result.append({
-                "role": r["role"],
-                "content": r["content"],
-                "mood": r["mood"],
-            })
+            result.append({"role": r["role"], "content": r["content"], "mood": r["mood"]})
         return result
 
-    def get_recent_chat_count(self, hours: float = 24) -> int:
+    def get_recent_chat_count(self, hours=24):
         with self._lock:
             c = self.conn.cursor()
             since = time.time() - hours * 3600
@@ -551,8 +557,12 @@ class MeaMemory:
     # ========================
     # 隔离会话时间线
     # ========================
-    def save_conversation_turn(self, turn, *, max_turns: int = 5) -> None:
-        """保存一个终态交互，并按 ConversationKey 独立裁剪。"""
+    def save_conversation_turn(self, turn, *, max_turns=5, text_attachments=None) -> None:
+        """
+        保存一个终态交互，并按 ConversationKey 独立裁剪。
+        text_attachments: 可选，TextAttachment 列表或任意含 file_name/sha256 的可迭代对象。
+                          仅持久化 file_name + sha256（不存全文）。
+        """
         from meapet.conversation.timeline import TurnTranscript
 
         if not isinstance(turn, TurnTranscript):
@@ -562,75 +572,48 @@ class MeaMemory:
         with self._lock:
             c = self.conn.cursor()
             if limit == 0:
-                c.execute(
-                    "DELETE FROM conversation_turns "
-                    "WHERE mode = ? AND profile_id = ? AND session_id = ?",
-                    (key.mode, key.profile_id, key.session_id),
-                )
+                c.execute("DELETE FROM conversation_turns WHERE mode = ? AND profile_id = ? AND session_id = ?",
+                          (key.mode, key.profile_id, key.session_id))
                 self.conn.commit()
                 return
 
-            segments = json.dumps(
-                [
-                    {
-                        "index": segment.index,
-                        "display_text": segment.display_text,
-                        "voice_text": segment.voice_text,
-                        "voice_language": segment.voice_language,
-                        "mood": segment.mood,
-                        "tts_style": segment.tts_style,
-                    }
-                    for segment in turn.segments
-                ],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            system_entries = json.dumps(
-                [
-                    {
-                        "state": entry.state,
-                        "safe_text": entry.safe_text,
-                        "created_at": entry.created_at,
-                    }
-                    for entry in turn.system_entries
-                ],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            c.execute(
-                """
+            segments = json.dumps([
+                {"index": seg.index, "display_text": seg.display_text,
+                 "voice_text": seg.voice_text, "voice_language": seg.voice_language,
+                 "mood": seg.mood, "tts_style": seg.tts_style}
+                for seg in turn.segments
+            ], ensure_ascii=False, separators=(",", ":"))
+            system_entries = json.dumps([
+                {"state": e.state, "safe_text": e.safe_text, "created_at": e.created_at}
+                for e in turn.system_entries
+            ], ensure_ascii=False, separators=(",", ":"))
+            # 文件附件：仅存 file_name + sha256（脱敏，不存全文）
+            file_attachments_json = _serialize_file_attachments(text_attachments)
+
+            c.execute("""
                 INSERT INTO conversation_turns (
                     mode, profile_id, session_id, turn_id, source, user_text,
-                    segments, system_entries, created_at, updated_at,
+                    segments, system_entries, file_attachments, created_at, updated_at,
                     status, error_text
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(mode, profile_id, session_id, turn_id) DO UPDATE SET
                     source = excluded.source,
                     user_text = excluded.user_text,
                     segments = excluded.segments,
                     system_entries = excluded.system_entries,
+                    file_attachments = excluded.file_attachments,
                     created_at = excluded.created_at,
                     updated_at = excluded.updated_at,
                     status = excluded.status,
                     error_text = excluded.error_text
-                """,
-                (
-                    key.mode,
-                    key.profile_id,
-                    key.session_id,
-                    turn.turn_id,
-                    turn.source,
-                    turn.user_text,
-                    segments,
-                    system_entries,
-                    float(turn.created_at),
-                    float(turn.updated_at),
-                    turn.status,
-                    turn.error_text,
-                ),
-            )
-            c.execute(
-                """
+            """, (
+                key.mode, key.profile_id, key.session_id, turn.turn_id,
+                turn.source, turn.user_text, segments, system_entries,
+                file_attachments_json,
+                float(turn.created_at), float(turn.updated_at),
+                turn.status, turn.error_text,
+            ))
+            c.execute("""
                 DELETE FROM conversation_turns
                 WHERE mode = ? AND profile_id = ? AND session_id = ?
                   AND turn_id NOT IN (
@@ -639,25 +622,21 @@ class MeaMemory:
                     ORDER BY updated_at DESC, turn_id DESC
                     LIMIT ?
                   )
-                """,
-                (
-                    key.mode,
-                    key.profile_id,
-                    key.session_id,
-                    key.mode,
-                    key.profile_id,
-                    key.session_id,
-                    limit,
-                ),
-            )
+            """, (key.mode, key.profile_id, key.session_id,
+                  key.mode, key.profile_id, key.session_id, limit))
             self.conn.commit()
+            if text_attachments:
+                try:
+                    att_list = json.loads(file_attachments_json)
+                    log.debug(f"[DB] 保存对话轮次 turn_id={turn.turn_id} "
+                              f"file_attachments={len(att_list)} 个（仅存文件名+哈希，不存全文）")
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-    def load_conversation_turns(self, *, max_total: int = 500):
+    def load_conversation_turns(self, *, max_total=500):
         """读取最近的本地投影；坏记录逐条跳过，不影响启动。"""
         from meapet.conversation.timeline import (
-            ConversationKey,
-            SystemTimelineEntry,
-            TurnTranscript,
+            ConversationKey, SystemTimelineEntry, TurnTranscript,
         )
         from meapet.conversation.types import ReplySegment
 
@@ -666,12 +645,7 @@ class MeaMemory:
             return ()
         with self._lock:
             rows = self.conn.execute(
-                """
-                SELECT * FROM conversation_turns
-                ORDER BY updated_at DESC, turn_id DESC
-                LIMIT ?
-                """,
-                (limit,),
+                "SELECT * FROM conversation_turns ORDER BY updated_at DESC, turn_id DESC LIMIT ?", (limit,)
             ).fetchall()
 
         turns = []
@@ -679,10 +653,7 @@ class MeaMemory:
             try:
                 raw_segments = json.loads(row["segments"] or "[]")
                 raw_entries = json.loads(row["system_entries"] or "[]")
-                if not isinstance(raw_segments, list) or not isinstance(
-                    raw_entries,
-                    list,
-                ):
+                if not isinstance(raw_segments, list) or not isinstance(raw_entries, list):
                     continue
                 segments = tuple(
                     ReplySegment(
@@ -708,24 +679,21 @@ class MeaMemory:
                 status = str(row["status"] or "error").strip().lower()
                 if status not in {"complete", "error", "cancelled"}:
                     status = "error"
-                turns.append(
-                    TurnTranscript(
-                        conversation_key=ConversationKey(
-                            row["mode"],
-                            row["profile_id"],
-                            row["session_id"],
-                        ),
-                        turn_id=str(row["turn_id"] or "")[:256],
-                        source=str(row["source"] or "system")[:64],
-                        user_text=str(row["user_text"] or "")[:100_000],
-                        segments=segments,
-                        system_entries=entries,
-                        created_at=float(row["created_at"]),
-                        updated_at=float(row["updated_at"]),
-                        status=status,
-                        error_text=str(row["error_text"] or "")[:10_000],
-                    )
-                )
+                # 解析 file_attachments（仅元数据）
+                file_attachments = _deserialize_file_attachments(row["file_attachments"] or "[]")
+                turns.append({
+                    "conversation_key": ConversationKey(row["mode"], row["profile_id"], row["session_id"]),
+                    "turn_id": str(row["turn_id"] or "")[:256],
+                    "source": str(row["source"] or "system")[:64],
+                    "user_text": str(row["user_text"] or "")[:100_000],
+                    "segments": segments,
+                    "system_entries": entries,
+                    "file_attachments": file_attachments,
+                    "created_at": float(row["created_at"]),
+                    "updated_at": float(row["updated_at"]),
+                    "status": status,
+                    "error_text": str(row["error_text"] or "")[:10_000],
+                })
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 continue
         return tuple(turns)
@@ -733,17 +701,15 @@ class MeaMemory:
     # ========================
     # 事件日志
     # ========================
-    def add_event(self, event_type: str, description: str, data: dict = None):
+    def add_event(self, event_type, description, data=None):
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                "INSERT INTO events (event_type, description, data, timestamp) VALUES (?, ?, ?, ?)",
-                (event_type, description, json.dumps(data or {}, ensure_ascii=False), time.time()),
-            )
+            c.execute("INSERT INTO events (event_type, description, data, timestamp) VALUES (?, ?, ?, ?)",
+                      (event_type, description, json.dumps(data or {}, ensure_ascii=False), time.time()))
             self.conn.commit()
         log.debug(f"[DB] 添加事件 {event_type}: {description}")
 
-    def get_recent_events(self, limit: int = 10) -> List[Dict]:
+    def get_recent_events(self, limit=10):
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))
@@ -752,52 +718,32 @@ class MeaMemory:
     # ========================
     # 记忆 CRUD
     # ========================
-    def create_memory(
-        self,
-        content: str,
-        importance: int = 1,
-        memory_type: str = "fact",
-        tags: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        source_ids: Optional[List[int]] = None,
-        decay_factor: float = 1.0,
-    ) -> int:
+    def create_memory(self, content, importance=1, memory_type="fact",
+                      tags=None, metadata=None, source_ids=None, decay_factor=1.0):
         t0 = time.perf_counter()
         emb = _compute_embedding(content)
         now = time.time()
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                """INSERT INTO memories
+            c.execute("""INSERT INTO memories
                    (content, importance, memory_type, tags, metadata, embedding,
                     decay_factor, created, updated, last_recalled, access_count, source_ids)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    content,
-                    importance,
-                    memory_type,
-                    json.dumps(tags or [], ensure_ascii=False),
-                    json.dumps(metadata or {}, ensure_ascii=False),
-                    json.dumps(emb, ensure_ascii=False),
-                    decay_factor,
-                    now,
-                    now,
-                    now,
-                    1,
-                    json.dumps(source_ids or [], ensure_ascii=False),
-                ),
-            )
+                      (content, importance, memory_type,
+                       json.dumps(tags or [], ensure_ascii=False),
+                       json.dumps(metadata or {}, ensure_ascii=False),
+                       json.dumps(emb, ensure_ascii=False), decay_factor, now, now, now, 1,
+                       json.dumps(source_ids or [], ensure_ascii=False)))
             mid = c.lastrowid
             self._emb_cache_put(mid, emb)
             self.conn.commit()
-            # 总量上限裁剪
             pruned = self._enforce_memory_cap(avoid_type=("milestone",))
             elapsed = (time.perf_counter() - t0) * 1000
             log.debug(f"[DB] 创建记忆 id={mid} type={memory_type} imp={importance} "
                       f"emb_dims={len(emb)} pruned={pruned} ({elapsed:.1f}ms)")
             return mid
 
-    def get_memory(self, memory_id: int) -> Optional[Dict[str, Any]]:
+    def get_memory(self, memory_id):
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT * FROM memories WHERE id = ?", (memory_id,))
@@ -809,7 +755,7 @@ class MeaMemory:
             log.debug(f"[DB] 获取记忆 id={memory_id} → {d.get('memory_type', '?')} imp={d.get('importance')}")
             return d
 
-    def _row_to_memory_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_memory_dict(self, row):
         d = dict(row)
         for field in ("tags", "metadata", "embedding", "source_ids"):
             if isinstance(d.get(field), str) and d[field]:
@@ -819,11 +765,8 @@ class MeaMemory:
                     pass
         return d
 
-    def update_memory(self, memory_id: int, **kwargs) -> bool:
-        allowed = {
-            "content", "importance", "memory_type", "tags",
-            "metadata", "decay_factor", "source_ids",
-        }
+    def update_memory(self, memory_id, **kwargs):
+        allowed = {"content", "importance", "memory_type", "tags", "metadata", "decay_factor", "source_ids"}
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             return False
@@ -831,7 +774,6 @@ class MeaMemory:
         if "content" in updates:
             emb = _compute_embedding(updates["content"])
             updates["embedding"] = json.dumps(emb, ensure_ascii=False)
-        # Serialize complex fields
         for field in ("tags", "metadata", "source_ids"):
             if field in updates and not isinstance(updates[field], str):
                 updates[field] = json.dumps(updates[field], ensure_ascii=False)
@@ -843,7 +785,6 @@ class MeaMemory:
             self.conn.commit()
             ok = c.rowcount > 0
             if ok:
-                # 刷新缓存
                 if "content" in updates:
                     self._emb_cache_put(memory_id, emb)
                 else:
@@ -851,7 +792,7 @@ class MeaMemory:
             log.debug(f"[DB] 更新记忆 id={memory_id} → {'成功' if ok else '未找到'} fields={list(updates.keys())}")
             return ok
 
-    def delete_memory(self, memory_id: int) -> bool:
+    def delete_memory(self, memory_id):
         with self._lock:
             c = self.conn.cursor()
             c.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
@@ -862,15 +803,8 @@ class MeaMemory:
             log.debug(f"[DB] 删除记忆 id={memory_id} → {'成功' if ok else '未找到'}")
             return ok
 
-    def list_memories(
-        self,
-        page: int = 1,
-        page_size: int = 20,
-        sort_by: str = "created",
-        memory_type: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        include_archived: bool = False,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    def list_memories(self, page=1, page_size=20, sort_by="created",
+                      memory_type=None, tags=None, include_archived=False):
         conditions = []
         params = []
         if memory_type:
@@ -889,39 +823,27 @@ class MeaMemory:
             c.execute(count_sql, params)
             total = c.fetchone()[0]
             offset = (page - 1) * page_size
-            c.execute(
-                f"SELECT * FROM memories{where} ORDER BY {sort_by} DESC LIMIT ? OFFSET ?",
-                params + [page_size, offset],
-            )
+            c.execute(f"SELECT * FROM memories{where} ORDER BY {sort_by} DESC LIMIT ? OFFSET ?",
+                      params + [page_size, offset])
             rows = [self._row_to_memory_dict(r) for r in c.fetchall()]
         log.debug(f"[DB] 列出记忆 page={page} size={page_size} total={total} 返回={len(rows)}条")
         return rows, total
 
-    def get_memories_by_tag(self, tag: str) -> List[Dict[str, Any]]:
+    def get_memories_by_tag(self, tag):
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT * FROM memories WHERE tags LIKE ? ORDER BY importance DESC", (f'%"{tag}"%',))
             return [self._row_to_memory_dict(r) for r in c.fetchall()]
 
-    # ========================
-    # 旧 API 兼容（委托给新方法）
-    # ========================
-    def add_memory(self, content: str, importance: int = 1, source: str = ""):
-        self.create_memory(
-            content=content,
-            importance=importance,
-            memory_type="fact",
-            metadata={"source": source} if source else None,
-        )
+    def add_memory(self, content, importance=1, source=""):
+        self.create_memory(content=content, importance=importance, memory_type="fact",
+                          metadata={"source": source} if source else None)
         log.debug(f"[DB] add_memory（旧API）content_len={len(content)} imp={importance}")
 
-    def get_important_memories(self, limit: int = 10) -> List[str]:
+    def get_important_memories(self, limit=10):
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                "SELECT content FROM memories ORDER BY importance DESC, last_recalled DESC LIMIT ?",
-                (limit,),
-            )
+            c.execute("SELECT content FROM memories ORDER BY importance DESC, last_recalled DESC LIMIT ?", (limit,))
             rows = [r["content"] for r in c.fetchall()]
         log.debug(f"[DB] 获取重要记忆：返回 {len(rows)} 条")
         return rows
@@ -929,24 +851,21 @@ class MeaMemory:
     # ========================
     # 主人信息
     # ========================
-    def set_master_info(self, key: str, value: str):
+    def set_master_info(self, key, value):
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                "INSERT OR REPLACE INTO master_info (key, value, updated) VALUES (?, ?, ?)",
-                (key, value, time.time()),
-            )
+            c.execute("INSERT OR REPLACE INTO master_info (key, value, updated) VALUES (?, ?, ?)", (key, value, time.time()))
             self.conn.commit()
         log.debug(f"[DB] 设置主人信息 {key}={value}")
 
-    def get_master_info(self, key: str) -> Optional[str]:
+    def get_master_info(self, key):
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT value FROM master_info WHERE key = ?", (key,))
             row = c.fetchone()
             return row["value"] if row else None
 
-    def get_all_master_info(self) -> Dict[str, str]:
+    def get_all_master_info(self):
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT key, value FROM master_info")
@@ -955,13 +874,7 @@ class MeaMemory:
     # ========================
     # 语义检索
     # ========================
-    def search_memories(
-        self,
-        query: str,
-        limit: int = 7,
-        memory_type: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+    def search_memories(self, query, limit=7, memory_type=None, tags=None):
         t0 = time.perf_counter()
         self._ensure_emb_cache()
         query_emb = _compute_embedding(query)
@@ -988,15 +901,12 @@ class MeaMemory:
             log.debug(f"[SRCH] query={query!r} → 空结果集 (type={memory_type}, tags={tags})")
             return []
 
-        # 无 query embedding → 纯重要度排序
         if not query_emb:
             rows.sort(key=lambda r: (r.get("importance", 1), r.get("last_recalled") or 0), reverse=True)
             top = rows[:limit]
             self._mark_recalled(top)
             elapsed = (time.perf_counter() - t0) * 1000
             log.debug(f"[SRCH] query={query!r} → 无嵌入, 纯重要度排序 {len(top)}条/共{total_candidates} ({elapsed:.1f}ms)")
-            # 统一经 _row_to_memory_dict：tags/metadata/source_ids 必须是解析后的对象，
-            # 否则调用方按列表拼接时会把 JSON 字符串拆成单字符。
             return [self._row_to_memory_dict(r) for r in top]
 
         scored = []
@@ -1004,7 +914,6 @@ class MeaMemory:
             mid = r["id"]
             stored_emb = self._emb_cache_get(mid)
             if not stored_emb:
-                # 缓存缺失（新数据或异常）→ 即时解析一次
                 r["embedding"] = self._row_to_memory_dict(r).get("embedding", [])
                 if isinstance(r["embedding"], list):
                     stored_emb = r["embedding"]
@@ -1018,17 +927,15 @@ class MeaMemory:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         result = [r for _, _, r in scored[:limit]]
-
         self._mark_recalled(result)
         elapsed = (time.perf_counter() - t0) * 1000
         max_sim = scored[0][1] if scored else 0.0
         min_sim = scored[-1][1] if scored else 0.0
         log.debug(f"[SRCH] query={query!r} → {len(result)}条/共{total_candidates}候选 "
                   f"sim范围=[{min_sim:.3f},{max_sim:.3f}] query_emb_dims={len(query_emb)} ({elapsed:.1f}ms)")
-        # 同上：返回前解析 JSON 字段，保证 tags 等按列表语义交给上层
         return [self._row_to_memory_dict(r) for r in result]
 
-    def _mark_recalled(self, memories: List[Dict[str, Any]]):
+    def _mark_recalled(self, memories):
         if not memories:
             return
         now = time.time()
@@ -1038,18 +945,13 @@ class MeaMemory:
                 mid = m.get("id")
                 if mid is None:
                     continue
-                c.execute(
-                    "UPDATE memories SET last_recalled = ?, access_count = access_count + 1 WHERE id = ?",
-                    (now, mid),
-                )
+                c.execute("UPDATE memories SET last_recalled = ?, access_count = access_count + 1 WHERE id = ?", (now, mid))
             self.conn.commit()
 
     # ========================
     # 记忆总量上限
     # ========================
-    def _enforce_memory_cap(self, avoid_type: Tuple[str, ...] = ()) -> int:
-        """当记忆数超过 MAX_MEMORIES 时，裁剪最旧低重要度记录。
-        返回本次裁剪数量。"""
+    def _enforce_memory_cap(self, avoid_type=()):
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT COUNT(*) FROM memories")
@@ -1057,31 +959,21 @@ class MeaMemory:
             if total <= MAX_MEMORIES:
                 return 0
             excess = total - MAX_MEMORIES
-            # 裁剪重要性最低且最久未召回的（排除 protect_type）
             type_expr = ""
-            params: list = []
+            params = []
             if avoid_type:
                 placeholders = ", ".join("?" for _ in avoid_type)
                 type_expr = f"AND memory_type NOT IN ({placeholders})"
                 params = list(avoid_type)
-            c.execute(
-                f"SELECT id FROM memories WHERE importance <= 2 {type_expr} "
-                f"ORDER BY importance ASC, last_recalled ASC, id ASC LIMIT ?",
-                params + [excess],
-            )
+            c.execute(f"SELECT id FROM memories WHERE importance <= 2 {type_expr} "
+                      f"ORDER BY importance ASC, last_recalled ASC, id ASC LIMIT ?", params + [excess])
             ids = [r["id"] for r in c.fetchall()]
             if not ids:
-                # 重要度裁剪不够，直接按 last_recalled 裁。
-                # 此处无 importance 前置条件，type_expr 的 "AND ..." 不能直接拼，
-                # 否则得到 "FROM memories AND ..." 的语法错，需改用独立 WHERE。
                 where_expr = ""
                 if avoid_type:
                     where_expr = f"WHERE memory_type NOT IN ({placeholders})"
-                c.execute(
-                    f"SELECT id FROM memories {where_expr} "
-                    f"ORDER BY last_recalled ASC, id ASC LIMIT ?",
-                    params + [excess],
-                )
+                c.execute(f"SELECT id FROM memories {where_expr} "
+                          f"ORDER BY last_recalled ASC, id ASC LIMIT ?", params + [excess])
                 ids = [r["id"] for r in c.fetchall()]
             for mid in ids:
                 c.execute("DELETE FROM memories WHERE id = ?", (mid,))
@@ -1101,7 +993,6 @@ class MeaMemory:
         log.debug("[LIFY] 开始生命周期维护")
         self._ensure_emb_cache()
 
-        # 1. 重要性衰减（幂等：用 last_decay 做衰减检查点，避免重复衰减）
         decay_count = 0
         with self._lock:
             c = self.conn.cursor()
@@ -1123,7 +1014,6 @@ class MeaMemory:
         if decay_count:
             log.debug(f"[LIFY] 重要性衰减：{decay_count} 条（幂等）")
 
-        # 2. 哈希精确去重（低成本）
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT id, content FROM memories ORDER BY id")
@@ -1145,15 +1035,11 @@ class MeaMemory:
                 self.conn.commit()
             log.debug(f"[LIFY] 精确去重：删除 {len(dup_ids)} 条完全重复")
 
-        # 3. 合并相似记忆（安全版，限制 top-N 避免 O(N²)）
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                "SELECT id, content, importance, memory_type, tags, metadata, "
-                "access_count, created, updated, source_ids FROM memories "
-                "ORDER BY importance DESC LIMIT ?",
-                (MAX_CONSOLIDATION_MEMORIES,),
-            )
+            c.execute("SELECT id, content, importance, memory_type, tags, metadata, "
+                      "access_count, created, updated, source_ids FROM memories "
+                      "ORDER BY importance DESC LIMIT ?", (MAX_CONSOLIDATION_MEMORIES,))
             all_mems = [dict(r) for r in c.fetchall()]
         total_considered = len(all_mems)
         merged_ids = set()
@@ -1179,50 +1065,31 @@ class MeaMemory:
                 created_a = a.get("created") or 0
                 created_b = b.get("created") or 0
                 target, victim = (a, b) if created_a >= created_b else (b, a)
-                merged_tags = list(set(
-                    self._parse_json_list(target.get("tags")) +
-                    self._parse_json_list(victim.get("tags"))
-                ))
-                merged_meta = {**self._parse_json_dict(victim.get("metadata")),
-                               **self._parse_json_dict(target.get("metadata"))}
+                merged_tags = list(set(self._parse_json_list(target.get("tags")) + self._parse_json_list(victim.get("tags"))))
+                merged_meta = {**self._parse_json_dict(victim.get("metadata")), **self._parse_json_dict(target.get("metadata"))}
                 merged_access = (target.get("access_count") or 1) + (victim.get("access_count") or 1)
                 merged_imp = max(target["importance"], victim["importance"])
-                merged_source = list(set(
-                    self._parse_json_list(target.get("source_ids")) +
-                    self._parse_json_list(victim.get("source_ids"))
-                ))
+                merged_source = list(set(self._parse_json_list(target.get("source_ids")) + self._parse_json_list(victim.get("source_ids"))))
                 merge_count += 1
                 with self._lock:
                     c = self.conn.cursor()
-                    c.execute(
-                        "UPDATE memories SET tags=?, metadata=?, access_count=?, "
-                        "importance=?, source_ids=?, updated=? WHERE id=?",
-                        (
-                            json.dumps(merged_tags, ensure_ascii=False),
-                            json.dumps(merged_meta, ensure_ascii=False),
-                            merged_access, merged_imp,
-                            json.dumps(merged_source, ensure_ascii=False),
-                            now, target["id"],
-                        ),
-                    )
-                    c.execute("UPDATE memories SET importance=0, updated=? WHERE id=?",
-                              (now, victim["id"]))
+                    c.execute("UPDATE memories SET tags=?, metadata=?, access_count=?, importance=?, source_ids=?, updated=? WHERE id=?",
+                              (json.dumps(merged_tags, ensure_ascii=False), json.dumps(merged_meta, ensure_ascii=False),
+                               merged_access, merged_imp, json.dumps(merged_source, ensure_ascii=False), now, target["id"]))
+                    c.execute("UPDATE memories SET importance=0, updated=? WHERE id=?", (now, victim["id"]))
                     self.conn.commit()
                 merged_ids.add(victim["id"])
                 self._emb_cache_remove(victim["id"])
         if merge_count:
             log.debug(f"[LIFY] 合并相似记忆：{merge_count} 组（扫描 {total_considered} 条 top 高重要度）")
 
-        # 4. 清理过期低重要性记忆（含合并后 importance=0 的记录）
         prune_count = 0
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                "SELECT id FROM memories WHERE importance <= ? "
-                "AND memory_type NOT IN ('summary', 'milestone') "
-                "AND (last_recalled IS NULL OR ? - last_recalled >= ?)",
-                (PRUNE_IMPORTANCE_FLOOR, now, PRUNE_DAYS * 86400),
-            )
+            c.execute("SELECT id FROM memories WHERE importance <= ? "
+                      "AND memory_type NOT IN ('summary', 'milestone') "
+                      "AND (last_recalled IS NULL OR ? - last_recalled >= ?)",
+                      (PRUNE_IMPORTANCE_FLOOR, now, PRUNE_DAYS * 86400))
             for row in c.fetchall():
                 c.execute("DELETE FROM memories WHERE id = ?", (row["id"],))
                 self._emb_cache_remove(row["id"])
@@ -1234,47 +1101,31 @@ class MeaMemory:
         elapsed = (time.perf_counter() - t0) * 1000
         log.debug(f"[LIFY] 生命周期维护完成 ({elapsed:.1f}ms)")
 
-    # jieba 词级矛盾检测对
-    # jieba 会将 "不喜欢" 切为 ["不", "喜欢"]，故用 ("不", base) 形式 + 反义词对
     CONTRADICTION_PAIRS = [
-        # 否定对：("不", base_word)  →  检测一方有 base_word 且无 "不"，另一方有 "不"+base
-        ("不", "喜欢"),  # 喜欢 ↔ 不喜欢
-        ("不", "讨厌"),  # 讨厌 ↔ 不讨厌
-        ("不", "想要"),  # 想要 ↔ 不想要
-        ("不", "想"),    # 想 ↔ 不想
-        ("不", "会"),    # 会 ↔ 不会
-        ("不", "能"),    # 能 ↔ 不能
-        ("不", "可以"),  # 可以 ↔ 不可以
-        ("不", "愿意"),  # 愿意 ↔ 不愿意
-        # 反义词对：存在任一方向即矛盾
+        ("不", "喜欢"), ("不", "讨厌"), ("不", "想要"), ("不", "想"),
+        ("不", "会"), ("不", "能"), ("不", "可以"), ("不", "愿意"),
         ("喜欢", "讨厌"),
     ]
 
     @staticmethod
-    def _has_contradiction(text_a: str, text_b: str) -> bool:
-        """词级矛盾检测：jieba 分词后检查词级否定/反义关系，避免子串误判。"""
+    def _has_contradiction(text_a, text_b):
         _ensure_jieba()
         toks_a = set(jieba.lcut(text_a.strip().lower()))
         toks_b = set(jieba.lcut(text_b.strip().lower()))
         has_not_a = "不" in toks_a
         has_not_b = "不" in toks_b
-
         for x, y in MeaMemory.CONTRADICTION_PAIRS:
             if x == "不":
-                # 否定对：y 是 base word
                 a_pos = y in toks_a and not has_not_a
                 b_pos = y in toks_b and not has_not_b
                 a_neg = y in toks_a and has_not_a
                 b_neg = y in toks_b and has_not_b
                 if (a_pos and b_neg) or (b_pos and a_neg):
-                    log.debug(f"[CTR] 矛盾否定对 base={y} "
-                              f"a={text_a[:30]!r} b={text_b[:30]!r}")
+                    log.debug(f"[CTR] 矛盾否定对 base={y} a={text_a[:30]!r} b={text_b[:30]!r}")
                     return True
             else:
-                # 反义词对
                 if (x in toks_a and y in toks_b) or (x in toks_b and y in toks_a):
-                    log.debug(f"[CTR] 矛盾反义对 ({x},{y}) "
-                              f"a={text_a[:30]!r} b={text_b[:30]!r}")
+                    log.debug(f"[CTR] 矛盾反义对 ({x},{y}) a={text_a[:30]!r} b={text_b[:30]!r}")
                     return True
         return False
 
@@ -1313,8 +1164,7 @@ class MeaMemory:
     # ========================
     # 对话摘要
     # ========================
-    def check_summarization_trigger(self) -> bool:
-        """每 SUMMARIZE_EVERY_N 条消息触发一次"""
+    def check_summarization_trigger(self):
         count = int(self._get_state("messages_since_summary", "0"))
         triggered = count >= SUMMARIZE_EVERY_N
         if triggered:
@@ -1329,14 +1179,10 @@ class MeaMemory:
     def reset_summarization_counter(self):
         self._set_state("messages_since_summary", "0")
 
-    def prepare_summarization_context(self, limit: int = SUMMARY_CHAT_LIMIT) -> Tuple[Optional[List[Dict]], Optional[List[int]]]:
-        """返回 (对话列表, id列表) 用于 LLM 摘要。如果不够长则返回 None"""
+    def prepare_summarization_context(self, limit=SUMMARY_CHAT_LIMIT):
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                "SELECT id, role, content FROM chat_history WHERE summarized = 0 ORDER BY id DESC LIMIT ?",
-                (limit,),
-            )
+            c.execute("SELECT id, role, content FROM chat_history WHERE summarized = 0 ORDER BY id DESC LIMIT ?", (limit,))
             rows = c.fetchall()
         if len(rows) < 4:
             log.debug(f"[DB] 准备摘要上下文：未摘要消息仅 {len(rows)} 条，跳过")
@@ -1350,17 +1196,9 @@ class MeaMemory:
         log.debug(f"[DB] 准备摘要上下文：{len(ids)} 条消息 id={ids}")
         return chats, ids
 
-    def store_summary(self, summary_text: str, source_ids: List[int], importance: int = 3):
-        """将 LLM 生成的摘要存为 memory"""
-        mem_id = self.create_memory(
-            content=summary_text,
-            importance=importance,
-            memory_type="summary",
-            tags=["auto-summary"],
-            source_ids=source_ids,
-            decay_factor=0.5,
-        )
-        # 标记已摘要
+    def store_summary(self, summary_text, source_ids, importance=3):
+        mem_id = self.create_memory(content=summary_text, importance=importance, memory_type="summary",
+                                    tags=["auto-summary"], source_ids=source_ids, decay_factor=0.5)
         with self._lock:
             c = self.conn.cursor()
             for sid in source_ids:
@@ -1369,43 +1207,27 @@ class MeaMemory:
         self.reset_summarization_counter()
         log.debug(f"[DB] 存储摘要 memory_id={mem_id} source_ids={source_ids}")
 
-    def store_chat_exchange(self, user_msg: str, mea_reply: str):
+    def store_chat_exchange(self, user_msg, mea_reply):
         if len(user_msg) + len(mea_reply) < 20:
             return
-        self.create_memory(
-            content=f"主人：{user_msg[:EXCHANGE_TRUNCATE]}\n梅尔：{mea_reply[:EXCHANGE_TRUNCATE]}",
-            importance=2,
-            memory_type="exchange",
-            tags=["conversation"],
-            decay_factor=0.8,
-        )
+        self.create_memory(content=f"主人：{user_msg[:EXCHANGE_TRUNCATE]}\n梅尔：{mea_reply[:EXCHANGE_TRUNCATE]}",
+                          importance=2, memory_type="exchange", tags=["conversation"], decay_factor=0.8)
         log.debug(f"[DB] 存储对话压缩记录 user={len(user_msg)} reply={len(mea_reply)}")
 
-    def get_recent_exchanges(self, limit: int = 10) -> List[str]:
+    def get_recent_exchanges(self, limit=10):
         with self._lock:
             c = self.conn.cursor()
-            c.execute(
-                "SELECT content FROM memories WHERE memory_type = ? ORDER BY id DESC LIMIT ?",
-                ("exchange", limit),
-            )
+            c.execute("SELECT content FROM memories WHERE memory_type = ? ORDER BY id DESC LIMIT ?", ("exchange", limit))
             rows = c.fetchall()
         return [r["content"] for r in reversed(rows)]
 
     # ========================
     # JSON 导入导出
     # ========================
-    def export_to_json(self, filepath: Optional[str] = None) -> dict:
-        data = {
-            "version": 2,
-            "exported_at": time.time(),
-            "memories": [],
-            "master_info": self.get_all_master_info(),
-            "events": [],
-            "state": {},
-        }
-        transient_keys = {
-            "affection_gained_", "chatted_", "messages_since_summary",
-        }
+    def export_to_json(self, filepath=None):
+        data = {"version": 2, "exported_at": time.time(), "memories": [],
+                "master_info": self.get_all_master_info(), "events": [], "state": {}}
+        transient_keys = {"affection_gained_", "chatted_", "messages_since_summary"}
         with self._lock:
             c = self.conn.cursor()
             c.execute("SELECT * FROM memories ORDER BY id")
@@ -1424,7 +1246,7 @@ class MeaMemory:
         log.debug(f"[DB] 导出 JSON：{len(data['memories'])} 条记忆，{len(data['events'])} 条事件")
         return data
 
-    def import_from_json(self, source: Any, merge: bool = False) -> int:
+    def import_from_json(self, source, merge=False):
         if isinstance(source, str):
             with open(source, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -1432,13 +1254,11 @@ class MeaMemory:
             data = source
         else:
             raise TypeError("source must be file path (str) or dict")
-
         if not merge:
             with self._lock:
                 c = self.conn.cursor()
                 c.execute("DELETE FROM memories")
                 self.conn.commit()
-
         existing_hashes = set()
         if merge:
             with self._lock:
@@ -1446,43 +1266,31 @@ class MeaMemory:
                 c.execute("SELECT content FROM memories")
                 for r in c.fetchall():
                     existing_hashes.add(_content_hash(r["content"]))
-
         imported = 0
         for mem in data.get("memories", []):
             if merge and _content_hash(mem.get("content", "")) in existing_hashes:
                 continue
-            self.create_memory(
-                content=mem.get("content", ""),
-                importance=mem.get("importance", 1),
-                memory_type=mem.get("memory_type", "fact"),
-                tags=mem.get("tags", []),
-                metadata=mem.get("metadata", {}),
-                source_ids=mem.get("source_ids", []),
-                decay_factor=mem.get("decay_factor", 1.0),
-            )
+            self.create_memory(content=mem.get("content", ""), importance=mem.get("importance", 1),
+                              memory_type=mem.get("memory_type", "fact"), tags=mem.get("tags", []),
+                              metadata=mem.get("metadata", {}), source_ids=mem.get("source_ids", []),
+                              decay_factor=mem.get("decay_factor", 1.0))
             imported += 1
-
         if "master_info" in data:
             for key, value in data["master_info"].items():
                 if isinstance(value, str):
                     self.set_master_info(key, value)
-
         if data.get("state"):
-            preserved_keys = {
-                "affection", "mood", "nickname", "master_name",
-                "total_chats", "total_days", "first_met",
-            }
+            preserved_keys = {"affection", "mood", "nickname", "master_name", "total_chats", "total_days", "first_met"}
             for key, value in data["state"].items():
                 if key in preserved_keys:
                     self._set_state(key, str(value))
-
         log.debug(f"[DB] 导入 JSON：{imported} 条（merge={merge}）")
         return imported
 
     # ========================
-    # 综合：LLM 上下文构建（语义版）
+    # 综合：LLM 上下文构建
     # ========================
-    def build_context_prompt(self, current_query: str = "") -> str:
+    def build_context_prompt(self, current_query=""):
         aff = self.get_affection()
         tier = self.get_affection_tier()
         mood = self.get_mood()
@@ -1490,7 +1298,6 @@ class MeaMemory:
         days = self.get_total_days()
         master_name = self.get_master_name()
         nickname = self.get_nickname()
-
         lines = []
         lines.append("## 与主人的关系")
         lines.append(f"- 好感度：{aff}/100（{tier[1]}）")
@@ -1499,14 +1306,11 @@ class MeaMemory:
         if nickname:
             lines.append(f"- 主人对你的昵称：{nickname}")
         lines.append(f"- 相识天数：{days}天，共对话{total_chats}次")
-
-        # 语义检索：用当前查询或最近对话内容
         search_query = current_query
         if not search_query:
             recent = self.get_recent_chats(2, exclude_summarized=True)
             if recent:
                 search_query = " ".join(c["content"] for c in recent[:2])
-
         relevant = self.search_memories(query=search_query, limit=7)
         if relevant:
             lines.append("")
@@ -1517,16 +1321,12 @@ class MeaMemory:
                 tag_str = f"[{', '.join(tags)}] " if tags else ""
                 prefix = {"summary": "📖 ", "fact": "  ", "exchange": "  "}.get(mtype, "  ")
                 lines.append(f"- {prefix}{tag_str}{m['content']}")
-
-        # 近期对话压缩记录（自动累积的历史上下文）
         exchanges = self.get_recent_exchanges(limit=10)
         if exchanges:
             lines.append("")
             lines.append("## 近期对话记录")
             for ex in exchanges:
                 lines.append(f"  {ex}")
-
-        # 最近未摘要对话
         recent = self.get_recent_chats(8, exclude_summarized=True)
         if recent:
             lines.append("")
@@ -1536,11 +1336,8 @@ class MeaMemory:
                     lines.append(f"主人（{master_name}）：{chat['content'][:80]}")
                 else:
                     lines.append(f"你：{chat['content'][:80]}")
-
         result = "\n".join(lines)
-        log.debug(f"[CTX] build_context: query={current_query!r} "
-                  f"memories={len(relevant)} exchanges={len(exchanges)} recent_chats={len(recent)} "
-                  f"aff={aff} mood={mood} tier={tier[1]}")
+        log.debug(f"[CTX] build_context: query={current_query!r} memories={len(relevant)} exchanges={len(exchanges)} recent_chats={len(recent)} aff={aff} mood={mood} tier={tier[1]}")
         return result
 
     # ========================
@@ -1557,9 +1354,7 @@ class MeaMemory:
         today_key = f"chatted_{today}"
         if self._get_state(today_key) == "":
             self._set_state(today_key, "0")
-        # 运行生命周期维护
         self.lifecycle_maintenance()
-        # 检查总量上限
         capped = self._enforce_memory_cap(avoid_type=("summary", "milestone"))
         elapsed = (time.perf_counter() - t0) * 1000
         log.debug(f"[MAINT] 每日维护完成（容量裁剪={capped}, {elapsed:.1f}ms）")
@@ -1571,10 +1366,9 @@ class MeaMemory:
         self._set_state(today_key, str(count + 1))
         log.debug(f"[DB] 标记今日已聊天 count={count + 1}")
 
-    def get_today_chat_count(self) -> int:
+    def get_today_chat_count(self):
         today = datetime.now().strftime("%Y-%m-%d")
-        count = int(self._get_state(f"chatted_{today}", "0"))
-        return count
+        return int(self._get_state(f"chatted_{today}", "0"))
 
     def close(self):
         cache_size = len(self._emb_cache)

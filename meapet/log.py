@@ -130,6 +130,73 @@ class ColorLogger(logging.Logger):
 logging.setLoggerClass(ColorLogger)
 
 
+# ====================== 文本附件日志脱敏 ======================
+class TextAttachmentSanitizer(logging.Filter):
+    """
+    日志过滤器：将日志记录中附带的 TextAttachment 对象序列化为脱敏摘要。
+
+    脱敏规则（对齐草案"日志需要脱敏"）：
+    - 仅保留 file_name / char_count / sha256 前 8 位
+    - 绝不记录 text_content（文件全文）
+    """
+
+    def filter(self, record):
+        # 处理 record 上直接挂载的 text_attachments 属性（列表/元组）
+        atts = getattr(record, "text_attachments", None)
+        if atts:
+            try:
+                record.text_attachments = [
+                    self._summarize(a) for a in atts
+                ]
+            except Exception:
+                record.text_attachments = "<sanitize-error>"
+        return True
+
+    @staticmethod
+    def _summarize(att) -> dict:
+        """从 TextAttachment 或 dict 提取脱敏摘要。"""
+        # 数据类路径：TextAttachment(file_name, text_content, char_count, sha256_hash)
+        name = getattr(att, "file_name", None)
+        chars = getattr(att, "char_count", None)
+        sha = getattr(att, "sha256_hash", None)
+        # dict 路径（兼容序列化后的字典）
+        if name is None and isinstance(att, dict):
+            name = att.get("file_name")
+        if chars is None and isinstance(att, dict):
+            chars = att.get("char_count")
+        if sha is None and isinstance(att, dict):
+            sha = att.get("sha256") or att.get("sha256_hash")
+        return {
+            "file_name": name,
+            "char_count": chars,
+            "sha256": (sha[:8] + "…") if isinstance(sha, str) and len(sha) >= 8 else sha,
+        }
+
+
+def log_text_attachments(logger, level, attachments, extra_msg=""):
+    """
+    以脱敏方式记录文本附件摘要。
+
+    :param logger: logging.Logger 实例
+    :param level: 日志级别字符串（"INFO"/"DEBUG"/"WARNING" 等）
+    :param attachments: TextAttachment 列表/元组
+    :param extra_msg: 附加说明（如 "用户附加 2 个文件"）
+    使用示例：
+        log_text_attachments(log, "INFO", self._text_attachments,
+                             extra_msg="聊天提交")
+    """
+    if not attachments:
+        return
+    summaries = [TextAttachmentSanitizer._summarize(a) for a in attachments]
+    total_chars = sum((s.get("char_count") or 0) for s in summaries)
+    log_fn = getattr(logger, level.lower(), logger.info)
+    log_fn(
+        f"[text_attachment] {extra_msg} files={len(summaries)} "
+        f"total_chars={total_chars} items={summaries}"
+    )
+
+
+# ====================== get_color_logger ======================
 def get_color_logger(name="app", log_dir=LOG_DIR, keep_days=LOG_KEEP_DAYS,
                      console_level=None, file_level=None, enable_file=True):
     """
@@ -207,6 +274,10 @@ def get_color_logger(name="app", log_dir=LOG_DIR, keep_days=LOG_KEEP_DAYS,
                 datefmt="%Y-%m-%d %H:%M:%S"
             )
             file_handler.setFormatter(file_formatter)
+
+            # 挂载文本附件脱敏过滤器（仅作用于本 logger 的文件 handler）
+            file_handler.addFilter(TextAttachmentSanitizer())
+
             logger.addHandler(file_handler)
 
     return logger

@@ -145,6 +145,17 @@ class DirectConversationAdapter:
 
         prepared = False
         started = time.perf_counter()
+        # ========== 直连模式：纯文本附件隔离块（若有） ==========
+        text_atts = tuple(getattr(request, "text_attachments", None) or ())
+        if text_atts:
+            file_parts = [att.to_prompt_block() for att in text_atts]
+            file_block = "\n\n".join(file_parts)
+            log.info(
+                f"[direct] 拼接 {len(text_atts)} 个文本附件到 user message "
+                f"(总字符数={sum(getattr(a, 'char_count', 0) for a in text_atts)})"
+            )
+        else:
+            file_block = ""
         try:
             if not is_vision:
                 messages = self.engine._prepare_direct_turn(request.user_text)
@@ -161,11 +172,24 @@ class DirectConversationAdapter:
                     {"role": "user", "content": request.user_text}
                 )
                 prepared = True
+            # 将文本附件块拼到 user text 之前（若有）
+            if text_atts and messages:
+                last = messages[-1]
+                user_text = str(last.get("content") or "")
+                user_text = f"{file_block}\n\n{user_text}" if file_block else user_text
+                messages[-1] = {"role": last.get("role", "user"), "content": user_text}
 
             log.info(
                 f"[direct] 上下文已准备 turn={turn} messages={len(messages)} "
                 f"history_tail_role={messages[-1].get('role') if messages else '-'}"
             )
+            # 调试：打印即将发送的请求（含附件时）
+            if text_atts:
+                from meapet.agent.debug_dump import dump_messages
+                dump_messages(
+                    f"DirectConversation.stream_turn (text_attachments={len(text_atts)})",
+                    messages,
+                )
             # 清理 assistant 消息中的旧格式残留（[mood] 行首或 <TTS> 标签），
             # 避免 "请用 <MEA_PET_SEGMENT>" 指令与旧版 3 行历史打架。
             for i, msg in enumerate(messages):
