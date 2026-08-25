@@ -777,7 +777,7 @@ class UiRefactorTests(unittest.TestCase):
 
         composer = self._track(ChatInputBox())
         self.assertLessEqual(composer.width(), 480)
-        self.assertLessEqual(composer.height(), 120)
+        self.assertLessEqual(composer.height(), 160)
         self.assertEqual(composer.input.accessibleName(), "消息内容")
         self.assertTrue(composer.feedback_label.accessibleName())
 
@@ -1656,6 +1656,9 @@ class UiRefactorTests(unittest.TestCase):
                 return 300
 
             def _on_input_submit(self, _text: str) -> None:
+                pass
+
+            def _on_chat_input_files_attached(self, attachments: list) -> None:
                 pass
 
         corners = (

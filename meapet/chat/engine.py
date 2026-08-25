@@ -833,11 +833,33 @@ class ChatEngine:
             return self._fallback_reply()
         return content
 
-    async def quick_chat_async(self, message: str) -> Tuple[str, str]:
-        """async 版 quick_chat：历史更新仍加锁，HTTP 走 asyncio。"""
+    async def quick_chat_async(
+        self,
+        message: str,
+        text_attachments=None,
+    ) -> Tuple[str, str]:
+        """async 版 quick_chat：历史更新仍加锁，HTTP 走 asyncio。
+
+        text_attachments: 可选，TextAttachment 列表/元组，将在 user message
+        前以 <<FILE>>...<<END FILE>> 隔离标记拼接，便于模型区分文件与用户输入。
+        """
         self._cancelled = False
         with self._history_lock:
-            self.history.append({"role": "user", "content": message})
+            # ========== 纯文本附件拼接（隔离标记包裹） ==========
+            user_content = message
+            atts = tuple(text_attachments or ())
+            if atts:
+                from meapet.agent.debug_dump import dump_messages
+                file_parts = []
+                for att in atts:
+                    file_parts.append(att.to_prompt_block())
+                file_block = "\n\n".join(file_parts)
+                user_content = f"{file_block}\n\n{user_content}"
+                log.info(
+                    f"[Chat] 拼接 {len(atts)} 个文本附件到 user message "
+                    f"(总字符数={sum(getattr(a, 'char_count', len(getattr(a, 'text_content', ''))) for a in atts)})"
+                )
+            self.history.append({"role": "user", "content": user_content})
 
             # ========== 注入养成记忆上下文（语义检索） ==========
             if self.memory:
@@ -854,6 +876,12 @@ class ChatEngine:
                 self.history.pop()
                 return self._fallback_reply(), "neutral"
             messages_snapshot = list(self.history)
+            # ========== 调试：打印即将发送的请求（含附件时） ==========
+            if atts:
+                dump_messages(
+                    f"ChatEngine.quick_chat_async (text_attachments={len(atts)})",
+                    messages_snapshot,
+                )
         try:
             # HTTP：_dispatch_chat_async → httpx
             if self._cancelled:

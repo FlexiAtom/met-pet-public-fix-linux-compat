@@ -174,9 +174,21 @@ class TestConversationTimeline(unittest.TestCase):
                 timeline.finish_turn(key, turn_id)
 
             restored = ConversationTimeline(max_turns=2)
-            for turn in memory.load_conversation_turns():
-                restored.restore(turn)
-
+            from meapet.conversation.timeline import TurnTranscript
+            for turn_data in memory.load_conversation_turns():
+                transcript = TurnTranscript(
+                    conversation_key=turn_data["conversation_key"],
+                    turn_id=turn_data["turn_id"],
+                    source=turn_data["source"],
+                    user_text=turn_data["user_text"],
+                    segments=turn_data["segments"],
+                    system_entries=turn_data["system_entries"],
+                    created_at=turn_data["created_at"],
+                    updated_at=turn_data["updated_at"],
+                    status=turn_data["status"],
+                    error_text=turn_data["error_text"],
+                )
+                restored.restore(transcript)
             self.assertEqual(
                 [turn.turn_id for turn in restored.recent(key)],
                 ["persisted-1", "persisted-2"],

@@ -46,6 +46,7 @@ from meapet.tts.language_policy import (
     detect_script_language,
     plan_tts_language,
     voice_text_language_relation,
+    should_skip_tts_due_to_language_mismatch,
 )
 from meapet.tts.translation import TranslationService
 
@@ -260,7 +261,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 子进程超时（秒）
         self.timeout = tts_cfg.get("timeout", 60)
 
-        # 翻译用于目标语朗读校正和“不受支持语言”兜底，不参与模型故障回退。
+        # 翻译用于目标语朗读校正和"不受支持语言"兜底，不参与模型故障回退。
         self.translate_enabled = bool(tts_cfg.get("translate_to_jp", False))
         self.translate_target_language = canonical_tts_language(
             tts_cfg.get("translate_target_language")
@@ -542,7 +543,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                     canonical_tts_language(detected or self.voice_lang)
                 )
 
-        # 兼容旧的按情绪目录，但只认“同语言 wav + txt”。
+        # 兼容旧的按情绪目录，但只认"同语言 wav + txt"。
         if not self._mimo_mode and os.path.isdir(self.ref_dir):
             for folder, _dirs, files in os.walk(self.ref_dir):
                 lowered = {name.lower() for name in files}
@@ -880,6 +881,17 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
         log.trace(lambda: f"TTS [debug]: {clean[:60]}")
 
+        # ── 新增：文件触发回复的语言不匹配检查（草案 §五）──
+        # 在 plan_tts_language 之前，先检测 voice_text 是否与目标语言明显不符。
+        # 若 should_skip_tts_due_to_language_mismatch 返回 True，则跳过 TTS，
+        # 仅显示气泡（原文气泡仍会显示）。
+        if should_skip_tts_due_to_language_mismatch(clean, target_language):
+            log.info(
+                f"TTS: 语言不匹配，跳过语音（文件触发回复含非目标语言内容）"
+                f" lang={target_language} chars={len(clean)}"
+            )
+            return None
+
         prepared = self._prepare_tts_text(clean, target_language)
         if prepared is None:
             return None
@@ -965,6 +977,14 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         target_language = self._normalize_voice_lang(
             language or self.voice_lang
         )
+
+        # ── 新增：async 路径也做语言不匹配检查 ──
+        if should_skip_tts_due_to_language_mismatch(clean, target_language):
+            log.info(
+                f"TTS: 语言不匹配，跳过语音（async，文件触发回复含非目标语言内容）"
+                f" lang={target_language} chars={len(clean)}"
+            )
+            return None
 
         if self._mimo_mode and hasattr(self, "_speak_mimo_async"):
             prepared = await self._prepare_tts_text_async(

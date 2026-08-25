@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import logging
+import hashlib
+from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -13,6 +16,8 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
+    QFileDialog,
+    QMessageBox,
 )
 
 from meapet.desktop.theme import CHAT_COMPOSER_STYLE
@@ -21,10 +26,18 @@ from meapet.ui_theme import (
     ensure_application_fonts,
     set_scaled_stylesheet,
 )
+from meapet.agent.base import TextAttachment
+from meapet.agent.text_budget import estimate_tokens, can_attach_files
 
 
 CHAT_COMPOSER_WIDTH = 480
-CHAT_COMPOSER_HEIGHT = 112
+CHAT_COMPOSER_HEIGHT = 140  # 略微加高以容纳文件信息行
+
+# 文本文件白名单（与 TextAttachment.from_bytes 一致）
+_TEXT_FILE_FILTER = (
+    "文本文件 (*.txt *.md *.csv *.json *.log *.yaml *.yml *.xml *.ini *.cfg *.env);;"
+    "所有文件 (*)"
+)
 
 
 def set_awaiting_reply_state(
@@ -53,6 +66,8 @@ class ChatInputBox(QWidget):
     """置顶的消息编辑器，支持 Enter 发送与 Esc 关闭。"""
 
     text_submitted = pyqtSignal(str)
+    # 新增：文件附加请求信号，携带 TextAttachment 列表
+    files_attached = pyqtSignal(list)  # list[TextAttachment]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -76,6 +91,11 @@ class ChatInputBox(QWidget):
             "yes",
         }
 
+        # 当前已选附件（本轮）
+        self._text_attachments: list[TextAttachment] = []
+        # 上下文预算回调：由宿主注入，签名 (extra_tokens: int) -> (ok: bool, reason: str)
+        self._context_budget_checker = None
+
         self._build_ui()
 
         self._anim_timer = QTimer(self)
@@ -86,6 +106,14 @@ class ChatInputBox(QWidget):
         else:
             self.setWindowOpacity(0.0)
             self._anim_timer.start(18)
+
+    def set_context_budget_checker(self, checker) -> None:
+        """注入上下文预算检查回调。
+
+        checker(extra_tokens: int) -> tuple[bool, str]
+            返回 (是否允许, 拒绝原因)
+        """
+        self._context_budget_checker = checker
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -154,6 +182,15 @@ class ChatInputBox(QWidget):
         self.input.textChanged.connect(self._clear_feedback)
         input_row.addWidget(self.input, 1)
 
+        # ── 新增：文件选择按钮 ──
+        self.file_button = QPushButton("📎")
+        self.file_button.setObjectName("FileAttachButton")
+        self.file_button.setFixedSize(MIN_TARGET_SIZE, MIN_TARGET_SIZE)
+        self.file_button.setAccessibleName("附加文本文件")
+        self.file_button.setToolTip("附加文本文件（.txt/.md/.csv/.json/.log 等）")
+        self.file_button.clicked.connect(self._select_and_attach_files)
+        input_row.addWidget(self.file_button)
+
         self.send_button = QPushButton("发送")
         self.send_button.setObjectName("SendButton")
         self.send_button.setMinimumSize(80, MIN_TARGET_SIZE)
@@ -164,7 +201,15 @@ class ChatInputBox(QWidget):
         input_row.addWidget(self.send_button)
         layout.addLayout(input_row)
 
-        self.setTabOrder(self.input, self.send_button)
+        # ── 新增：文件信息显示行 ──
+        self.file_info_label = QLabel("")
+        self.file_info_label.setObjectName("FileInfoLabel")
+        self.file_info_label.setAccessibleName("已附加文件信息")
+        self.file_info_label.hide()
+        layout.addWidget(self.file_info_label)
+
+        self.setTabOrder(self.input, self.file_button)
+        self.setTabOrder(self.file_button, self.send_button)
         self.setTabOrder(self.send_button, self.close_button)
 
         self._busy = False
@@ -173,6 +218,7 @@ class ChatInputBox(QWidget):
         """异步回复进行中时禁用发送，并给出可读反馈。"""
         self._busy = bool(busy)
         self.send_button.setEnabled(not self._busy)
+        self.file_button.setEnabled(not self._busy)
         self.input.setReadOnly(self._busy)
         if self._busy:
             text = message or "正在等待回复…"
@@ -254,6 +300,100 @@ class ChatInputBox(QWidget):
     def show_voice_button(self, visible: bool) -> None:
         self.voice_button.setVisible(visible)
 
+    # ════════════════════════════════════════════════════════════
+    # 文件选择 / 上下文预算 / 附件管理
+    # ════════════════════════════════════════════════════════════
+
+    def _select_and_attach_files(self) -> None:
+        print(">>> DEBUG: _select_and_attach_files CALLED", flush=True)
+        print("[file] _select_and_attach_files 被触发")
+        """打开文件对话框，选择文本文件并附加（受上下文预算约束）。"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "选择要附加的文本文件", "", _TEXT_FILE_FILTER
+        )
+        print(f"[file] getOpenFileNames 返回 files={files!r}")
+        if not files:
+            print("[file] 用户未选择任何文件或对话框被取消")
+            return
+
+        new_attachments: list[TextAttachment] = []
+        refused: list[str] = []
+
+        for fpath in files:
+            try:
+                with open(fpath, "rb") as f:
+                    raw = f.read()
+            except OSError as exc:
+                refused.append(f"{os.path.basename(fpath)}: 读取失败({exc})")
+                continue
+
+            try:
+                att = TextAttachment.from_bytes(os.path.basename(fpath), raw)
+            except ValueError as exc:
+                # 扩展名不在白名单等
+                refused.append(f"{os.path.basename(fpath)}: {exc}")
+                continue
+
+            new_attachments.append(att)
+
+        if not new_attachments and refused:
+            QMessageBox.warning(self, "文件附加失败", "\n".join(refused))
+            return
+
+        # 上下文预算检查（基于已有附件 + 新增附件）
+        if self._context_budget_checker is not None:
+            projected = self._text_attachments + new_attachments
+            extra_tokens = sum(estimate_tokens(a.text_content) + 50 for a in projected)
+            ok, reason = self._context_budget_checker(extra_tokens)
+            if not ok:
+                QMessageBox.warning(
+                    self, "上下文预算不足",
+                    f"所选文件总大小超出当前上下文剩余容量。\n{reason}"
+                )
+                return
+
+        # 接受
+        self._text_attachments.extend(new_attachments)
+        self._update_file_info_label()
+        print(f"[file] 准备发射 files_attached 信号，附件数量={len(new_attachments)}")
+        self.files_attached.emit(list(new_attachments))
+        print("[file] files_attached 信号已发射")
+
+        if refused:
+            # 部分成功：告知用户哪些被拒绝（扩展名不合法）
+            QMessageBox.information(
+                self, "部分文件已附加",
+                f"已附加 {len(new_attachments)} 个文件。\n以下文件被跳过：\n"
+                + "\n".join(refused)
+            )
+
+    def _update_file_info_label(self) -> None:
+        """刷新底部文件信息行：文件名(字符数) … 总计 N tokens。"""
+        if not self._text_attachments:
+            self.file_info_label.hide()
+            return
+        parts = []
+        total_tokens = 0
+        for att in self._text_attachments:
+            t = estimate_tokens(att.text_content)
+            total_tokens += t + 50
+            parts.append(f"{att.file_name}({att.char_count}字)")
+        self.file_info_label.setText(
+            "📎 " + " · ".join(parts) + f"  预计占用 ~{total_tokens} tokens"
+        )
+        self.file_info_label.show()
+
+    def clear_attachments(self) -> None:
+        """清空本轮附件（发送后由宿主调用）。"""
+        self._text_attachments.clear()
+        self._update_file_info_label()
+
+    def get_attachments(self) -> list[TextAttachment]:
+        """返回当前已选附件副本。"""
+        return list(self._text_attachments)
+
+    # ════════════════════════════════════════════════════════════
+
     def _submit(self) -> None:
         if getattr(self, "_busy", False):
             if not self.feedback_label.text():
@@ -262,8 +402,8 @@ class ChatInputBox(QWidget):
             self.feedback_label.show()
             return
         text = self.input.text().strip()
-        if not text:
-            self.feedback_label.setText("请输入内容后再发送")
+        if not text and not self._text_attachments:
+            self.feedback_label.setText("请输入内容或附加文件后再发送")
             self.hint_label.hide()
             self.feedback_label.show()
             self.input.setFocus(Qt.OtherFocusReason)

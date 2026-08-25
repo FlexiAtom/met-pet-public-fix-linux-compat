@@ -798,6 +798,17 @@ class OpenClawAdapter:
                 }
                 for attachment in request.attachments
             ]
+        # 纯文本附件：与图片并列，附元数据（content 已通过 gateway_user_message
+        # 以 <<FILE>>...<<END FILE>> 隔离标记拼入 message 一次）。
+        text_atts = tuple(getattr(request, "text_attachments", None) or ())
+        if include_attachments and text_atts:
+            params.setdefault("attachments", []).extend({
+                "type": "text",
+                "fileName": ta.file_name,
+                "charCount": ta.char_count,
+                "sha256": ta.sha256_hash,
+                "content": ta.text_content,
+            } for ta in text_atts)
         return params
 
     async def _start_chat(
@@ -812,16 +823,24 @@ class OpenClawAdapter:
     ) -> None:
         generation = await self._ensure_connected()
         state.generation = generation
+        params = self._chat_params(
+            request,
+            session_key=state.session_key,
+            message=message,
+            idempotency_key=idempotency_key,
+            include_attachments=include_attachments,
+        )
+        # 调试：打印即将发送的 chat.send params（附件全文截断）
+        if (getattr(request, "text_attachments", None) or ()):
+            from meapet.agent.debug_dump import dump_frame
+            dump_frame(
+                f"OpenClaw._start_chat (text_attachments={len(tuple(getattr(request, 'text_attachments', None) or ()))})",
+                {"method": "chat.send", "params": params},
+            )
         await self._send_request(
             request_id,
             "chat.send",
-            self._chat_params(
-                request,
-                session_key=state.session_key,
-                message=message,
-                idempotency_key=idempotency_key,
-                include_attachments=include_attachments,
-            ),
+            params,
             generation=generation,
             expect_final=True,
             turn_id=state.turn_id,

@@ -7,15 +7,18 @@ import threading
 import uuid
 
 from PyQt5.QtCore import QPoint, QRect, QSize, QTimer
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
 from meapet.utils import log_error, redact_text
 from meapet.agent.base import (
     AgentTurnRequest,
+    TextAttachment,
     ToolStatus,
     TurnCancelled,
     TurnCompleted,
     TurnFailed,
 )
+from meapet.agent.text_budget import can_attach_files
 from meapet.agent.presentation import (
     AgentTurnPresentation,
     BeginBubble,
@@ -265,8 +268,22 @@ class PetChatFlowMixin:
         if getattr(self, "_awaiting_reply", False):
             self._chat_input.set_busy(True, status_language.thinking_busy())
 
+        # 本轮待附加的纯文本文件（TextAttachment 列表），随用户输入一起提交。
+        self._text_attachments = []
+
         place_chat_input(self, self._chat_input)
         self._chat_input.text_submitted.connect(self._on_input_submit)
+        # 聊天输入框可触发"选择文件"；由宿主统一处理以便复用预算检查与日志脱敏。
+        if hasattr(self._chat_input, "file_attach_requested"):
+            self._chat_input.file_attach_requested.connect(
+                self._select_and_attach_text_files
+            )
+
+        # 接收聊天输入框的文件附件信号（用户通过 📎 选择文件后发射）
+        if hasattr(self._chat_input, "files_attached"):
+            self._chat_input.files_attached.connect(
+                self._on_chat_input_files_attached
+            )
 
         refresh = getattr(self, "_refresh_voice_button", None)
         if callable(refresh):
@@ -280,19 +297,148 @@ class PetChatFlowMixin:
         if composer is not None:
             place_chat_input(self, composer)
 
+    def _on_chat_input_files_attached(self, attachments):
+        """chat_input 通过 files_attached 信号推送用户已选择的文本附件。
+
+        将附件并入 self._text_attachments（按 file_name+sha256 去重），
+        并记录脱敏日志。附件会在下次 _on_input_submit 时随请求一并提交。
+        """
+        if not attachments:
+            return
+        existing = list(getattr(self, "_text_attachments", []) or [])
+        seen = {
+            (a.file_name, a.sha256_hash)
+            for a in existing
+        }
+        added = 0
+        for att in attachments:
+            key = (getattr(att, "file_name", ""), getattr(att, "sha256_hash", ""))
+            if key in seen:
+                continue
+            existing.append(att)
+            seen.add(key)
+            added += 1
+            log.info(
+                f"[attach] 收到聊天输入框附件 file={att.file_name} "
+                f"chars={att.char_count} sha256={att.sha256_hash[:8]}..."
+            )
+        self._text_attachments = existing
+        if added:
+            log.info(
+                f"[attach] 本轮待提交文本附件数={len(existing)}（新增 {added}）"
+            )
+
+    def _select_and_attach_text_files(self):
+        """打开文件选择对话框，将纯文本文件以 TextAttachment 附加到本轮输入。
+
+        实现草案要点：白名单扩展名、BOM 探测（由 TextAttachment.from_bytes 完成）、
+        按上下文预算动态决定是否允许上传、气泡显示文件名与上下文占用预测、
+        日志仅记录文件名+字符数+sha256（脱敏，不记全文）。
+        """
+        parent = self._chat_input if hasattr(self, "_chat_input") else None
+        filter_str = (
+            "文本文件 (*.txt *.md *.csv *.json *.log *.yaml *.yml *.xml "
+            "*.ini *.cfg *.env);;所有文件 (*)"
+        )
+        files, _ = QFileDialog.getOpenFileNames(parent, "选择文本文件", "", filter_str)
+        if not files:
+            return
+
+        # 上下文预算：以当前对话已用 token + 新附件 token 估算；模型窗口取 engine 配置。
+        engine = getattr(self, "chat_engine", None)
+        model_window = 8192  # 默认值；若 engine 暴露上下文窗口则优先使用
+        if engine is not None:
+            model_window = int(
+                getattr(engine, "context_window", None)
+                or getattr(engine, "max_context_tokens", None)
+                or model_window
+            )
+        # 已用 token：粗略以 system prompt + 历史总字符/2 估算；memory 上下文另行计入。
+        used_chars = 0
+        if engine is not None:
+            for msg in getattr(engine, "history", []) or []:
+                used_chars += len(str(getattr(msg, "get", lambda k: "")("content") or msg or ""))
+        used_tokens = int(used_chars / 2)
+
+        new_atts = []
+        refused = []
+        for fpath in files:
+            try:
+                with open(fpath, "rb") as f:
+                    raw = f.read()
+            except OSError as exc:
+                log.warning(f"[attach] 读取文件失败 {fpath}: {type(exc).__name__}")
+                refused.append((os.path.basename(fpath), "读取失败"))
+                continue
+            try:
+                att = TextAttachment.from_bytes(os.path.basename(fpath), raw)
+            except ValueError as exc:
+                # 扩展名不在白名单 / 文件名非法等
+                refused.append((os.path.basename(fpath), str(exc)))
+                continue
+            new_atts.append(att)
+
+        if not new_atts and refused:
+            msg = "；".join(f"{n}：{r}" for n, r in refused)
+            self._show_bubble(f"文件附加失败：{msg}", 4500, mood=None)
+            self._position_bubble()
+            return
+
+        # 预算检查（含已有待提交附件）
+        existing = list(getattr(self, "_text_attachments", []) or [])
+        candidate = existing + new_atts
+        ok, reason = can_attach_files(
+            user_text=getattr(self, "_last_user_msg", "") or "",
+            attachments=candidate,
+            model_context_window=model_window,
+            currently_used_tokens=used_tokens,
+        )
+        if not ok:
+            log.info(f"[attach] 上下文预算不足，拒绝附加: {reason}")
+            self._show_bubble(f"文件过大：{reason}", 5000, mood=None)
+            self._position_bubble()
+            return
+
+        self._text_attachments = candidate
+        # 气泡：文件名 + 各文件上下文占用预测（字符数）
+        summary = "、".join(f"{a.file_name}({a.char_count}字)" for a in new_atts)
+        self._show_bubble(f"📎 已附加 {len(new_atts)} 个文件：{summary}", 4500, mood=None)
+        self._position_bubble()
+        # 日志脱敏：仅文件名/字符数/sha256，不记全文
+        for a in new_atts:
+            log.info(
+                f"[attach] 文本附件就绪 file={a.file_name} chars={a.char_count} "
+                f"sha256={a.sha256_hash[:8]}..."
+            )
+        if refused:
+            for n, r in refused:
+                log.info(f"[attach] 文件已跳过 file={n} reason={r}")
+
     def _on_input_submit(self, text: str):
-        """用户提交了输入"""
+        """用户提交了输入（纯文本附件随本次请求一并提交）"""
         if getattr(self, "_awaiting_reply", False):
             log.warning("[chat] 对话被拒绝：正在等待回复中")
             self._show_bubble(status_language.thinking_busy(), 2500)
             self._position_bubble()
             return
         self._record_interaction()
+        attachments = list(getattr(self, "_text_attachments", []) or [])
+        # 提交后立即清空，避免下次无附件提交时残留。
+        self._text_attachments = []
         _log_private_text("[input] 收到用户输入", text)
-        log.info("[input] 提交消息，准备回复")
+        if attachments:
+            log.info(
+                f"[input] 随消息附加 {len(attachments)} 个文本文件: "
+                + ", ".join(
+                    f"{a.file_name}(chars={a.char_count},sha256={a.sha256_hash[:8]})"
+                    for a in attachments
+                )
+            )
+        else:
+            log.info("[input] 提交消息，准备回复")
         self._show_bubble("……？", 1500)
         self._position_bubble()
-        QTimer.singleShot(1200, lambda: self._do_chat(text))
+        QTimer.singleShot(1200, lambda: self._do_chat(text, attachments=attachments))
 
     def _is_agent_mode(self) -> bool:
         llm = (getattr(self, "config", {}) or {}).get("llm") or {}
@@ -388,11 +534,16 @@ class PetChatFlowMixin:
             caps["voice_target_language"] = target
         return context
 
-    def _make_chat_worker(self, message: str):
-        """按显式模式选择直连模型或 Agent worker。"""
+    def _make_chat_worker(self, message: str, attachments=None):
+        """按显式模式选择直连模型或 Agent worker。
+
+        attachments：本次请求的 TextAttachment 列表；agent 模式随 AgentTurnRequest
+        下发，直连模式随 ChatWorker 透传给 engine.quick_chat_async。
+        """
         if getattr(self, "_conversation_key", None) is None:
             self._refresh_conversation_key()
         agent_mode = self._is_agent_mode()
+        atts = tuple(attachments or ())
         if agent_mode:
             adapter = getattr(self, "agent_adapter", None)
             if adapter is None:
@@ -437,6 +588,7 @@ class PetChatFlowMixin:
             tts_enabled=tts_enabled,
             conversation_key=turn_context.conversation_key,
             generation_id=turn_context.generation_id,
+            text_attachments=atts,
         )
         self._timeline_start_turn(
             turn_id,
@@ -444,12 +596,19 @@ class PetChatFlowMixin:
             user_text=message,
             context=turn_context,
         )
-        worker = AgentChatWorker(adapter, request)
+        if agent_mode:
+            worker = AgentChatWorker(adapter, request)
+        else:
+            # 直连模式：ChatWorker 会把 text_attachments 透传给 engine.quick_chat_async。
+            worker = ChatWorker(adapter, message, text_attachments=atts)
         worker.turn_context = turn_context
         return worker
 
-    def _do_chat(self, message: str):
-        """执行 LLM 对话（后台线程）"""
+    def _do_chat(self, message: str, attachments=None):
+        """执行 LLM 对话（后台线程）
+
+        attachments：本次请求要附加的 TextAttachment 列表（仅本次有效，不进长期记忆）。
+        """
         if self._awaiting_reply:
             log.warning("[chat] 对话被拒绝：正在等待回复中")
             self._show_bubble(status_language.thinking_busy(), 2500)
@@ -465,11 +624,13 @@ class PetChatFlowMixin:
         )
         self._safe_set_mood("talking")
         self._last_user_msg = message
+        atts = list(attachments or [])
         _log_private_text("[chat] 发送给 LLM", message)
         mode = "agent" if self._is_agent_mode() else "direct"
         # 正文只经 _log_private_text 的 TRACK 通道，默认日志仅记录长度
         log.info(
             f"[chat] 请求发起 mode={mode} chars={len(message or '')}"
+            + (f" text_attachments={len(atts)}" if atts else "")
         )
 
         # 显示思考中提示
@@ -497,7 +658,7 @@ class PetChatFlowMixin:
         self._chat_timeout.start(330000)
 
         try:
-            self._chat_worker = self._make_chat_worker(message)
+            self._chat_worker = self._make_chat_worker(message, attachments=atts)
             self._chat_worker.start()
         except Exception as exc:
             log.error(f"[chat] worker 启动失败: {type(exc).__name__}: {exc}")
@@ -838,6 +999,20 @@ class PetChatFlowMixin:
             or getattr(self, "_conversation_key", None)
         )
         if timeline is not None and key is not None:
+            # 附件元数据（仅文件名+sha256）随 turn 记录；不存全文
+            att_meta = [
+                {"file_name": a.file_name, "sha256": a.sha256_hash}
+                for a in (getattr(self, "_text_attachments", []) or [])
+            ]
+            if att_meta:
+                try:
+                    timeline.add_status(
+                        key, turn_id,
+                        state="info",
+                        safe_text=f"本次附带 {len(att_meta)} 个文本文件",
+                    )
+                except Exception:
+                    pass
             timeline.finish_turn(key, turn_id)
         self._active_agent_turn_id = ""
         self._agent_format_repair_pending = False
@@ -978,18 +1153,24 @@ class PetChatFlowMixin:
                     "",
                 )
             ) or "zh"
-            timeline.complete_segment(
-                key,
-                turn_id,
-                ReplySegment(
-                    index=0,
-                    display_text=reply,
-                    voice_text=voice_text,
-                    voice_language=voice_language,
-                    mood=detected,
-                    tts_style=tts_style,
-                ),
+            # 附件元数据仅文件名+sha256，不存全文（草案：日志/Timeline 均脱敏）
+            att_meta = [
+                {"file_name": a.file_name, "sha256": a.sha256_hash}
+                for a in (getattr(self, "_text_attachments", []) or [])
+            ]
+            segment = ReplySegment(
+                index=0,
+                display_text=reply,
+                voice_text=voice_text,
+                voice_language=voice_language,
+                mood=detected,
+                tts_style=tts_style,
             )
+            if att_meta:
+                # 将附件元数据挂到 segment 的扩展字段（若存在），便于 Timeline 存储
+                if hasattr(segment, "__dict__"):
+                    segment.file_attachments = att_meta
+            timeline.complete_segment(key, turn_id, segment)
         # 捕获本轮用户消息，记忆操作与 TTS 并行且由上游串行锁保护。
         user_msg = getattr(self, '_last_user_msg', '') or ''
         QTimer.singleShot(
