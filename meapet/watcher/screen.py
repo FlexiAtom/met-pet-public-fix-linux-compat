@@ -17,6 +17,7 @@ from meapet.config.defaults import (
     DEFAULT_OLLAMA_HOST,
     DEFAULT_OLLAMA_VISION_MODEL,
 )
+from meapet.config.prompt_loader import load_system_prompt
 from meapet.log import get_color_logger
 from meapet.watcher.capture import capture_screen_image
 
@@ -134,15 +135,12 @@ def parse_watch_output(raw: str) -> tuple:
     return True, display, voice, mood or "neutral", ""
 
 # ========================
-# 场景摘要 prompt
+# 场景摘要 prompt（从集中配置加载，缺失时回退到内嵌默认值）
 # ========================
-SUMMARY_PROMPT = "用一句话（不超过30字）描述这个屏幕截图的内容。只需描述画面上有什么软件、什么内容、用户在做什么。不要评价，不要吐槽。"
+_SUMMARY_FALLBACK = "用一句话（不超过30字）描述这个屏幕截图的内容。只需描述画面上有什么软件、什么内容、用户在做什么。不要评价，不要吐槽。"
 
-
-# ========================
-# 策略评估 prompt（融合冷落感知 + Web 搜索决策）
-# ========================
-DECISION_PROMPT = """你是梅尔，一只毒舌猫娘。你正在犹豫要不要主动对主人开口说话。
+# 策略评估 prompt（含 {idle_minutes}{summary} 占位符，调用时 .format 填充）
+_DECISION_FALLBACK = """你是梅尔，一只毒舌猫娘。你正在犹豫要不要主动对主人开口说话。
 
 【冷落状态】
 距离上次互动已过 {idle_minutes} 分钟。
@@ -173,12 +171,8 @@ DECISION_PROMPT = """你是梅尔，一只毒舌猫娘。你正在犹豫要不�
 
 回复："""
 
-
-
-# ========================
-# 一次多模态：决策 + 中日双语最终对白
-# ========================
-UNIFIED_WATCH_PROMPT = """你是梅尔，《霞流宝石心》的毒舌猫娘（茶发褐瞳144cm，冷淡傲娇）。
+# 一次多模态：决策 + 中日双语最终对白（含 {idle_minutes} 占位符）
+_UNIFIED_FALLBACK = """你是梅尔，《霞流宝石心》的毒舌猫娘（茶发褐瞳144cm，冷淡傲娇）。
 你刚偷看了主人屏幕，要决定要不要开口。
 
 【冷落状态】
@@ -204,11 +198,17 @@ UNIFIED_WATCH_PROMPT = """你是梅尔，《霞流宝石心》的毒舌猫娘（
 
 直接按格式输出："""
 
-RELAY_OBSERVATION_PROMPT = """你是视觉观察器，不是角色聊天模型。
+# relay 模式独立视觉模型观察 JSON 提示词
+_RELAY_FALLBACK = """你是视觉观察器，不是角色聊天模型。
 只描述截图中可见的事实，不评价、不向用户说话、不猜测不可见内容。
 严格返回一个 JSON 对象，禁止 Markdown，字段为：
 {"summary":"不超过800字的画面摘要","application":"主要应用或空字符串","activity":"coding/reading/chatting/gaming/video/idle/unknown","notable_text":["最多10条必要的短文本"],"sensitive":false}
 如可见密码、密钥、私聊、邮件或身份信息，sensitive 设为 true，且 notable_text 不要转录具体秘密。"""
+
+SUMMARY_PROMPT = load_system_prompt("watch_summary", default=_SUMMARY_FALLBACK)
+DECISION_PROMPT = load_system_prompt("watch_decision", default=_DECISION_FALLBACK)
+UNIFIED_WATCH_PROMPT = load_system_prompt("watch_unified", default=_UNIFIED_FALLBACK)
+RELAY_OBSERVATION_PROMPT = load_system_prompt("watch_relay_observation", default=_RELAY_FALLBACK)
 
 
 class ScreenWatcher(QThread):

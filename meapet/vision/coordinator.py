@@ -13,17 +13,23 @@ from meapet.agent.base import (
     TurnCompleted,
     TurnFailed,
 )
+from meapet.config.prompt_loader import load_system_prompt
 from meapet.conversation.types import ReplySegment
 from meapet.vision.observation import VisionObservation
 
 
 SILENT_DISPLAY_TOKEN = "__MEAPET_SILENT__"
 
-_WATCH_RULES = f"""这是一次用户已授权的桌面观察。
+# 桌面观察规则：从集中配置文件加载，缺失时回退到内嵌默认值。
+_WATCH_RULES_FALLBACK = f"""这是一次用户已授权的桌面观察。
 请决定是否值得主动说一句：
 - 如果画面有明确活动，说具体看到的事，不要空泛提醒休息。
 - 如果是锁屏、黑屏、空桌面或刚交互过且无新信息，返回一个合法分段，但 DISPLAY 必须精确为 {SILENT_DISPLAY_TOKEN}。
 - 其余情况按桌宠前端分段协议返回；不要暴露推理或隐私文本。"""
+
+_WATCH_RULES_TEMPLATE = load_system_prompt("vision_watch_rules", default=_WATCH_RULES_FALLBACK)
+# 填充模板中的 {SILENT_DISPLAY_TOKEN} 占位符（JSON 中不便存 f-string，故在此替换）
+_WATCH_RULES = _WATCH_RULES_TEMPLATE.replace("{SILENT_DISPLAY_TOKEN}", SILENT_DISPLAY_TOKEN)
 
 
 @dataclass(frozen=True)

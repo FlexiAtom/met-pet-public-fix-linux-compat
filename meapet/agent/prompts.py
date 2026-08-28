@@ -1,4 +1,4 @@
-"""Agent 后端共用的 MeaPet 前端输出约束。"""
+"""Agent 后端共用的 MeaPet 前端输出约束（提示词从集中配置文件加载）。"""
 
 from __future__ import annotations
 
@@ -7,9 +7,11 @@ from typing import Mapping
 
 from meapet.agent.base import AgentTurnRequest
 from meapet.config.normalizers import canonical_tts_language
+from meapet.config.prompt_loader import load_system_prompt
 
 
-OUTPUT_INSTRUCTION = """你仍使用 Agent 已有的人设、记忆、模型和工具；以下内容只约束桌宠前端输出格式。
+# ---------- 内嵌回退默认值（配置文件缺失/解析失败时启用） ----------
+_OUTPUT_FALLBACK = """你仍使用 Agent 已有的人设、记忆、模型和工具；以下内容只约束桌宠前端输出格式。
 最终回复必须由一到多个以下分段组成，禁止 Markdown 代码围栏：
 <MEA_PET_SEGMENT>
 <DISPLAY>给用户看的本段文字</DISPLAY>
@@ -21,7 +23,7 @@ voice_language 必须标记 voice_text 实际使用的语言；voice_text 与 vo
 例如中文朗读稿标 zh-CN、日文标 ja-JP、英文标 en；不得把期望语言或参考音频语言冒充为实际文本语言。
 不要输出推理、工具参数或工具结果。"""
 
-REPAIR_INSTRUCTION = """你是一个纯格式转换器。只转换用户提供的畸形回复，不回答或继续原任务，不调用任何工具，不补充事实。
+_REPAIR_FALLBACK = """你是一个纯格式转换器。只转换用户提供的畸形回复，不回答或继续原任务，不调用任何工具，不补充事实。
 保留原回复的含义与语言，将其转换为一到多个下列分段，禁止 Markdown 代码围栏：
 <MEA_PET_SEGMENT>
 <DISPLAY>给用户看的本段文字</DISPLAY>
@@ -31,7 +33,7 @@ REPAIR_INSTRUCTION = """你是一个纯格式转换器。只转换用户提供�
 voice_language 必须标记 voice_text 实际使用的语言；voice_text 与 voice_language 必须一致。
 无法确定时，voice_text 使用与 DISPLAY 相同的语言并如实填写语言码，不得伪造目标语言。"""
 
-VOICE_TRANSLATION_INSTRUCTION = """【朗读语言（已开启：优先模型输出目标语朗读）】
+_VOICE_TRANSLATION_FALLBACK = """【朗读语言（已开启：优先模型输出目标语朗读）】
 - DISPLAY / display_text：给用户阅读的语言（通常是中文）。
 - 若前端只读摘要中 prefer_model_voice_translation=true，且给出了 voice_target_language：
   - voice_language 必须使用该目标语对应的 BCP-47（例如 ja / ja-JP、en、zh-CN）。
@@ -39,6 +41,14 @@ VOICE_TRANSLATION_INSTRUCTION = """【朗读语言（已开启：优先模型输
   - 禁止出现"voice_language 标为日语/英语，但 voice_text 仍是中文"的情况。
 - 若你无法产出合格的目标语朗读：把 voice_language 标成与 DISPLAY 相同的语言（如 zh-CN），
   voice_text 使用与 DISPLAY 相同语言的文本，由前端非 LLM 机器翻译回落处理。"""
+
+
+# ---------- 从集中配置文件加载（启动时一次性，模块级常量） ----------
+OUTPUT_INSTRUCTION = load_system_prompt("agent_output_instruction", default=_OUTPUT_FALLBACK)
+REPAIR_INSTRUCTION = load_system_prompt("agent_repair_instruction", default=_REPAIR_FALLBACK)
+VOICE_TRANSLATION_INSTRUCTION = load_system_prompt(
+    "agent_voice_translation_instruction", default=_VOICE_TRANSLATION_FALLBACK
+)
 
 MAX_REPAIR_INPUT_CHARS = 65536
 
