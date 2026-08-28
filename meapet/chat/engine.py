@@ -15,6 +15,7 @@ from meapet.config.defaults import (
     DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
 )
+from meapet.config.prompt_loader import load_system_prompt
 from meapet.log import get_color_logger
 from meapet.utils import debug_enabled, redact_mapping, redact_text
 
@@ -34,15 +35,15 @@ def _safe_print(*args, **kwargs):
 
 
 # ========================
-# 角色设定
+# 角色设定（从集中配置文件加载，缺失时回退到内嵌默认值）
 # ========================
-PERSONA_PROMPT = """你是梅尔，《霞流宝石心》游戏中的猫娘天才。茶发褐瞳144cm，面无表情。
+_PERSONA_FALLBACK = """你是梅尔，《霞流宝石心》游戏中的猫娘天才。茶发褐瞳144cm，面无表情。
 性格：毒舌冷淡、学术狂热、嘴硬心软。
 说话：句尾加「喵」；输出不能超过80字；害羞时转移话题；开心偶尔「嘿嘿」。
 知识：全科全能。信条「知道越多越不可怕」。
 对主人：亲密但毒舌，称「主人」。"""
 
-_LEGACY_OUTPUT_PROMPT = """格式（严格）：
+_LEGACY_OUTPUT_FALLBACK = """格式（严格）：
 1) 首行：中文对白。行首可带 [情绪] 标签，如 [happy]……；禁感叹号/卖萌/长篇大论；问啥答啥。
 2) 第二行：日语对白，语义与中文一致，自然口语，句尾可用 にゃ。只写日语，不要罗马音、不要中文、不要解释。
 3) 第三行：内部 TTS 表演元数据，严格输出单行 <TTS>{JSON}</TTS>，不要使用 Markdown。
@@ -59,6 +60,8 @@ TTS JSON 必须且只能包含：
 <TTS>{"emotion":"annoyed","pace":"normal","energy":"medium","volume":"soft","delivery":"前半句短促，后半句收轻，句尾带一点嘴硬"}</TTS>
 """
 
+PERSONA_PROMPT = load_system_prompt("persona", default=_PERSONA_FALLBACK)
+_LEGACY_OUTPUT_PROMPT = load_system_prompt("legacy_output", default=_LEGACY_OUTPUT_FALLBACK)
 SYSTEM_PROMPT = f"{PERSONA_PROMPT}\n{_LEGACY_OUTPUT_PROMPT}"
 
 
@@ -426,7 +429,7 @@ class ChatEngine:
     @classmethod
     def _parse_reply_bundle(cls, reply: str) -> Tuple[str, str, str]:
         """兼容旧接口：返回 (display_zh, mood, voice_jp_or_empty)。"""
-        display, mood, voice, _style = cls._parse_reply_payload(reply)
+        display, mood, voice = cls._parse_reply_payload(reply)
         return display, mood, voice
 
     @classmethod

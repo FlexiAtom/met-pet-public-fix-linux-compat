@@ -17,6 +17,7 @@ from meapet.agent.prompts import (
     build_repair_instruction,
     frontend_context_json,
 )
+from meapet.config.prompt_loader import load_system_prompt
 from meapet.conversation.output_protocol import (
     MeaPetOutputStreamParser,
     ProtocolCompleted,
@@ -42,7 +43,8 @@ from meapet.direct.types import (
 log = get_color_logger("direct_conversation")
 
 # Direct 模式的紧凑输出格式说明（同 <MEA_PET_SEGMENT> 协议，去掉了 Agent 特有内容）
-_DIRECT_OUTPUT_INSTRUCTION = (
+# 从集中配置文件加载，缺失时回退到内嵌默认值。
+_DIRECT_OUTPUT_FALLBACK = (
     "不要进行推理，直接给出回复。\n"
     "不要输出推理过程。回复必须使用以下格式：\n"
     "<MEA_PET_SEGMENT>\n"
@@ -52,7 +54,10 @@ _DIRECT_OUTPUT_INSTRUCTION = (
     "}</META>\n"
     "</MEA_PET_SEGMENT>\n"
     "最后输出<MEA_PET_DONE />。\n"
-    "五个字段缺一不可。voice_language 必须与实际文本语言一致。"
+    "五个字段缺一不可。voice_language 必须与实际文本语言一致。\n"
+)
+_DIRECT_OUTPUT_INSTRUCTION = load_system_prompt(
+    "direct_output_instruction", default=_DIRECT_OUTPUT_FALLBACK
 )
 
 

@@ -1,0 +1,21 @@
+./meapet/chat/engine.py:146:            {"role": "system", "content": SYSTEM_PROMPT}
+./meapet/chat/engine.py:254:            self.history[0] = {"role": "system", "content": system}
+./meapet/chat/engine.py:289:                self.history[0] = {"role": "system", "content": PERSONA_PROMPT}
+./meapet/chat/engine.py:513:                self.history[0] = {"role": "system", "content": full_system}
+./meapet/chat/engine.py:525:                    self.history[0] = {"role": "system", "content": SYSTEM_PROMPT}
+./meapet/chat/engine.py:541:                    self.history[0] = {"role": "system", "content": SYSTEM_PROMPT}
+./meapet/chat/engine.py:560:                    self.history[0] = {"role": "system", "content": full_system}
+./meapet/chat/engine.py:575:                    self.history[0] = {"role": "system", "content": SYSTEM_PROMPT}
+./meapet/chat/engine.py:869:                self.history[0] = {"role": "system", "content": full_system}
+./meapet/chat/engine.py:988:            {"role": "system", "content": "你是一个信息提取助手。从对话中提取值得长期记住的事实，每行一条用「- 」开头。如果没有值得记的内容回复「无」。"},
+./meapet/chat/engine.py:1056:        self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
+./meapet/watcher/screen.py:409:                    "role": "system",
+./meapet/desktop/chat_flow.py:1086:                engine.history[0] = {"role": "system", "content": SYSTEM_PROMPT}
+./meapet/desktop/chat_flow.py:1100:                engine.history[0] = {"role": "system", "content": full_system}
+./meapet/direct/conversation.py:95:                {"role": "system", "content": build_repair_instruction(request)},
+./meapet/direct/conversation.py:170:                messages[0] = {"role": "system", "content": system}
+./meapet/direct/conversation.py:219:                "role": "system",
+./tests/test_direct_protocols.py:37:            {"role": "system", "content": "system rules"},
+./tests/test_direct_protocols.py:278:                    {"role": "system", "content": "system rules"},
+./tests/test_direct_protocols.py:393:                    {"role": "system", "content": "system rules"},
+./tests/test_module_split.py:315:                    {"role": "system", "content": SYSTEM_PROMPT},
