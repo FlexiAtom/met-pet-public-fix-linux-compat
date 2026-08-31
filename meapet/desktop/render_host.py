@@ -8,6 +8,7 @@ Live2D 保留完整模型画布用于渲染动作，但顶层桌宠窗口只暴�
 - 不恢复历史椭圆窗形，也不使用 OpenGL stencil；形状关闭时保留普通矩形窗口
 """
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -618,6 +619,175 @@ class PetRenderHostMixin:
             f"[pet] Live2D 首帧就绪 size={self.width()}x{self.height()} "
             f"pos=({self.x()},{self.y()})"
         )
+        # ★ Phase 3: 初始化 layer-shell 双模（穿透 / 交互）
+        self._init_layer_overlay_mode()
+
+        # ★ Phase 1: 首帧就绪后，强制启用 layer-shell 穿透（Niri / Wayland）
+        # 独立于 standby 状态，确保真实桌宠运行时也能接通 wayland-layer 后端
+        from PyQt5.QtCore import QTimer
+        from meapet.desktop.click_through import enable_click_through
+
+    # ------------------------------------------------------------ 双模架构
+    def _layer_geometry(self):
+        """返回离屏渲染内容应显示的全局矩形 (x, y, w, h)。
+
+        ⚠️ Wayland 客户端无法查询自身全局坐标，mapToGlobal() 不可靠
+        （会返回相对值导致负坐标）。必须用「顶层窗口坐标 + 子控件相对偏移」
+        手动合成。子控件（完整画布）通常比窗口大且带负偏移。
+        """
+        widget = getattr(self, "sprite_label", None)
+        if widget is None:
+            return self.x(), self.y(), self.width(), self.height()
+        try:
+            # mapTo 是局部映射，可靠；再叠加顶层窗口坐标
+            offset = widget.mapTo(self, QPoint(0, 0))
+            return (
+                self.x() + offset.x(),
+                self.y() + offset.y(),
+                widget.width(),
+                widget.height(),
+            )
+        except Exception:
+            return self.x(), self.y(), self.width(), self.height()
+
+    def _init_layer_overlay_mode(self) -> None:
+        # ★ 只在 Linux + Wayland 会话下启用双模
+        if sys.platform != "linux":
+            return
+        try:
+            from PyQt5.QtGui import QGuiApplication
+            if str(QGuiApplication.platformName() or "").lower() != "wayland":
+                return
+        except Exception:
+            return
+        """初始化 layer-shell 双模；不支持时静默保持原有单窗口行为。"""
+        if getattr(self, "_layer_inited", False):
+            return
+        self._layer_inited = True
+        try:
+            from meapet.desktop.layer_debug_panel import LayerDebugPanel
+            from meapet.desktop.wayland_layer import (
+                get_backend,
+                is_available as layer_available,
+            )
+        except Exception as exc:
+            safe_print(f"[layer] 双模模块导入失败，保持原行为: {exc}")
+            return
+
+        try:
+            if not layer_available():
+                safe_print("[layer] compositor 不支持 layer-shell，保持原行为")
+                return
+        except Exception as exc:
+            safe_print(f"[layer] layer-shell 探测失败: {exc}")
+            return
+
+        backend = get_backend()
+        self._layer_backend = backend          # ← 只赋值，不创建
+
+        self._layer_timer = QTimer(self)
+        self._layer_timer.setInterval(33)
+        self._layer_timer.timeout.connect(self._push_layer_frame)
+
+        self._layer_panel = LayerDebugPanel(self._set_layer_mode)
+        self._position_layer_panel()
+        self._layer_panel.show()
+
+        self._set_layer_mode(True)             # ← 由它统一创建
+
+
+        self._layer_backend = backend
+
+        # 推帧定时器：穿透模式下把离屏渲染结果送到 layer surface
+        self._layer_timer = QTimer(self)
+        self._layer_timer.setInterval(33)  # ~30fps
+        self._layer_timer.timeout.connect(self._push_layer_frame)
+
+        # 常驻开关（永远可点，用来切模式）
+        self._layer_panel = LayerDebugPanel(self._set_layer_mode)
+        self._position_layer_panel()
+        self._layer_panel.show()
+
+        self._set_layer_mode(True)
+
+    def _position_layer_panel(self) -> None:
+        """把开关窗口贴到屏幕左下角。"""
+        panel = getattr(self, "_layer_panel", None)
+        if panel is None:
+            return
+        try:
+            screen = QApplication.primaryScreen()
+            geo = screen.availableGeometry() if screen is not None else None
+            if geo is not None:
+                panel.move(geo.left() + 12, geo.bottom() - panel.height() - 12)
+                return
+        except Exception:
+            pass
+        panel.move(20, 20)
+
+    def _set_layer_mode(self, penetrate: bool) -> None:
+        backend = getattr(self, "_layer_backend", None)
+        if backend is None:
+            return
+
+        if penetrate:
+            # ① 必须在 hide() 之前取坐标（Wayland 下隐藏后位置即失效）
+            x, y, w, h = self._layer_geometry()
+            x, y = max(0, x), max(0, y)
+            self._layer_window_pos = (self.x(), self.y())
+
+            # ② 每次都新建（全新 OVERLAY surface）
+            try:
+                backend.enable(None, w, h, x, y)
+            except Exception as exc:
+                safe_print(f"[layer] 创建 layer context 失败: {exc}")
+                return
+
+            widget = getattr(self, "sprite_label", None)
+            if widget is not None:
+                widget._proxy_rect = QRect(QPoint(x, y), QSize(w, h))
+
+            self.hide()                        # ③ 最后才隐藏
+            self._layer_timer.start()
+            safe_print(f"[layer] → 穿透模式 surface={w}x{h} @({x},{y})")
+        else:
+            self._layer_timer.stop()
+            widget = getattr(self, "sprite_label", None)
+            if widget is not None:
+                widget._proxy_rect = None
+
+            pos = getattr(self, "_layer_window_pos", None)
+            if pos is not None:
+                self.move(pos[0], pos[1])
+
+            # ④ 销毁而非 clear —— 关键修复
+            backend.destroy_context()
+            self.show()
+            self.raise_()
+            safe_print("[layer] → 交互模式（可拖动 / 右键菜单）")
+
+
+    def _push_layer_frame(self) -> None:
+        """把 Live2D 离屏渲染结果推送到 layer surface。"""
+        backend = getattr(self, "_layer_backend", None)
+        if backend is None:
+            return
+        widget = getattr(self, "sprite_label", None)
+        renderer = getattr(widget, "render_offscreen", None)
+        if not callable(renderer):
+            return
+        try:
+            img = renderer()
+            if img is None or img.isNull():
+                self._layer_fail = getattr(self, "_layer_fail", 0) + 1
+                if self._layer_fail <= 3:
+                    print(f"[layer] ✗ 第 {self._layer_fail} 次拿到空帧", flush=True)
+                return
+            backend.update_pixels(img)
+        except Exception as exc:
+            print(f"[layer] ✗ 推帧异常: {type(exc).__name__}: {exc}", flush=True)
+
+
 
     # ------------------------------------------------------------ 画布尺寸工具
 

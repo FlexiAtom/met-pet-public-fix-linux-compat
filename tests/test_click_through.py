@@ -52,7 +52,7 @@ class PlatformBackendNameTests(unittest.TestCase):
         self.assertEqual(platform_backend_name("windows"), "win32")
         self.assertEqual(platform_backend_name("xcb"), "x11")
         self.assertEqual(platform_backend_name("x11"), "x11")
-        self.assertEqual(platform_backend_name("wayland"), "none")
+        self.assertEqual(platform_backend_name("wayland"), "wayland")
         self.assertEqual(platform_backend_name("unsupported"), "none")
 
     def test_auto_win32(self) -> None:
