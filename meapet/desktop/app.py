@@ -1,13 +1,18 @@
 """
 梅尔桌宠 - 主程序
-透明异形窗口 + 拖拽移动 + 表情切换 + 对话气泡
+透明窗口 + 拖拽移动 + 表情切换 + 对话气泡
 """
 from __future__ import annotations
 
 import os
 import sys
 import time
-import socket  # must import before PyQt (QtNetwork hook)
+
+# socket 必须在 PyQt 之前导入（仅 Windows 需要，QtNetwork hook 顺序问题）。
+# Linux 上无此要求，但导入本身无害，仅在 Windows 上注释提醒。
+if sys.platform == "win32":
+    import socket  # must import before PyQt (QtNetwork hook, Windows only)
+
 # 在所有导入之前开启终端 VT 转译支持
 # 确保后续的 get_color_logger 和 logging 模块能正确输出彩色日志
 try:
@@ -66,7 +71,9 @@ from meapet.desktop.voice_mixin import PetVoiceMixin
 from meapet.desktop.splash import StartupSplash
 from meapet.desktop import status_language
 
-os.environ.setdefault("QT_MULTIMEDIA_PREFERRED_PLUGINS", "windowsmediafoundation")
+# Windows 专用多媒体后端偏好：仅 Windows 上设置，Linux/macOS 不需要。
+if sys.platform == "win32":
+    os.environ.setdefault("QT_MULTIMEDIA_PREFERRED_PLUGINS", "windowsmediafoundation")
 
 _WEBSOCKETS_AVAILABLE = None
 
@@ -246,7 +253,12 @@ class MeaPet(
         # 允许激活，避免完全无法交互
         self.setAttribute(Qt.WA_ShowWithoutActivating, False)
         self.setAttribute(Qt.WA_AlwaysStackOnTop, True)
-        self.setProperty("_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_UTILITY")
+
+        # _NET_WM_WINDOW_TYPE 是 X11/Wayland 专用的 EWMH 提示，用于 Linux 窗口管理器
+        # 正确分类窗口类型。Windows/macOS 上 Qt 会自动忽略，但仅在 Linux 上有意义。
+        if sys.platform.startswith("linux"):
+            self.setProperty("_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_UTILITY")
+
         self.setWindowTitle("mea-pet")
         # 桌宠是 Tool 悬浮窗：关闭/隐藏时不要拖垮整个 QApplication
         self.setAttribute(Qt.WA_QuitOnClose, False)
@@ -574,6 +586,134 @@ class MeaPet(
             self._idle_timer.stop()
         self.hide()
 
+    # ── Standby click-through integration ──────────────────────────────
+    # 将重构后的 meapet.desktop.click_through API 接入主窗口：
+    #   * enable_click_through 现在接受 QWidget（我们直接传 self）
+    #   * set_shape_region 用于 Live2D 角色动画的动态异形命中区
+    #   * 右键轮询在 Wayland 下恒返回 False，需改用 Qt 鼠标事件
+    #     （RightClickEdgeDetector.update 可在 mousePressEvent 中调用）
+
+    def _apply_hit_region(self) -> None:
+        """同步当前窗口几何到原生点击穿透后端。
+
+        在 init 末尾与每次几何变化后调用。现在走重构后的统一 API：
+        传 QWidget 对象（不再手动 winId()），让后端自行解析句柄，
+        并为 Wayland 后端保留活着的 QWindow 引用。
+        """
+        state = getattr(self, "_click_through_state", None)
+        if state is None or not getattr(state, "active", False):
+            return
+        # 动态异形：以整个窗口作为"保留输入区"，等价于旧版的 full ShapeInput。
+        # 若后续 Live2D 角色需要像素级轮廓跟随，可在此处根据模型包围盒
+        # 构造 [(x, y, w, h), ...] 传入 set_shape_region。
+        try:
+            from meapet.desktop.click_through import set_shape_region
+            rects = [(0, 0, max(1, self.width()), max(1, self.height()))]
+            set_shape_region(state, rects)
+        except Exception as exc:
+            log.warning(f"[standby] set_shape_region 失败: {type(exc).__name__}")
+
+    def _ensure_standby_click_through(self) -> None:
+        """进入待机时开启 OS 级鼠标穿透；退出时恢复。
+
+        由 showEvent / 待机切换逻辑通过 getattr 可选调用，因此即使未
+        接通待机开关也保持安全（不会 AttributeError）。
+        """
+        from meapet.desktop.click_through import (
+            ClickThroughState,
+            disable_click_through,
+            enable_click_through,
+        )
+
+        state = getattr(self, "_click_through_state", None)
+        if state is None:
+            self._click_through_state = ClickThroughState()
+            state = self._click_through_state
+
+        standby = bool(getattr(self, "_standby", False))
+        menu_open = bool(getattr(self, "_standby_menu_open", False))
+
+        if standby and not menu_open:
+            # 已激活则仅刷新形状；否则启用穿透（传 self = QWidget）
+            if not state.active:
+                new_state = enable_click_through(
+                    self,
+                    width=self.width(),
+                    height=self.height(),
+                )
+                self._click_through_state = new_state
+                state = new_state
+                self._qt_transparent_for_input = state.active
+                if state.active:
+                    log.info(
+                        f"[standby] 点击穿透已启用 backend={state.backend}"
+                    )
+                else:
+                    log.warning("[standby] 点击穿透未启用（后端不可用）")
+            self._apply_hit_region()
+            self._start_standby_right_click_poll()
+        else:
+            if state.active:
+                disable_click_through(state)
+                self._click_through_state = ClickThroughState()
+                self._qt_transparent_for_input = False
+                log.info("[standby] 点击穿透已恢复")
+            self._stop_standby_right_click_poll()
+
+    def _start_standby_right_click_poll(self) -> None:
+        """启动右键轮询定时器（win32/x11 后端需要）。
+
+        Wayland 后端下 is_right_button_down 恒返回 False，轮询无效，
+        此时应改为在 mousePressEvent 里用 RightClickEdgeDetector.update
+        检测右键上升沿。这里仍启动定时器以兼容其他后端。
+        """
+        if getattr(self, "_standby_rc_timer", None) is not None:
+            return
+        from PyQt5.QtCore import QTimer
+
+        from meapet.desktop.click_through import is_right_button_down
+
+        timer = QTimer(self)
+        timer.setTimerType(Qt.PreciseTimer)
+
+        def _poll():
+            if not getattr(self, "_standby", False):
+                return
+            from meapet.desktop.click_through import platform_backend_name
+            if platform_backend_name() == "wayland":
+                # Wayland 无全局指针查询，交由 Qt 事件流处理
+                return
+            if is_right_button_down():
+                self._on_standby_right_click()
+
+        timer.timeout.connect(_poll)
+        timer.start(50)
+        self._standby_rc_timer = timer
+
+    def _stop_standby_right_click_poll(self) -> None:
+        timer = getattr(self, "_standby_rc_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            self._standby_rc_timer = None
+
+    def _on_standby_right_click(self) -> None:
+        """右键上升沿回调：在待机穿透开启时唤起上下文菜单。"""
+        detector = getattr(self, "_standby_rc_detector", None)
+        if detector is not None:
+            # cursor_in_pet 近似为 True（穿透下鼠标本就不在宠物上，
+            # 但右键被轮询捕获说明已进入命中区），此处直接视为触发。
+            if not detector.update(cursor_in_pet=True, button_down=False):
+                return
+        self._standby_menu_open = True
+        self._ensure_standby_click_through()  # 恢复输入以便菜单交互
+        try:
+            self._show_context_menu()
+        finally:
+            self._standby_menu_open = False
+
 
 
 def _ensure_jieba():
@@ -865,9 +1005,13 @@ if __name__ == "__main__":
         import traceback
         msg = traceback.format_exc()
         log.error(f"[fatal] 启动阶段未捕获异常:\n{msg}")
-        try:
-            if sys.platform == "win32":
+        # input() 暂停仅在 Windows 终端打包场景下有意义；
+        # Linux/macOS 直接从终端启动，崩溃信息自然可见。
+        if sys.platform == "win32":
+            try:
                 input("启动失败，按回车退出...")
-        except Exception:
-            pass
+            except Exception:
+                pass
         raise
+
+

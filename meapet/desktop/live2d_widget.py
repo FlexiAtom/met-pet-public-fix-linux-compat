@@ -20,21 +20,12 @@ except ImportError:  # optional dependency
     LIVE2D_AVAILABLE = False
 _LIVE2D_INITIALIZED = False
 from PyQt5.QtCore import QEvent
-from PyQt5.QtGui import QSurfaceFormat
+from PyQt5.QtGui import QImage, QSurfaceFormat
 
 from meapet.desktop.render_host import calculate_drag_position
 from meapet.log import get_color_logger
 
 log = get_color_logger("live2d_widget")
-
-# 在 Windows 下可选导入 win32api（DLL 缺失时不阻塞启动）
-if sys.platform == "win32":
-    try:
-        import win32api
-        import win32con
-    except Exception:
-        win32api = None
-        win32con = None
 
 
 class Live2DModel:
@@ -181,6 +172,10 @@ class Live2DWidget(QOpenGLWidget):
         self._dragging_window = False
         self._drag_pointer_origin = None
         self._drag_window_origin = None
+        # Phase 3: 离屏渲染（穿透模式下窗口隐藏，paintGL 不再被调用）
+        self._fbo = None
+        self._fbo_size = (0, 0)
+        self._proxy_rect = None  # 由 render_host 注入的真实屏幕矩形
 
         # 初始大小：优先使用模型画布大小
         init_w, init_h = self.l2d.get_suggested_size()
@@ -292,31 +287,149 @@ class Live2DWidget(QOpenGLWidget):
             log.debug(f"[paint] frame={self._dbg_frame} alive")
 
         live2d.clearBuffer()
+        self._draw_model()
+        self._frame_drawn = True
 
-        # 每帧从系统获取光标全局坐标，映射后驱动眼球+身体追踪
+    # ====== Phase 3: 离屏渲染 ======
+
+    def _update_look_target(self):
+        """用光标全局坐标驱动眼球 / 身体追踪。
+
+        穿透模式下 Qt 窗口被隐藏，mapToGlobal 失效，
+        因此优先使用 render_host 注入的 _proxy_rect（真实显示位置）。
+        """
+        if self._dragging_window or not self.l2d.model:
+            return
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+
         from PyQt5.QtGui import QCursor
         gp = QCursor.pos()
-        wp = self.mapToGlobal(self.rect().topLeft())
-        w, h = self.width(), self.height()
-        if (
-            not self._dragging_window
-            and w > 0
-            and h > 0
-            and self.l2d.model
-        ):
-            cx = (gp.x() - wp.x() - w / 2) / (w / 2)
-            cy = (gp.y() - wp.y() - h / 2) / (h / 2)
-            cx = max(-1.0, min(1.0, cx))
-            cy = max(-1.0, min(1.0, cy))
-            self.l2d.model.SetParameterValue("ParamAngleX", cx * 30, 1.0)
-            self.l2d.model.SetParameterValue("ParamAngleY", -cy * 30, 1.0)
-            self.l2d.model.SetParameterValue("ParamBodyAngleZ", cx * 10, 1.0)
-            self.l2d.model.SetParameterValue("ParamAngleZ", cx * 10, 1.0)
+        proxy = getattr(self, "_proxy_rect", None)
+        if proxy is not None:
+            wp = proxy.topLeft()
+        else:
+            wp = self.mapToGlobal(self.rect().topLeft())
 
-        # 直接绘制（窗口大小已与模型画布联动，无额外裁剪）
+        cx = (gp.x() - wp.x() - w / 2) / (w / 2)
+        cy = (gp.y() - wp.y() - h / 2) / (h / 2)
+        cx = max(-1.0, min(1.0, cx))
+        cy = max(-1.0, min(1.0, cy))
+        self.l2d.model.SetParameterValue("ParamAngleX", cx * 30, 1.0)
+        self.l2d.model.SetParameterValue("ParamAngleY", -cy * 30, 1.0)
+        self.l2d.model.SetParameterValue("ParamBodyAngleZ", cx * 10, 1.0)
+        self.l2d.model.SetParameterValue("ParamAngleZ", cx * 10, 1.0)
+
+    def _draw_model(self):
+        """绘制模型当前状态，供 paintGL 与离屏渲染共用。"""
+        self._update_look_target()
         self.l2d.model.Update()
         self.l2d.model.Draw()
-        self._frame_drawn = True
+
+    def _ensure_fbo(self, w: int, h: int) -> bool:
+        """确保离屏 FBO 存在且尺寸匹配。"""
+        if w <= 0 or h <= 0:
+            return False
+        if self._fbo is not None and self._fbo_size == (w, h):
+            return True
+        try:
+            from PyQt5.QtGui import (
+                QOpenGLFramebufferObject,
+                QOpenGLFramebufferObjectFormat,
+            )
+        except Exception:
+            return False
+        fmt = QOpenGLFramebufferObjectFormat()
+        fmt.setAttachment(QOpenGLFramebufferObject.CombinedDepthStencil)
+        self._fbo = QOpenGLFramebufferObject(w, h, fmt)
+        self._fbo_size = (w, h)
+        return True
+
+    def render_offscreen(self):
+        """离屏渲染模型并返回 QImage；不依赖窗口可见性。
+
+        穿透模式下 Qt 顶层窗口被 hide()，Qt 不再派发 paintGL，
+        必须靠这里主动 makeCurrent + 渲染到 FBO + glReadPixels 取帧。
+        """
+        if not self._ready or not self.l2d.model:
+            print("[live2d] ✗ 离屏: 未就绪或无模型", flush=True)
+            return None
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            print(f"[live2d] ✗ 离屏: 尺寸非法 {w}x{h}", flush=True)
+            return None
+        try:
+            from OpenGL.GL import (
+                GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_RGBA,
+                GL_UNSIGNED_BYTE, glClear, glClearColor, glFinish,
+                glReadPixels, glViewport,
+            )
+        except Exception as exc:
+            print(f"[live2d] ✗ 离屏: OpenGL 导入失败 {exc}", flush=True)
+            return None
+
+        try:
+            self.makeCurrent()
+        except Exception as exc:
+            print(f"[live2d] ✗ 离屏: makeCurrent 失败（窗口隐藏导致？）{exc}", flush=True)
+            return None
+
+        try:
+            if not self._ensure_fbo(w, h):
+                print("[live2d] ✗ 离屏: FBO 创建失败", flush=True)
+                return None
+            if not self._fbo.bind():
+                print("[live2d] ✗ 离屏: FBO bind 失败", flush=True)
+                return None
+
+            glViewport(0, 0, w, h)
+            glClearColor(0.0, 0.0, 0.0, 0.0)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            self._draw_model()
+            glFinish()
+
+            img = QImage(w, h, QImage.Format_RGBA8888)
+            self._read_pixels_into(img, w, h)
+            self._fbo.release()
+            return img.mirrored(False, True)
+        except Exception as exc:
+            print(f"[live2d] ✗ 离屏: 渲染异常 {type(exc).__name__}: {exc}", flush=True)
+            return None
+        finally:
+            try:
+                self.doneCurrent()
+            except Exception:
+                pass
+
+    def _read_pixels_into(self, img, w: int, h: int):
+        """用 numpy 或 ctypes 作为 glReadPixels 的目标缓冲。
+
+        PyOpenGL 不接受 PyQt5 的 sip.voidptr，必须转成 numpy 数组
+        或 ctypes 数组，否则抛 "No array-type handler"。
+        """
+        from OpenGL.GL import GL_RGBA, GL_UNSIGNED_BYTE, glReadPixels
+
+        nbytes = w * h * 4
+        ptr = img.bits()
+        ptr.setsize(nbytes)
+
+        # 方案 A：numpy（PyOpenGL 原生支持，最快）
+        try:
+            import numpy as np
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape(h, w, 4)
+            glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, arr)
+            return
+        except ImportError:
+            pass
+        except Exception as exc:
+            print(f"[live2d] numpy 读像素失败，退到 ctypes: {exc}", flush=True)
+
+        # 方案 B：ctypes（无需 numpy）
+        import ctypes
+        addr = int(ptr)
+        buf = (ctypes.c_ubyte * nbytes).from_address(addr)
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf)
 
     def _on_frame_swapped(self):
         """只在 Qt 确认首帧已交换到屏幕后通知宿主显现。"""
@@ -454,6 +567,8 @@ class Live2DWidget(QOpenGLWidget):
     def shutdown(self):
         self._timer.stop()
         self._ready = False
+        self._fbo = None
+        self._fbo_size = (0, 0)
 
 
 # ====== 工具函数 ======
@@ -477,3 +592,4 @@ def dispose_live2d():
             _LIVE2D_INITIALIZED = False
     except Exception:
         pass
+

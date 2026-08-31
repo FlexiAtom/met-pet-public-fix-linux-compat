@@ -83,16 +83,7 @@ class PetAudioMixin:
         except (TypeError, ValueError):
             volume = 100
 
-        # Windows 原生播放（不支持音量控制）
-        try:
-            import winsound
-            winsound.PlaySound(abs_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-            safe_print(f"[audio] winsound 播放: {os.path.basename(abs_path)} (音量设置无效)")
-            return
-        except Exception as e:
-            safe_print(f"[audio] winsound 失败，尝试 Qt: {e}")
-
-        # 备用：PyQt5 QtMultimedia（支持音量）
+        # 首选：PyQt5 QtMultimedia（跨平台，支持音量控制）
         try:
             from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
             from PyQt5.QtCore import QUrl
@@ -107,14 +98,12 @@ class PetAudioMixin:
         except Exception as e:
             safe_print(f"[audio] Qt 播放失败: {e}")
 
-        # 再备用：系统默认播放器（不支持音量控制）
+        # 备用：系统默认播放器（不支持音量控制）
         try:
-            import subprocess
-            import sys as _sys
-            if _sys.platform.startswith("win"):
+            if sys.platform.startswith("win"):
                 os.startfile(abs_path)  # type: ignore[attr-defined]
                 safe_print(f"[audio] startfile 打开: {os.path.basename(abs_path)}")
-            elif _sys.platform == "darwin":
+            elif sys.platform == "darwin":
                 subprocess.Popen(["afplay", abs_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 safe_print(f"[audio] afplay 播放: {os.path.basename(abs_path)}")
             else:
@@ -126,3 +115,4 @@ class PetAudioMixin:
     # ========================
     # 屏幕观察（截屏吐槽）
     # ========================
+

@@ -72,3 +72,28 @@ debug_grab_frame.png
 # 误提交的运行时/调试残留文件
 /_standby=True
 /stop
+
+# ===== C / Wayland 原生层编译产物 =====
+# 目标文件
+*.o
+*.obj
+
+# 共享库 / 静态库（由 build_layer_shell.sh 生成）
+*.so
+*.so.*
+*.a
+*.dylib
+
+# 验证程序可执行文件（无扩展名，单独点名）
+/minimal_layer_shell
+
+# 调试 / 验证脚本（可选保留，视团队习惯）
+/test_layer_pixels.py
+
+# ===== 以下内容必须提交，不能忽略 =====
+# layer_shell_c.c / layer_shell_c.h / layer_shell_shim.cpp   —— 手写源码
+# wlr-layer-shell-client-protocol.c/.h                       —— 协议生成代码
+# xdg-shell-client-protocol.c/.h                             —— 协议生成代码
+# build_layer_shell.sh                                       —— 构建脚本
+# minimal_layer_shell.c                                      —— 最小验证程序源码（文档引用）
+
