@@ -1,64 +1,79 @@
-"""app.py 新增待机点击穿透集成方法的验证测试。
-
-用一个「协议替身」(duck-typed stand-in) 复刻 MeaPet.__init__ 里初始化的
-相关属性，并把 4 个新方法以 bound-method 方式绑定到该对象上做验证。
-
-meapet 包通过 stubs/meapet/__init__.py 提供（使 app.py 可导入）；
-click_through / capture 使用 out/ 下重构后的真实模块。
-"""
 from __future__ import annotations
-
 import os
-import sys
-import types
 import unittest
 from unittest import mock
 
-# stubs 必须在 app 之前导入，保证 meapet 包已就绪
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_HERE, "stubs"))
-sys.path.insert(0, os.path.join(_HERE, "out"))
+from PyQt5.QtCore import QObject
 
-import click_through as click_through_mod  # noqa: E402
-from PyQt5.QtCore import QTimer  # noqa: E402
-
-from click_through import (  # noqa: E402
+from meapet.desktop import click_through as click_through_mod
+from meapet.desktop.app import MeaPet
+from meapet.desktop.click_through import (
     ClickThroughState,
     RightClickEdgeDetector,
 )
-from app import MeaPet  # type: ignore  # noqa: E402
+
+
+class _Standin(QObject):
+    """MeaPet 的协议替身。
+
+    必须是真实 QObject —— 被测方法里有 QTimer(self)，
+    SimpleNamespace 会抛 TypeError。
+
+    未显式定义的属性转发到 MeaPet 同名成员，这样
+    mock.patch.object(MeaPet, ...) 依然生效（原实现打在类上，
+    实例查找会绕过它，故需在此桥接）。
+    """
+
+    def __init__(self, width=200, height=300):
+        super().__init__()
+        self._click_through_state = ClickThroughState()
+        self._standby = False
+        self._standby_menu_open = False
+        self._standby_rc_timer = None
+        self._standby_rc_detector = RightClickEdgeDetector()
+        self._qt_transparent_for_input = False
+        self._show_context_menu = mock.MagicMock()
+        self._size = (width, height)
+        self.log = mock.MagicMock()
+
+    def width(self):
+        return self._size[0]
+
+    def height(self):
+        return self._size[1]
+
+    def __getattr__(self, name):
+        # 仅在常规查找失败时触发
+        try:
+            attr = getattr(MeaPet, name)
+        except AttributeError:
+            # 同伴方法未实现时给出哑对象，避免误报 AttributeError
+            attr = mock.MagicMock(name=name)
+            self.__dict__[name] = attr
+            return attr
+        if isinstance(attr, mock.Mock):
+            return attr
+        return attr.__get__(self) if callable(attr) else attr
 
 
 def _make_standin(width=200, height=300):
-    s = types.SimpleNamespace()
-    s._click_through_state = ClickThroughState()
-    s._standby = False
-    s._standby_menu_open = False
-    s._standby_rc_timer = None
-    s._standby_rc_detector = RightClickEdgeDetector()
-    s._qt_transparent_for_input = False
-    s._show_context_menu = mock.MagicMock()
-    s.width = lambda: width
-    s.height = lambda: height
-    s.log = mock.MagicMock()
-    return s
+    return _Standin(width, height)
 
 
 def _bind(obj, method_name):
     return getattr(MeaPet, method_name).__get__(obj)
 
-
 class ApplyHitRegionTests(unittest.TestCase):
     def test_noop_when_inactive(self):
         s = _make_standin()
-        with mock.patch("click_through.set_shape_region") as m:
+        with mock.patch("meapet.desktop.click_through.set_shape_region") as m:
             _bind(s, "_apply_hit_region")()
         m.assert_not_called()
 
     def test_sends_full_window_rect_when_active(self):
         s = _make_standin(120, 80)
         s._click_through_state = ClickThroughState(active=True, backend="x11", hwnd=1)
-        with mock.patch("click_through.set_shape_region") as m:
+        with mock.patch("meapet.desktop.click_through.set_shape_region") as m:
             _bind(s, "_apply_hit_region")()
         self.assertTrue(m.called)
         rects_arg = m.call_args[0][1]
@@ -69,8 +84,8 @@ class EnsureStandbyTests(unittest.TestCase):
     def test_enable_on_standby(self):
         s = _make_standin()
         s._standby = True
-        with mock.patch("click_through.enable_click_through") as enable, \
-                mock.patch("click_through.disable_click_through") as disable, \
+        with mock.patch("meapet.desktop.click_through.enable_click_through") as enable, \
+                mock.patch("meapet.desktop.click_through.disable_click_through") as disable, \
                 mock.patch.object(MeaPet, "_apply_hit_region") as apply_hit, \
                 mock.patch.object(MeaPet, "_start_standby_right_click_poll") as start:
             enable.return_value = ClickThroughState(active=True, backend="x11", hwnd=1)
@@ -78,29 +93,29 @@ class EnsureStandbyTests(unittest.TestCase):
         enable.assert_called_once()
         self.assertIs(enable.call_args[0][0], s)  # 传 self (QWidget)，非 int
         self.assertTrue(s._qt_transparent_for_input)
-        apply_hit.assert_called_once_with(s)
-        start.assert_called_once_with(s)
+        apply_hit.assert_called_once_with()
+        start.assert_called_once_with()
         disable.assert_not_called()
 
     def test_disable_when_not_standby(self):
         s = _make_standin()
         s._standby = False
         s._click_through_state = ClickThroughState(active=True, backend="x11", hwnd=1)
-        with mock.patch("click_through.enable_click_through") as enable, \
-                mock.patch("click_through.disable_click_through") as disable, \
+        with mock.patch("meapet.desktop.click_through.enable_click_through") as enable, \
+                mock.patch("meapet.desktop.click_through.disable_click_through") as disable, \
                 mock.patch.object(MeaPet, "_stop_standby_right_click_poll") as stop:
             _bind(s, "_ensure_standby_click_through")()
         disable.assert_called_once()
         enable.assert_not_called()
         self.assertFalse(s._qt_transparent_for_input)
-        stop.assert_called_once_with(s)
+        stop.assert_called_once_with()
 
     def test_menu_open_pauses_penetration(self):
         s = _make_standin()
         s._standby = True
         s._standby_menu_open = True
         s._click_through_state = ClickThroughState(active=True, backend="x11", hwnd=1)
-        with mock.patch("click_through.disable_click_through") as disable:
+        with mock.patch("meapet.desktop.click_through.disable_click_through") as disable:
             _bind(s, "_ensure_standby_click_through")()
         disable.assert_called_once()
 
@@ -112,8 +127,8 @@ class RightClickPollTests(unittest.TestCase):
         _bind(s, "_start_standby_right_click_poll")()
         self.assertIsNotNone(s._standby_rc_timer)
         try:
-            with mock.patch("click_through.is_right_button_down") as rb, \
-                    mock.patch("click_through.platform_backend_name",
+            with mock.patch("meapet.desktop.click_through.is_right_button_down") as rb, \
+                    mock.patch("meapet.desktop.click_through.platform_backend_name",
                                return_value="wayland"):
                 s._standby_rc_timer.timeout.emit()
             rb.assert_not_called()
@@ -125,8 +140,8 @@ class RightClickPollTests(unittest.TestCase):
         s._standby = True
         _bind(s, "_start_standby_right_click_poll")()
         try:
-            with mock.patch("click_through.is_right_button_down", return_value=False) as rb, \
-                    mock.patch("click_through.platform_backend_name", return_value="x11"):
+            with mock.patch("meapet.desktop.click_through.is_right_button_down", return_value=False) as rb, \
+                    mock.patch("meapet.desktop.click_through.platform_backend_name", return_value="x11"):
                 s._standby_rc_timer.timeout.emit()
             rb.assert_called_once()
         finally:

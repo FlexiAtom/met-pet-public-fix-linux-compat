@@ -671,20 +671,28 @@ class MeaPet(
             return
         from PyQt5.QtCore import QTimer
 
-        from meapet.desktop.click_through import is_right_button_down
-
         timer = QTimer(self)
         timer.setTimerType(Qt.PreciseTimer)
 
         def _poll():
             if not getattr(self, "_standby", False):
                 return
-            from meapet.desktop.click_through import platform_backend_name
+            # 函数内导入：保证 mock.patch 在调用时生效
+            from meapet.desktop.click_through import (
+                is_right_button_down,
+                platform_backend_name,
+            )
             if platform_backend_name() == "wayland":
                 # Wayland 无全局指针查询，交由 Qt 事件流处理
                 return
-            if is_right_button_down():
+            down = bool(is_right_button_down())
+            if down:
                 self._on_standby_right_click()
+            else:
+                # 松开后复位边沿检测，保证下次按下仍能触发
+                detector = getattr(self, "_standby_rc_detector", None)
+                if detector is not None:
+                    detector.reset()
 
         timer.timeout.connect(_poll)
         timer.start(50)
@@ -705,7 +713,7 @@ class MeaPet(
         if detector is not None:
             # cursor_in_pet 近似为 True（穿透下鼠标本就不在宠物上，
             # 但右键被轮询捕获说明已进入命中区），此处直接视为触发。
-            if not detector.update(cursor_in_pet=True, button_down=False):
+            if not detector.update(cursor_in_pet=True, button_down=True):
                 return
         self._standby_menu_open = True
         self._ensure_standby_click_through()  # 恢复输入以便菜单交互
