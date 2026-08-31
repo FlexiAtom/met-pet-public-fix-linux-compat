@@ -709,7 +709,6 @@ class PetRenderHostMixin:
         self._layer_panel.show()
 
         self._set_layer_mode(True)
-        safe_print(f"[layer] 双模已就绪，默认穿透模式 surface={w}x{h} @({x},{y})")
 
     def _position_layer_panel(self) -> None:
         """把开关窗口贴到屏幕左下角。"""
