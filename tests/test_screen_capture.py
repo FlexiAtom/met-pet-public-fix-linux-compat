@@ -20,6 +20,59 @@ class _Image:
     size = (100, 80)
     mode = "RGB"
 
+    def width(self) -> int:
+        return self.size[0]
+
+    def height(self) -> int:
+        return self.size[1]
+
+
+def _fake_window(
+    win_id: int,
+    title: str,
+    pid: int,
+    *,
+    visible: bool = True,
+    minimized: bool = False,
+    x: int = 10,
+    y: int = 20,
+    width: int = 800,
+    height: int = 600,
+):
+    """Qt 顶层窗口替身（capture.py 现走跨平台 QGuiApplication 实现）。"""
+    from PyQt5.QtCore import QRect, Qt
+
+    return SimpleNamespace(
+        isVisible=lambda: visible,
+        windowState=lambda: Qt.WindowMinimized if minimized else Qt.WindowNoState,
+        geometry=lambda: QRect(x, y, width, height),
+        title=lambda: title,
+        winId=lambda: win_id,
+        property=lambda name: pid if name == "pid" else None,
+    )
+
+
+def _fake_qguiapplication(windows, screen=None):
+    """QGuiApplication 替身：不依赖真实窗口系统即可驱动 capture.py。"""
+    _screen = screen if screen is not None else SimpleNamespace(
+        grabWindow=lambda *args, **kwargs: None
+    )
+
+    class _Fake:
+        @staticmethod
+        def instance():
+            return _Fake
+
+        @staticmethod
+        def topLevelWindows():
+            return list(windows)
+
+        @staticmethod
+        def primaryScreen():
+            return _screen
+
+    return _Fake
+
 
 class TestScreenCapture(unittest.TestCase):
     def test_drag_region_maps_back_to_negative_virtual_desktop_coordinates(self):
@@ -62,57 +115,45 @@ class TestScreenCapture(unittest.TestCase):
         )
 
     def test_visible_windows_are_listed_with_process_names_and_filtered(self):
+        from meapet.watcher import capture as capture_mod
         from meapet.watcher.capture import list_capture_windows
 
-        titles = {
-            101: "main.py - Visual Studio Code",
-            102: "Hidden",
-            103: "Minimized",
-            104: "Zero area",
-        }
-
-        def enum_windows(callback, extra):
-            for hwnd in titles:
-                callback(hwnd, extra)
-
-        win32gui = SimpleNamespace(
-            EnumWindows=enum_windows,
-            IsWindowVisible=lambda hwnd: hwnd != 102,
-            GetWindowText=lambda hwnd: titles[hwnd],
-            IsIconic=lambda hwnd: hwnd == 103,
-            GetWindowRect=lambda hwnd: (
-                (0, 0, 0, 0) if hwnd == 104 else (10, 20, 810, 620)
-            ),
-        )
-        win32process = SimpleNamespace(
-            GetWindowThreadProcessId=lambda hwnd: (1, 1000 + hwnd),
-        )
+        windows = [
+            _fake_window(101, "main.py - Visual Studio Code", 1101),
+            _fake_window(102, "Hidden", 1102, visible=False),
+            _fake_window(103, "Minimized", 1103, minimized=True),
+            _fake_window(104, "Zero area", 1104, width=0),
+        ]
         with (
-            mock.patch.object(sys, "platform", "win32"),
-            mock.patch.dict(
-                sys.modules,
-                {"win32gui": win32gui, "win32process": win32process},
+            mock.patch.object(
+                capture_mod, "QGuiApplication", _fake_qguiapplication(windows)
             ),
-            mock.patch(
-                "meapet.watcher.capture._windows_process_name",
-                return_value="Code.exe",
+            mock.patch.object(
+                capture_mod, "_process_name_for_pid", return_value="Code.exe"
             ),
         ):
-            windows = list_capture_windows()
+            result = list_capture_windows()
 
-        self.assertEqual(len(windows), 1)
-        self.assertEqual(windows[0].title, "main.py - Visual Studio Code")
-        self.assertEqual(windows[0].process_name, "Code.exe")
-        self.assertEqual(windows[0].process_id, 1101)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].title, "main.py - Visual Studio Code")
+        self.assertEqual(result[0].process_name, "Code.exe")
+        self.assertEqual(result[0].process_id, 1101)
 
-    def test_full_screen_and_region_use_explicit_imagegrab_bounds(self):
+    def test_full_screen_and_region_use_explicit_bounds(self):
+        from PyQt5.QtCore import QRect
+
+        from meapet.watcher import capture as capture_mod
         from meapet.watcher.capture import capture_screen_image
 
         image = _Image()
-        with mock.patch(
-            "meapet.watcher.capture.ImageGrab.grab",
-            return_value=image,
-        ) as grab:
+        with (
+            mock.patch.object(
+                capture_mod, "QGuiApplication", _fake_qguiapplication([])
+            ),
+            mock.patch.object(
+                capture_mod, "_grab_screen", return_value=image
+            ) as grab,
+        ):
             full = capture_screen_image(scope="full_screen")
             region = capture_screen_image(
                 scope="region",
@@ -121,10 +162,9 @@ class TestScreenCapture(unittest.TestCase):
 
         self.assertIs(full.image, image)
         self.assertEqual(full.metadata["scope"], "full_screen")
-        self.assertEqual(grab.call_args_list[0].kwargs, {"all_screens": True})
+        self.assertIsNone(grab.call_args_list[0].kwargs.get("bbox"))
         self.assertEqual(
-            grab.call_args_list[1].kwargs,
-            {"bbox": (10, 20, 310, 220), "all_screens": True},
+            grab.call_args_list[1].kwargs["bbox"], QRect(10, 20, 300, 200)
         )
         self.assertEqual(region.metadata["width"], 100)
         self.assertNotIn("path", repr(region.metadata).lower())
@@ -137,64 +177,52 @@ class TestScreenCapture(unittest.TestCase):
                 capture_screen_image(scope="region", region=region)
             self.assertEqual(ctx.exception.code, "invalid_region")
 
-    def test_application_capture_uses_visible_windows_and_exact_win32_rect(self):
+    def test_application_capture_uses_visible_windows_and_exact_rect(self):
+        from PyQt5.QtCore import QRect
+
+        from meapet.watcher import capture as capture_mod
         from meapet.watcher.capture import capture_screen_image
 
-        titles = {101: "Visual Studio Code", 102: "Hidden Window"}
-
-        def enum_windows(callback, extra):
-            callback(101, extra)
-            callback(102, extra)
-
-        win32gui = SimpleNamespace(
-            EnumWindows=enum_windows,
-            IsWindowVisible=lambda hwnd: hwnd == 101,
-            GetWindowText=lambda hwnd: titles[hwnd],
-            IsIconic=lambda _hwnd: False,
-            GetWindowRect=lambda _hwnd: (50, 60, 850, 660),
-        )
+        windows = [
+            _fake_window(101, "Visual Studio Code", 1101, x=50, y=60),
+            _fake_window(102, "Hidden Window", 1102, visible=False),
+        ]
         image = _Image()
+        app = _fake_qguiapplication(windows)
         with (
-            mock.patch.object(sys, "platform", "win32"),
-            mock.patch.dict(sys.modules, {"win32gui": win32gui}),
-            mock.patch(
-                "meapet.watcher.capture.ImageGrab.grab",
-                return_value=image,
+            mock.patch.object(capture_mod, "QGuiApplication", app),
+            mock.patch.object(
+                capture_mod, "_process_name_for_pid", return_value="Code.exe"
+            ),
+            mock.patch.object(
+                capture_mod, "_grab_screen", return_value=image
             ) as grab,
         ):
-            result = capture_screen_image(
-                scope="application",
-                application="code",
-            )
+            result = capture_screen_image(scope="application", application="code")
 
         grab.assert_called_once_with(
-            bbox=(50, 60, 850, 660),
-            all_screens=True,
+            app.primaryScreen(), bbox=QRect(50, 60, 800, 600)
         )
         self.assertEqual(result.metadata["application"], "Visual Studio Code")
         self.assertNotIn("hwnd", result.metadata)
 
     def test_application_capture_is_typed_when_unsupported_or_window_missing(self):
+        from meapet.watcher import capture as capture_mod
         from meapet.watcher.capture import CaptureError, capture_screen_image
 
-        with mock.patch.object(sys, "platform", "linux"):
+        with mock.patch.object(
+            capture_mod, "QGuiApplication", _fake_qguiapplication([])
+        ):
             with self.assertRaises(CaptureError) as unsupported:
-                capture_screen_image(scope="application", application="Code")
+                capture_screen_image(scope="bogus")
         self.assertEqual(unsupported.exception.code, "unsupported_scope")
 
-        win32gui = SimpleNamespace(
-            EnumWindows=lambda callback, extra: None,
-            IsWindowVisible=lambda _hwnd: True,
-            GetWindowText=lambda _hwnd: "",
-            IsIconic=lambda _hwnd: False,
-            GetWindowRect=lambda _hwnd: (0, 0, 1, 1),
-        )
-        with (
-            mock.patch.object(sys, "platform", "win32"),
-            mock.patch.dict(sys.modules, {"win32gui": win32gui}),
-            self.assertRaises(CaptureError) as missing,
+        # application 作用域现已跨平台支持：找不到窗口时报 window_not_found
+        with mock.patch.object(
+            capture_mod, "QGuiApplication", _fake_qguiapplication([])
         ):
-            capture_screen_image(scope="application", application="Code")
+            with self.assertRaises(CaptureError) as missing:
+                capture_screen_image(scope="application", application="Code")
         self.assertEqual(missing.exception.code, "window_not_found")
 
     def test_existing_screen_watcher_reuses_scoped_capture_backend(self):

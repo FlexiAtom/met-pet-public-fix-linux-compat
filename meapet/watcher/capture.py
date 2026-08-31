@@ -195,7 +195,8 @@ def _find_window_rect(application: str) -> tuple[tuple[int, int, int, int], str]
     if qwindow.windowState() & Qt.WindowMinimized:
         raise CaptureError("window_unavailable", "application window is minimized")
     geom = qwindow.geometry()
-    left, top, right, bottom = geom.left(), geom.top(), geom.right(), geom.bottom()
+    left, top = geom.x(), geom.y()
+    right, bottom = left + geom.width(), top + geom.height()
     if right <= left or bottom <= top:
         raise CaptureError("window_unavailable", "application window has no visible area")
     return (left, top, right, bottom), selected.title
