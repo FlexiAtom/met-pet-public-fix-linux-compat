@@ -24,8 +24,7 @@ from meapet.desktop.theme import CONSENT_DIALOG_STYLE
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
     ensure_application_fonts,
-    set_scaled_stylesheet,
-)
+    apply_named_style, )
 from meapet.ui_controls import WheelSafeComboBox
 from meapet.watcher.capture import (
     CaptureError,
@@ -115,7 +114,7 @@ class CloudVisionConsentDialog(QDialog):
         )
         self.setWindowModality(Qt.ApplicationModal)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        set_scaled_stylesheet(self, CONSENT_DIALOG_STYLE)
+        apply_named_style(self, "CONSENT_DIALOG_STYLE")
         self.setAccessibleName("云端识图隐私确认")
         self.setAccessibleDescription(
             "五秒内必须明确允许，否则自动取消；Escape 和 Enter 默认取消"
@@ -296,7 +295,7 @@ class CaptureScopeConsentDialog(QDialog):
         )
         self.setWindowModality(Qt.ApplicationModal)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        set_scaled_stylesheet(self, CONSENT_DIALOG_STYLE)
+        apply_named_style(self, "CONSENT_DIALOG_STYLE")
         self.setAccessibleName(accessible_name)
         self.setAccessibleDescription(
             "最终截图范围由本机用户选择，仅本次有效；"
@@ -852,7 +851,7 @@ class VolumeDialog(QDialog):
         )
         self.setWindowModality(Qt.ApplicationModal)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        set_scaled_stylesheet(self, CONSENT_DIALOG_STYLE)
+        apply_named_style(self, "CONSENT_DIALOG_STYLE")
         self.setAccessibleName("音量调节")
 
         self.config = config

@@ -29,15 +29,10 @@ from meapet.desktop.screen_geometry import (
     calculate_centered_position,
     clamp_position,
 )
+from meapet import ui_theme as _theme
 from meapet.ui_theme import (
-    BUTTON_SECONDARY_BG,
-    BUTTON_SECONDARY_BG_HOVER,
-    BUTTON_SECONDARY_BG_PRESSED,
     DISPLAY_FONT_FAMILY,
     FONT_FAMILY,
-    GRADIENT_PAPER,
-    GRADIENT_PRIMARY,
-    GRADIENT_PRIMARY_HOVER,
     MIN_TARGET_SIZE,
     PALETTE,
     RADIUS_LARGE,
@@ -45,178 +40,191 @@ from meapet.ui_theme import (
     ensure_application_fonts,
     rgba,
     seam_highlight,
-    set_scaled_stylesheet,
-)
+    apply_named_style, )
 
 
-MESSAGE_DIALOG_STYLE = f"""
-    QDialog#MeaMessageDialog {{
-        background: transparent;
-        color: {PALETTE['text_primary']};
-        font-family: {FONT_FAMILY};
-        font-size: 14px;
-    }}
-    QFrame#MessageCard {{
-        background: {GRADIENT_PAPER};
-        border: 1px solid {PALETTE['border_strong']};
-        border-top-color: {seam_highlight(110)};
-        border-radius: {RADIUS_LARGE}px;
-    }}
-    QWidget#MessageHeader {{
-        background: transparent;
-    }}
-    QLabel#MessageKind {{
-        background: transparent;
-        color: {PALETTE['text_muted']};
-        font-size: 11px;
-        font-weight: 700;
-    }}
-    QLabel#MessageTitle {{
-        background: transparent;
-        color: {PALETTE['text_primary']};
-        font-family: {DISPLAY_FONT_FAMILY};
-        font-size: 20px;
-        font-weight: 700;
-    }}
-    QLabel#MessageStatusIcon {{
-        background: {rgba(PALETTE['accent'], 28)};
-        color: {PALETTE['accent']};
-        border: 1px solid {rgba(PALETTE['accent'], 125)};
-        border-radius: 19px;
-        min-width: 38px;
-        max-width: 38px;
-        min-height: 38px;
-        max-height: 38px;
-        font-family: {DISPLAY_FONT_FAMILY};
-        font-size: 20px;
-        font-weight: 700;
-    }}
-    QLabel#MessageStatusIcon[kind="warning"] {{
-        background: {rgba(PALETTE['warning'], 24)};
-        color: {PALETTE['warning']};
-        border-color: {rgba(PALETTE['warning'], 120)};
-    }}
-    QLabel#MessageStatusIcon[kind="critical"] {{
-        background: {rgba(PALETTE['danger'], 26)};
-        color: {PALETTE['danger']};
-        border-color: {rgba(PALETTE['danger'], 135)};
-    }}
-    QLabel#MessageStatusIcon[kind="question"] {{
-        background: {rgba(PALETTE['primary'], 25)};
-        color: {PALETTE['primary']};
-        border-color: {rgba(PALETTE['primary'], 130)};
-    }}
-    QPushButton#MessageCloseButton {{
-        background: transparent;
-        color: {PALETTE['text_secondary']};
-        border: 1px solid transparent;
-        border-radius: 10px;
-        min-width: {MIN_TARGET_SIZE}px;
-        max-width: {MIN_TARGET_SIZE}px;
-        min-height: {MIN_TARGET_SIZE}px;
-        max-height: {MIN_TARGET_SIZE}px;
-        padding: 0;
-        font-size: 17px;
-        font-weight: 700;
-    }}
-    QPushButton#MessageCloseButton:hover {{
-        background: {rgba(PALETTE['danger'], 38)};
-        color: {PALETTE['danger']};
-        border-color: {rgba(PALETTE['danger'], 105)};
-    }}
-    QPushButton#MessageCloseButton:focus {{
-        border: 2px solid {PALETTE['focus']};
-    }}
-    QFrame#MessageRule {{
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {rgba(PALETTE['primary'], 125)},
-            stop:0.38 {rgba(PALETTE['accent'], 75)},
-            stop:1 {rgba(PALETTE['border'], 0)});
-        border: none;
-        min-height: 1px;
-        max-height: 1px;
-    }}
-    QTextBrowser#MessageBody {{
-        background: transparent;
-        color: {PALETTE['text_primary']};
-        border: none;
-        padding: 0;
-        font-family: {FONT_FAMILY};
-        font-size: 14px;
-        selection-background-color: {rgba(PALETTE['primary'], 190)};
-        selection-color: {PALETTE['on_primary']};
-    }}
-    QScrollBar:vertical {{
-        background: transparent;
-        width: 8px;
-        margin: 2px;
-    }}
-    QScrollBar::handle:vertical {{
-        background: {rgba(PALETTE['border_strong'], 175)};
-        border-radius: 4px;
-        min-height: 26px;
-    }}
-    QScrollBar::handle:vertical:hover {{
-        background: {PALETTE['text_muted']};
-    }}
-    QScrollBar::add-line:vertical,
-    QScrollBar::sub-line:vertical {{
-        height: 0;
-    }}
-    QPushButton#MessagePrimaryButton,
-    QPushButton#MessageSecondaryButton,
-    QPushButton#MessageDangerButton {{
-        min-height: {MIN_TARGET_SIZE}px;
-        min-width: 104px;
-        padding: 8px 18px;
-        border: 1px solid {PALETTE['border_strong']};
-        border-radius: {RADIUS_SMALL}px;
-        background: {BUTTON_SECONDARY_BG};
-        color: {PALETTE['text_primary']};
-        font-family: {FONT_FAMILY};
-        font-size: 14px;
-        font-weight: 600;
-    }}
-    QPushButton#MessagePrimaryButton {{
-        background: {GRADIENT_PRIMARY};
-        color: {PALETTE['on_primary']};
-        border-color: {PALETTE['primary']};
-        font-weight: 700;
-    }}
-    QPushButton#MessageDangerButton {{
-        background: {rgba(PALETTE['danger'], 25)};
-        color: {PALETTE['danger']};
-        border-color: {rgba(PALETTE['danger'], 145)};
-    }}
-    QPushButton#MessageSecondaryButton:hover {{
-        background: {BUTTON_SECONDARY_BG_HOVER};
-        border-color: {PALETTE['focus']};
-    }}
-    QPushButton#MessagePrimaryButton:hover {{
-        background: {GRADIENT_PRIMARY_HOVER};
-        border-color: {PALETTE['primary_hover']};
-    }}
-    QPushButton#MessageDangerButton:hover {{
-        background: {rgba(PALETTE['danger'], 42)};
-        border-color: {PALETTE['danger']};
-    }}
-    QPushButton#MessagePrimaryButton:pressed {{
-        background: {PALETTE['primary']};
-    }}
-    QPushButton#MessageSecondaryButton:pressed {{
-        background: {BUTTON_SECONDARY_BG_PRESSED};
-    }}
-    QPushButton#MessageDangerButton:pressed {{
-        background: {rgba(PALETTE['danger'], 58)};
-    }}
-    QPushButton#MessagePrimaryButton:focus,
-    QPushButton#MessageSecondaryButton:focus,
-    QPushButton#MessageDangerButton:focus {{
-        border: 2px solid {PALETTE['focus']};
-        padding: 7px 17px;
-    }}
-"""
+def rebuild_message_dialog_style() -> str:
+    """按当前活动调色板重建消息对话框 QSS。"""
+    global MESSAGE_DIALOG_STYLE
 
+    MESSAGE_DIALOG_STYLE = f"""
+        QDialog#MeaMessageDialog {{
+            background: transparent;
+            color: {PALETTE['text_primary']};
+            font-family: {FONT_FAMILY};
+            font-size: 14px;
+        }}
+        QFrame#MessageCard {{
+            background: {_theme.GRADIENT_PAPER};
+            border: 1px solid {PALETTE['border_strong']};
+            border-top-color: {seam_highlight(110)};
+            border-radius: {RADIUS_LARGE}px;
+        }}
+        QWidget#MessageHeader {{
+            background: transparent;
+        }}
+        QLabel#MessageKind {{
+            background: transparent;
+            color: {PALETTE['text_muted']};
+            font-size: 11px;
+            font-weight: 700;
+        }}
+        QLabel#MessageTitle {{
+            background: transparent;
+            color: {PALETTE['text_primary']};
+            font-family: {DISPLAY_FONT_FAMILY};
+            font-size: 20px;
+            font-weight: 700;
+        }}
+        QLabel#MessageStatusIcon {{
+            background: {rgba(PALETTE['accent'], 28)};
+            color: {PALETTE['accent']};
+            border: 1px solid {rgba(PALETTE['accent'], 125)};
+            border-radius: 19px;
+            min-width: 38px;
+            max-width: 38px;
+            min-height: 38px;
+            max-height: 38px;
+            font-family: {DISPLAY_FONT_FAMILY};
+            font-size: 20px;
+            font-weight: 700;
+        }}
+        QLabel#MessageStatusIcon[kind="warning"] {{
+            background: {rgba(PALETTE['warning'], 24)};
+            color: {PALETTE['warning']};
+            border-color: {rgba(PALETTE['warning'], 120)};
+        }}
+        QLabel#MessageStatusIcon[kind="critical"] {{
+            background: {rgba(PALETTE['danger'], 26)};
+            color: {PALETTE['danger']};
+            border-color: {rgba(PALETTE['danger'], 135)};
+        }}
+        QLabel#MessageStatusIcon[kind="question"] {{
+            background: {rgba(PALETTE['primary'], 25)};
+            color: {PALETTE['primary']};
+            border-color: {rgba(PALETTE['primary'], 130)};
+        }}
+        QPushButton#MessageCloseButton {{
+            background: transparent;
+            color: {PALETTE['text_secondary']};
+            border: 1px solid transparent;
+            border-radius: 10px;
+            min-width: {MIN_TARGET_SIZE}px;
+            max-width: {MIN_TARGET_SIZE}px;
+            min-height: {MIN_TARGET_SIZE}px;
+            max-height: {MIN_TARGET_SIZE}px;
+            padding: 0;
+            font-size: 17px;
+            font-weight: 700;
+        }}
+        QPushButton#MessageCloseButton:hover {{
+            background: {rgba(PALETTE['danger'], 38)};
+            color: {PALETTE['danger']};
+            border-color: {rgba(PALETTE['danger'], 105)};
+        }}
+        QPushButton#MessageCloseButton:focus {{
+            border: 2px solid {PALETTE['focus']};
+        }}
+        QFrame#MessageRule {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 {rgba(PALETTE['primary'], 125)},
+                stop:0.38 {rgba(PALETTE['accent'], 75)},
+                stop:1 {rgba(PALETTE['border'], 0)});
+            border: none;
+            min-height: 1px;
+            max-height: 1px;
+        }}
+        QTextBrowser#MessageBody {{
+            background: transparent;
+            color: {PALETTE['text_primary']};
+            border: none;
+            padding: 0;
+            font-family: {FONT_FAMILY};
+            font-size: 14px;
+            selection-background-color: {rgba(PALETTE['primary'], 190)};
+            selection-color: {PALETTE['on_primary']};
+        }}
+        QScrollBar:vertical {{
+            background: transparent;
+            width: 8px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {rgba(PALETTE['border_strong'], 175)};
+            border-radius: 4px;
+            min-height: 26px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {PALETTE['text_muted']};
+        }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {{
+            height: 0;
+        }}
+        QPushButton#MessagePrimaryButton,
+        QPushButton#MessageSecondaryButton,
+        QPushButton#MessageDangerButton {{
+            min-height: {MIN_TARGET_SIZE}px;
+            min-width: 104px;
+            padding: 8px 18px;
+            border: 1px solid {PALETTE['border_strong']};
+            border-radius: {RADIUS_SMALL}px;
+            background: {_theme.BUTTON_SECONDARY_BG};
+            color: {PALETTE['text_primary']};
+            font-family: {FONT_FAMILY};
+            font-size: 14px;
+            font-weight: 600;
+        }}
+        QPushButton#MessagePrimaryButton {{
+            background: {_theme.GRADIENT_PRIMARY};
+            color: {PALETTE['on_primary']};
+            border-color: {PALETTE['primary']};
+            font-weight: 700;
+        }}
+        QPushButton#MessageDangerButton {{
+            background: {rgba(PALETTE['danger'], 25)};
+            color: {PALETTE['danger']};
+            border-color: {rgba(PALETTE['danger'], 145)};
+        }}
+        QPushButton#MessageSecondaryButton:hover {{
+            background: {_theme.BUTTON_SECONDARY_BG_HOVER};
+            border-color: {PALETTE['focus']};
+        }}
+        QPushButton#MessagePrimaryButton:hover {{
+            background: {_theme.GRADIENT_PRIMARY_HOVER};
+            border-color: {PALETTE['primary_hover']};
+        }}
+        QPushButton#MessageDangerButton:hover {{
+            background: {rgba(PALETTE['danger'], 42)};
+            border-color: {PALETTE['danger']};
+        }}
+        QPushButton#MessagePrimaryButton:pressed {{
+            background: {PALETTE['primary']};
+        }}
+        QPushButton#MessageSecondaryButton:pressed {{
+            background: {_theme.BUTTON_SECONDARY_BG_PRESSED};
+        }}
+        QPushButton#MessageDangerButton:pressed {{
+            background: {rgba(PALETTE['danger'], 58)};
+        }}
+        QPushButton#MessagePrimaryButton:focus,
+        QPushButton#MessageSecondaryButton:focus,
+        QPushButton#MessageDangerButton:focus {{
+            border: 2px solid {PALETTE['focus']};
+            padding: 7px 17px;
+        }}
+    """
+
+
+    NAMED_STYLES["MESSAGE_DIALOG_STYLE"] = MESSAGE_DIALOG_STYLE
+    return MESSAGE_DIALOG_STYLE
+
+
+NAMED_STYLES: dict[str, str] = {}
+rebuild_message_dialog_style()
+
+# 兼容旧引用：模块级常量随主题重建。
+MESSAGE_DIALOG_STYLE = NAMED_STYLES["MESSAGE_DIALOG_STYLE"]
 
 _BUTTON_SPECS = (
     (QMessageBox.Discard, "放弃更改", "discard"),
@@ -280,7 +288,7 @@ class MeaMessageDialog(QDialog):
         self.setModal(True)
         self.setAccessibleName(title)
         self.setAccessibleDescription("MeaPet 主题消息窗口，按 Escape 关闭")
-        set_scaled_stylesheet(self, MESSAGE_DIALOG_STYLE)
+        apply_named_style(self, "MESSAGE_DIALOG_STYLE")
 
         icon_value = int(
             QMessageBox.NoIcon if icon is None else icon

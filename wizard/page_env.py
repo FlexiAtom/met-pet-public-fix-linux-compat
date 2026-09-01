@@ -22,6 +22,7 @@ from wizard.styles import (
     set_status,
     styled_message_box,
 )
+from meapet.ui_theme import apply_named_style
 from wizard.platform_info import (
     PLATFORM,
     PYTHON_CHECK_NAME,
@@ -41,7 +42,7 @@ class EnvCheckPage(QFrame):
         super().__init__(parent)
         self.ui_call.connect(self._dispatch_ui_call, Qt.QueuedConnection)
         self.setObjectName("PageCard")
-        self.setStyleSheet(STYLE_PAGE_CARD)
+        apply_named_style(self, "STYLE_PAGE_CARD")
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(28, 24, 28, 28)
         self.layout.setSpacing(12)

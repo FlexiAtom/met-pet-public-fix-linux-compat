@@ -9,6 +9,7 @@ import sys
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractButton,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -18,11 +19,11 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
     QSpinBox,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -72,10 +73,13 @@ from meapet.ui_theme import (
     UI_FONT_SCALE_DEFAULT,
     apply_ui_font_scale,
     ensure_application_fonts,
+    get_ui_theme_mode,
     normalize_pet_size_factor,
+    normalize_theme_mode,
     normalize_ui_font_scale,
-    set_scaled_stylesheet,
+    apply_named_style,
     set_ui_font_scale,
+    set_ui_theme_mode,
 )
 from wizard.pages import (
     BackendPage,
@@ -85,6 +89,7 @@ from wizard.pages import (
     VisionPage,
     VoiceInputPage,
 )
+from wizard.side_nav import SideNavTabs
 from wizard.live2d_viewport import Live2DViewportSettings
 from meapet.desktop.screen_geometry import (
     available_geometry_for,
@@ -187,8 +192,8 @@ class SetupWizard(QWidget):
         ensure_application_fonts()
         self.setWindowTitle(f"MeaPet 配置 — {PLATFORM['os_label']}")
         self.setObjectName("WizardRoot")
-        self.setMinimumSize(760, 620)
-        self.resize(880, 780)
+        self.setMinimumSize(820, 640)
+        self.resize(1000, 800)
         # Keep the root opaque so the desktop pet cannot show through, but use
         # the shared canvas token instead of painting a second, off-palette
         # frame around the rounded shell.
@@ -212,10 +217,10 @@ class SetupWizard(QWidget):
         # 首次构造就使用持久化字号对应的 QSS。若先应用 100% 原始样式，
         # 再在窗口显示前替换为缩放版本，Qt 5 会保留部分子控件的旧字体缓存：
         # 滑块虽显示保存值，界面仍按 100% 绘制，直到用户再次移动滑块。
-        set_scaled_stylesheet(
+        apply_named_style(
             self,
-            WIZARD_STYLESHEET,
-            initial_font_scale,
+            "WIZARD_STYLESHEET",
+            scale=initial_font_scale,
         )
         self.setAccessibleName("MeaPet 配置")
         self.setAccessibleDescription(
@@ -252,11 +257,6 @@ class SetupWizard(QWidget):
         brand_name.setObjectName("BrandName")
         top.addWidget(brand_name)
         top.addStretch()
-
-        section_label = QLabel("配置中心")
-        section_label.setObjectName("StepLabel")
-        section_label.setAccessibleName("当前页面")
-        top.addWidget(section_label)
 
         self.maximize_btn = QPushButton("最大化")
         self.maximize_btn.setObjectName("SecondaryButton")
@@ -311,28 +311,28 @@ class SetupWizard(QWidget):
         self._existing_config = {}
         self._missing_icon = self._build_missing_icon()
 
-        status_row = QHBoxLayout()
-        status_row.setContentsMargins(24, 12, 24, 4)
+        # 右栏顶部的必要配置状态行；挂在侧边导航组件的内容列上方。
+        status_bar = QFrame()
+        status_bar.setObjectName("ConfigStatusBar")
+        status_row = QHBoxLayout(status_bar)
+        status_row.setContentsMargins(20, 12, 24, 4)
         self.config_status = QLabel("正在检查必要配置…")
         self.config_status.setObjectName("ConfigStatus")
         self.config_status.setWordWrap(True)
         self.config_status.setAccessibleName("必要配置状态")
         status_row.addWidget(self.config_status, 1)
-        main.addLayout(status_row)
 
-        self.tabs = QTabWidget()
+        self.tabs = SideNavTabs()
         self.tabs.setObjectName("ConfigurationTabs")
-        self.tabs.setDocumentMode(True)
-        self.tabs.setUsesScrollButtons(False)
-        self.tabs.setIconSize(QSize(12, 12))
         self.tabs.setAccessibleName("配置分类")
-        self.tabs.setAccessibleDescription("带红点的标签缺少必要配置，并有文字提示")
-        self.tabs.tabBar().setAccessibleName(
-            "环境、Live2D、对话、语音、屏幕识图和语音输入标签"
+        self.tabs.setAccessibleDescription("带橙色圆点的分类缺少必要配置，并有文字提示")
+        self.tabs.list.setAccessibleName(
+            "环境、Live2D、对话、语音、屏幕识图和语音输入分类"
         )
-        self.tabs.tabBar().setAccessibleDescription(
-            "红点表示该标签仍缺少必要配置；具体原因显示在标签提示和顶部状态中"
+        self.tabs.list.setAccessibleDescription(
+            "橙色圆点表示该分类仍缺少必要配置；具体原因显示在分类提示和顶部状态中"
         )
+        self.tabs.set_top_widget(status_bar)
         self.tabs.addTab(
             self._make_scroll_tab(self.display_page, self.env_page),
             "环境",
@@ -446,6 +446,40 @@ class SetupWizard(QWidget):
         description.setWordWrap(True)
         layout.addWidget(description)
 
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(14)
+        theme_label = QLabel("界面主题")
+        theme_label.setObjectName("FieldLabel")
+        theme_label.setMinimumWidth(112)
+        theme_row.addWidget(theme_label)
+
+        self.theme_mode_group = QButtonGroup(self)
+        self._theme_radios: dict[str, QRadioButton] = {}
+        initial_mode = get_ui_theme_mode()
+        for mode, theme_label_text, theme_desc in (
+            ("system", "跟随系统", "跟随系统的浅色/深色偏好"),
+            ("light", "浅色", "始终使用浅色界面"),
+            ("dark", "深色", "始终使用深色界面"),
+        ):
+            radio = QRadioButton(theme_label_text)
+            radio.setObjectName("ThemeModeRadio")
+            radio.setChecked(mode == initial_mode)
+            radio.setAccessibleName(f"界面主题：{theme_label_text}")
+            radio.setAccessibleDescription(theme_desc)
+            self.theme_mode_group.addButton(radio)
+            self._theme_radios[mode] = radio
+            theme_row.addWidget(radio)
+        theme_row.addStretch(1)
+        layout.addLayout(theme_row)
+
+        theme_hint = QLabel(
+            "默认跟随系统深浅色；切换后配置页即时生效，"
+            "桌宠的菜单、气泡与面板同步刷新，个别已打开的窗口重新打开后应用。"
+        )
+        theme_hint.setObjectName("HelperText")
+        theme_hint.setWordWrap(True)
+        layout.addWidget(theme_hint)
+
         row = QHBoxLayout()
         row.setSpacing(12)
         label = QLabel("字体缩放")
@@ -541,12 +575,23 @@ class SetupWizard(QWidget):
         self.pet_size_slider.valueChanged.connect(
             self._on_pet_size_changed
         )
+        for mode, radio in self._theme_radios.items():
+            radio.toggled.connect(
+                lambda checked, m=mode: self._on_theme_mode_changed(m, checked)
+            )
         return card
 
     def _on_font_scale_changed(self, value: int) -> None:
         value = int(value)
         self.font_scale_value.setText(f"{value}%")
         apply_ui_font_scale(self, value / 100.0)
+
+    def _on_theme_mode_changed(self, mode: str, checked: bool) -> None:
+        """切换界面主题：即时重建样式并标记配置待保存。"""
+        if not checked:
+            return
+        set_ui_theme_mode(mode)
+        self._mark_dirty()
 
     def _on_pet_size_changed(self, value: int) -> None:
         self.pet_size_value.setText(f"{int(value)}%")
@@ -978,13 +1023,13 @@ class SetupWizard(QWidget):
 
     @staticmethod
     def _build_missing_icon() -> QIcon:
-        """带墨环的红点：在选中/未选中标签底上都保持清晰边界。"""
+        """带底环的警示圆点：在侧边导航选中/未选中项上都保持清晰边界。"""
         pixmap = QPixmap(12, 12)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(11, 7, 19))
+        painter.setBrush(QColor(10, 10, 10))
         painter.drawEllipse(QRectF(0.5, 0.5, 11.0, 11.0))
         painter.setBrush(QColor(PALETTE["danger"]))
         painter.drawEllipse(QRectF(2.0, 2.0, 8.0, 8.0))
@@ -1279,6 +1324,17 @@ class SetupWizard(QWidget):
             self.reduced_motion_cb.setChecked(
                 bool(display.get("reduced_motion", False))
             )
+            # 仅当配置显式写入 ui.theme 时才同步主题；缺省时保留当前模式，
+            # 避免把运行中刚切换的主题（或入口预设的浅色）冲回跟随系统。
+            ui_cfg = cfg.get("ui") if isinstance(cfg.get("ui"), dict) else {}
+            raw_theme = ui_cfg.get("theme")
+            if raw_theme:
+                theme_mode = normalize_theme_mode(raw_theme)
+                radio = self._theme_radios.get(theme_mode)
+                if radio is not None and not radio.isChecked():
+                    radio.setChecked(True)
+                if get_ui_theme_mode() != theme_mode:
+                    set_ui_theme_mode(theme_mode)
             self.live2d_viewport_settings.set_fallback_canvas_size(
                 live2d.get("default_canvas_size")
             )
@@ -1407,6 +1463,15 @@ class SetupWizard(QWidget):
             self.pet_size_slider.value() / 100.0
         )
         display["reduced_motion"] = self.reduced_motion_cb.isChecked()
+        ui = config.setdefault("ui", {})
+        ui["theme"] = next(
+            (
+                mode
+                for mode, radio in self._theme_radios.items()
+                if radio.isChecked()
+            ),
+            "system",
+        )
 
     def _collect_live2d_viewport_fields(self, config: dict) -> None:
         """Live2D 页补丁视口、锚点和形状，其余字段原样保留。"""

@@ -32,16 +32,15 @@ from meapet.dependencies import (
     WEBSOCKETS_REQUIREMENT,
 )
 from meapet.message_dialog import MESSAGE_DIALOG_STYLE, MeaMessageDialog
+from meapet import ui_theme as _theme
 from meapet.ui_theme import (
     FONT_FAMILY,
-    GRADIENT_RAISED,
     MIN_TARGET_SIZE,
     MONO_FONT_FAMILY,
     PALETTE,
     RADIUS_SMALL,
     rgba,
     seam_highlight,
-    set_scaled_stylesheet,
 )
 from wizard.styles import set_status
 
@@ -336,61 +335,62 @@ def _guide_html(text: str) -> str:
     """
 
 
-_AGENT_HELP_STYLE = f"""
-    QFrame#AgentDiagnosticCard {{
-        background: {GRADIENT_RAISED};
-        border: 1px solid {PALETTE['border']};
-        border-top-color: {seam_highlight(82)};
-        border-left: 3px solid {rgba(PALETTE['primary'], 145)};
-        border-radius: {RADIUS_SMALL}px;
-    }}
-    QLabel#AgentDiagnosticTitle {{
-        background: transparent;
-        color: {PALETTE['text_primary']};
-        font-size: 15px;
-        font-weight: 700;
-    }}
-    QLabel#AgentDependencyStatus,
-    QLabel#AgentConnectionStatus {{
-        background: transparent;
-        color: {PALETTE['text_muted']};
-        font-size: 13px;
-        font-weight: 700;
-    }}
-    QLabel#AgentDependencyStatus[status="success"],
-    QLabel#AgentConnectionStatus[status="success"] {{
-        color: {PALETTE['success']};
-    }}
-    QLabel#AgentDependencyStatus[status="warning"],
-    QLabel#AgentConnectionStatus[status="warning"] {{
-        color: {PALETTE['warning']};
-    }}
-    QLabel#AgentDependencyStatus[status="error"],
-    QLabel#AgentConnectionStatus[status="error"] {{
-        color: {PALETTE['danger']};
-    }}
-    QLabel#AgentDependencyDetail {{
-        background: transparent;
-        color: {PALETTE['text_secondary']};
-        font-size: 12px;
-    }}
-    QPushButton#MessagePrimaryButton[compactAgentHelp="true"],
-    QPushButton#MessageSecondaryButton[compactAgentHelp="true"] {{
-        min-height: 42px;
-        max-height: 42px;
-        padding: 0 16px;
-    }}
-    QPushButton#MessagePrimaryButton[compactAgentHelp="true"]:focus,
-    QPushButton#MessageSecondaryButton[compactAgentHelp="true"]:focus {{
-        padding: 0 15px;
-    }}
-    QPushButton#MessagePrimaryButton[compactAgentHelp="true"]:disabled,
-    QPushButton#MessageSecondaryButton[compactAgentHelp="true"]:disabled {{
-        background: {rgba(PALETTE['surface_elevated'], 150)};
-        color: {rgba(PALETTE['text_muted'], 130)};
-        border-color: {rgba(PALETTE['border'], 155)};
-    }}
-"""
+def _agent_help_style() -> str:
+        return f"""
+        QFrame#AgentDiagnosticCard {{
+            background: {_theme.GRADIENT_RAISED};
+            border: 1px solid {PALETTE['border']};
+            border-top-color: {seam_highlight(82)};
+            border-left: 3px solid {rgba(PALETTE['primary'], 145)};
+            border-radius: {RADIUS_SMALL}px;
+        }}
+        QLabel#AgentDiagnosticTitle {{
+            background: transparent;
+            color: {PALETTE['text_primary']};
+            font-size: 15px;
+            font-weight: 700;
+        }}
+        QLabel#AgentDependencyStatus,
+        QLabel#AgentConnectionStatus {{
+            background: transparent;
+            color: {PALETTE['text_muted']};
+            font-size: 13px;
+            font-weight: 700;
+        }}
+        QLabel#AgentDependencyStatus[status="success"],
+        QLabel#AgentConnectionStatus[status="success"] {{
+            color: {PALETTE['success']};
+        }}
+        QLabel#AgentDependencyStatus[status="warning"],
+        QLabel#AgentConnectionStatus[status="warning"] {{
+            color: {PALETTE['warning']};
+        }}
+        QLabel#AgentDependencyStatus[status="error"],
+        QLabel#AgentConnectionStatus[status="error"] {{
+            color: {PALETTE['danger']};
+        }}
+        QLabel#AgentDependencyDetail {{
+            background: transparent;
+            color: {PALETTE['text_secondary']};
+            font-size: 12px;
+        }}
+        QPushButton#MessagePrimaryButton[compactAgentHelp="true"],
+        QPushButton#MessageSecondaryButton[compactAgentHelp="true"] {{
+            min-height: 42px;
+            max-height: 42px;
+            padding: 0 16px;
+        }}
+        QPushButton#MessagePrimaryButton[compactAgentHelp="true"]:focus,
+        QPushButton#MessageSecondaryButton[compactAgentHelp="true"]:focus {{
+            padding: 0 15px;
+        }}
+        QPushButton#MessagePrimaryButton[compactAgentHelp="true"]:disabled,
+        QPushButton#MessageSecondaryButton[compactAgentHelp="true"]:disabled {{
+            background: {rgba(PALETTE['surface_elevated'], 150)};
+            color: {rgba(PALETTE['text_muted'], 130)};
+            border-color: {rgba(PALETTE['border'], 155)};
+        }}
+    """
 
 
 def agent_setup_guide(agent_kind: str) -> tuple[str, str]:
@@ -430,9 +430,12 @@ class AgentSetupHelpDialog(MeaMessageDialog):
         self.setAccessibleDescription(
             "当前 Agent 的依赖、连接测试与接入步骤；按 Escape 关闭"
         )
-        set_scaled_stylesheet(
+        from meapet.ui_theme import apply_inline_style, get_named_style
+
+        apply_inline_style(
             self,
-            MESSAGE_DIALOG_STYLE + _AGENT_HELP_STYLE,
+            lambda: get_named_style("MESSAGE_DIALOG_STYLE")
+            + _agent_help_style(),
         )
         self.kind_label.setText("接入诊断")
         self.close_button.setAccessibleName("关闭 Agent 接入帮助")

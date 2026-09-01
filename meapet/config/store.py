@@ -43,7 +43,11 @@ from meapet.config.defaults import (
     DEFAULT_WATCHER_INTERVAL,
 )
 from meapet.config import providers as _providers
-from meapet.ui_theme import normalize_pet_size_factor, normalize_ui_font_scale
+from meapet.ui_theme import (
+    normalize_pet_size_factor,
+    normalize_theme_mode,
+    normalize_ui_font_scale,
+)
 from meapet.utils import mask_secret, normalize_watcher
 from meapet.vision.policy import normalize_vision_mode
 
@@ -1015,6 +1019,7 @@ def normalize_config(config: dict) -> dict:
     except (TypeError, ValueError):
         timeline_turns = 5
     ui["timeline_turns"] = max(0, min(timeline_turns, 100))
+    ui["theme"] = normalize_theme_mode(ui.get("theme"))
     cfg["ui"] = ui
 
     # TTS：有音频时气泡始终晚于播放结束；旧开关仅保留配置兼容。

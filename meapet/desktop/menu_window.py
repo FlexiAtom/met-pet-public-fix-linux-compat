@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
 
 from meapet.desktop.screen_geometry import available_geometry_for, clamp_position
 from meapet.desktop.theme import PET_MENU_WINDOW_STYLE
-from meapet.ui_theme import ensure_application_fonts, set_scaled_stylesheet
+from meapet.ui_theme import ensure_application_fonts, apply_named_style
 
 
 SHADOW_MARGIN = 10
@@ -119,7 +119,7 @@ class PetSubmenuPanel(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAccessibleName(f"{title} 子菜单")
         self.setAccessibleDescription("独立侧边子菜单，按 Esc 收起当前层级")
-        set_scaled_stylesheet(self, PET_MENU_WINDOW_STYLE)
+        apply_named_style(self, "PET_MENU_WINDOW_STYLE")
 
         self._owner = owner
         self._source_menu = menu
@@ -271,7 +271,7 @@ class PetMenuWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAccessibleName("MeaPet 操作菜单")
         self.setAccessibleDescription("可拖动的桌宠菜单窗口，按 Esc 关闭")
-        set_scaled_stylesheet(self, PET_MENU_WINDOW_STYLE)
+        apply_named_style(self, "PET_MENU_WINDOW_STYLE")
 
         self._source_menu = menu
         self._drag_offset: QPoint | None = None

@@ -33,8 +33,7 @@ from meapet.ui_theme import (
     PALETTE,
     PET_SIZE_PRESETS,
     normalize_pet_size_factor,
-    set_scaled_stylesheet,
-)
+    apply_named_style, )
 from meapet.utils import safe_print
 
 
@@ -272,7 +271,7 @@ class PetWindowChromeMixin:
     def _build_tray_menu(self) -> QMenu:
         """托盘菜单：提供待机恢复与基础控制。"""
         menu = QMenu()
-        set_scaled_stylesheet(menu, MENU_STYLE)
+        apply_named_style(menu, "MENU_STYLE")
         menu.setAccessibleName("MeaPet 托盘菜单")
 
         show_action = QAction("显示 / 隐藏", self)
@@ -332,7 +331,7 @@ class PetWindowChromeMixin:
         """构建分组菜单；根层只保留高频操作和清晰的功能入口。"""
         menu = QMenu(self)
         menu.setObjectName("PetContextMenu")
-        set_scaled_stylesheet(menu, MENU_STYLE)
+        apply_named_style(menu, "MENU_STYLE")
         menu.setAccessibleName("MeaPet 操作菜单")
 
         status_action = QAction("养成状态", self)
@@ -349,7 +348,7 @@ class PetWindowChromeMixin:
         expr_menu = QMenu("切换表情", self)
         expr_menu.setIcon(standard_icon("expression"))
         expr_menu.setObjectName("ExpressionMenu")
-        set_scaled_stylesheet(expr_menu, MENU_STYLE)
+        apply_named_style(expr_menu, "MENU_STYLE")
         expr_menu.setAccessibleName("切换表情")
         moods = [
             ("默认", "neutral"),
@@ -374,7 +373,7 @@ class PetWindowChromeMixin:
         vision_menu = QMenu("识图与观察", self)
         vision_menu.setIcon(standard_icon("watch"))
         vision_menu.setObjectName("VisionAndWatchMenu")
-        set_scaled_stylesheet(vision_menu, MENU_STYLE)
+        apply_named_style(vision_menu, "MENU_STYLE")
         vision_menu.setAccessibleName("识图与观察设置")
         current_vision = vision_cfg.get("model", DEFAULT_OLLAMA_VISION_MODEL)
         for label, bname in (
@@ -440,7 +439,7 @@ class PetWindowChromeMixin:
         display_menu = QMenu("显示与立绘", self)
         display_menu.setIcon(standard_icon("display"))
         display_menu.setObjectName("DisplayMenu")
-        set_scaled_stylesheet(display_menu, MENU_STYLE)
+        apply_named_style(display_menu, "MENU_STYLE")
         display_menu.setAccessibleName("显示与立绘设置")
         mode_text = (
             status_language.menu_render_to_png()
@@ -458,7 +457,7 @@ class PetWindowChromeMixin:
             status_language.menu_window_size(current_factor), self
         )
         size_menu.setObjectName("WindowSizeMenu")
-        set_scaled_stylesheet(size_menu, MENU_STYLE)
+        apply_named_style(size_menu, "MENU_STYLE")
         size_menu.setAccessibleName("桌宠窗口大小")
         for percent in PET_SIZE_PRESETS:
             preset_action = QAction(f"{percent}%", self)
@@ -479,7 +478,7 @@ class PetWindowChromeMixin:
         settings_menu = QMenu("设置与数据", self)
         settings_menu.setIcon(standard_icon("settings"))
         settings_menu.setObjectName("SettingsAndDataMenu")
-        set_scaled_stylesheet(settings_menu, MENU_STYLE)
+        apply_named_style(settings_menu, "MENU_STYLE")
         settings_menu.setAccessibleName("设置与数据")
         auto_started = self._is_auto_start()
         auto_action = QAction("开机自启", self)

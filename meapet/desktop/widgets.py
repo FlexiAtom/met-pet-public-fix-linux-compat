@@ -46,8 +46,7 @@ from meapet.ui_theme import (
     PET_SIZE_FACTOR_STEP,
     ensure_application_fonts,
     normalize_pet_size_factor,
-    set_scaled_stylesheet,
-)
+    apply_named_style, )
 from meapet.utils import safe_print, log_error
 from meapet.chat.engine import ChatEngine
 from meapet.tts.service import MeaTTS
@@ -72,19 +71,19 @@ DIALOGUE_FADE_FRAME_MS = 25
 
 # 情绪只影响描边色，必须配合角色表情/文案，不作为唯一语义。
 MOOD_BORDER_COLORS = {
-    "happy": "#FFC48F",
-    "annoyed": "#FF8FA0",
-    "sad": "#8FA8DE",
-    "shy": "#FF9DBE",
-    "curious": "#B7A6FF",
-    "surprised": "#FFD37A",
-    "melancholy": "#A79BB8",
-    "talking": "#FF9DBE",
-    "neutral": "#FF9DBE",
+    "happy": "#FFB366",
+    "annoyed": "#FF8080",
+    "sad": "#8FB8E8",
+    "shy": "#FFA8A0",
+    "curious": "#FFC24D",
+    "surprised": "#FFE066",
+    "melancholy": "#A3A3A3",
+    "talking": "#FF9E5C",
+    "neutral": "#FF7A1A",
 }
 
-# 双环浮层（装置 C）：外墨环压亮壁纸，内樱环提亮暗壁纸。
-BUBBLE_INK_RING_COLOR = "#0B0713"
+# 双环浮层（装置 C）：外墨环压亮壁纸，内橙环提亮暗壁纸。
+BUBBLE_INK_RING_COLOR = "#0A0A0A"
 BUBBLE_INK_RING_WIDTH = 2.6
 BUBBLE_MOOD_RING_WIDTH = 1.6
 BUBBLE_MOOD_RING_ALPHA = 235
@@ -338,14 +337,14 @@ class SpeechBubbleFrame(QFrame):
 
         painter.setPen(Qt.NoPen)
         for offset, alpha in BUBBLE_SHADOW_LAYERS:
-            painter.setBrush(QColor(6, 4, 12, alpha))
+            painter.setBrush(QColor(8, 8, 8, alpha))
             painter.drawPath(path.translated(0, offset))
 
         body = self._body_rect()
         gradient = QLinearGradient(body.topLeft(), body.bottomLeft())
         gradient.setColorAt(0.0, QColor(PALETTE["surface_elevated"]))
-        gradient.setColorAt(0.42, QColor("#251C33"))
-        gradient.setColorAt(1.0, QColor("#1A1426"))
+        gradient.setColorAt(0.42, QColor("#242424"))
+        gradient.setColorAt(1.0, QColor("#181818"))
         painter.setPen(
             QPen(QColor(BUBBLE_INK_RING_COLOR), BUBBLE_INK_RING_WIDTH)
         )
@@ -396,7 +395,7 @@ class DialogueBox(QWidget):
         self._stack_entry_pending = False
 
         self._container = SpeechBubbleFrame(self)
-        set_scaled_stylesheet(self._container, DIALOGUE_STYLE)
+        apply_named_style(self._container, "DIALOGUE_STYLE")
         self._opacity_effect = QGraphicsOpacityEffect(self._container)
         self._opacity_effect.setOpacity(self._opacity)
         self._container.setGraphicsEffect(self._opacity_effect)
@@ -875,7 +874,7 @@ class SizeScaleDialog(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAccessibleName("调节窗口大小")
-        set_scaled_stylesheet(self, DIALOG_STYLE)
+        apply_named_style(self, "DIALOG_STYLE")
 
         container = QFrame(self)
         container.setObjectName("SizeDialogCard")

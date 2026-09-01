@@ -24,6 +24,7 @@ from wizard.styles import (
     STYLE_PAGE_CARD,
     set_status,
 )
+from meapet.ui_theme import MIN_TARGET_SIZE, apply_named_style
 from wizard.widgets import WheelSafeComboBox
 
 from meapet import PROJECT_URL, USER_AGENT
@@ -66,7 +67,7 @@ class LLMPage(QFrame):
         # 已保存配置里的自定义请求头（未选预设时原样保留，不因重开向导丢失）
         self._custom_headers: dict = {}
         self.setObjectName("PageCard")
-        self.setStyleSheet(STYLE_PAGE_CARD)
+        apply_named_style(self, "STYLE_PAGE_CARD")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 28)
         layout.setSpacing(14)
@@ -121,7 +122,7 @@ class LLMPage(QFrame):
         self.endpoint_input.setObjectName("ApiBaseUrl")
         self.endpoint_input.setAccessibleName("API 地址")
         self.endpoint_input.setPlaceholderText(DEFAULT_OPENAI_API_BASE)
-        self.endpoint_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.endpoint_input, "STYLE_INPUT")
         conn_layout.addWidget(self.endpoint_input)
 
         # Model ID with fetch button
@@ -137,8 +138,6 @@ class LLMPage(QFrame):
         self.model_combo.setInsertPolicy(WheelSafeComboBox.NoInsert)
         self.model_combo.lineEdit().setPlaceholderText("gpt-4o")
         from PyQt5.QtCore import Qt
-        from meapet.ui_theme import MIN_TARGET_SIZE
-
         le = self.model_combo.lineEdit()
         if le is not None:
             le.setAlignment(Qt.AlignVCenter)
@@ -183,7 +182,7 @@ class LLMPage(QFrame):
         conn_layout.addWidget(api_key_label)
         self.direct_api_key_input = QLineEdit()
         self.direct_api_key_input.setObjectName("ApiKey")
-        self.direct_api_key_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.direct_api_key_input, "STYLE_INPUT")
         self.direct_api_key_input.setEchoMode(QLineEdit.Password)
         self.direct_api_key_input.setAccessibleName("API Key")
         self.direct_api_key_input.setAccessibleDescription(
@@ -280,7 +279,7 @@ class LLMPage(QFrame):
         self.proxy_input.setObjectName("ProxyUrl")
         self.proxy_input.setAccessibleName("HTTP 代理地址")
         self.proxy_input.setPlaceholderText("如 http://127.0.0.1:7890，留空则不使用代理")
-        self.proxy_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.proxy_input, "STYLE_INPUT")
         adv.addWidget(self.proxy_input)
         proxy_hint = QLabel("仅对该模型接口的请求生效，不影响其它网络访问。")
         proxy_hint.setObjectName("HelperText")
@@ -295,7 +294,7 @@ class LLMPage(QFrame):
         self.headers_input.setObjectName("CustomHeaders")
         self.headers_input.setAccessibleName("自定义请求头")
         self.headers_input.setPlaceholderText("每条一个，形如 X-Title: MeaPet，多条用 ; 分隔")
-        self.headers_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.headers_input, "STYLE_INPUT")
         adv.addWidget(self.headers_input)
         headers_hint = QLabel(
             "部分网关要求附加请求头。鉴权相关的头由程序按协议自动设置，"

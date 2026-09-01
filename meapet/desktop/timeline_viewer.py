@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
 
 from meapet.conversation.timeline import TurnTranscript
 from meapet.desktop.theme import DIALOG_STYLE
-from meapet.ui_theme import MIN_TARGET_SIZE, ensure_application_fonts, set_scaled_stylesheet
+from meapet.ui_theme import MIN_TARGET_SIZE, ensure_application_fonts, apply_named_style
 
 
 _SOURCE_NAMES = {
@@ -80,7 +80,7 @@ class TurnDetailDialog(QDialog):
         self.setWindowFlags(Qt.Window)
         self.setMinimumSize(560, 460)
         self.resize(660, 560)
-        set_scaled_stylesheet(self, DIALOG_STYLE)
+        apply_named_style(self, "DIALOG_STYLE")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
@@ -142,7 +142,7 @@ class TimelineDialog(QDialog):
         self.setWindowFlags(Qt.Window)
         self.setMinimumSize(600, 500)
         self.resize(720, 640)
-        set_scaled_stylesheet(self, DIALOG_STYLE)
+        apply_named_style(self, "DIALOG_STYLE")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)

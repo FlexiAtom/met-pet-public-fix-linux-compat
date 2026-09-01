@@ -27,7 +27,7 @@ from meapet.config.defaults import (
     DEFAULT_OPENAI_API_BASE,
     DEFAULT_OPENCLAW_WS_URL,
 )
-from meapet.ui_theme import MIN_TARGET_SIZE
+from meapet.ui_theme import apply_named_style, MIN_TARGET_SIZE
 from wizard.styles import STYLE_INPUT, STYLE_PAGE_CARD, field_label
 from wizard.agent_setup_help import AgentSetupHelpDialog
 from wizard.widgets import WheelSafeComboBox
@@ -48,7 +48,7 @@ class BackendPage(QFrame):
         super().__init__(parent)
         self._agent_help_dialog: AgentSetupHelpDialog | None = None
         self.setObjectName("PageCard")
-        self.setStyleSheet(STYLE_PAGE_CARD)
+        apply_named_style(self, "STYLE_PAGE_CARD")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 28)
         layout.setSpacing(12)
@@ -131,7 +131,7 @@ class BackendPage(QFrame):
         agent_layout.addLayout(help_row)
 
         self.agent_base_url = QLineEdit(DEFAULT_HERMES_WS_URL)
-        self.agent_base_url.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.agent_base_url, "STYLE_INPUT")
         self.agent_base_url.setPlaceholderText(DEFAULT_HERMES_WS_URL)
         _field(
             agent_layout,
@@ -149,7 +149,7 @@ class BackendPage(QFrame):
         agent_layout.addWidget(self.agent_transport_hint)
 
         self.agent_auth_token = QLineEdit()
-        self.agent_auth_token.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.agent_auth_token, "STYLE_INPUT")
         self.agent_auth_token.setEchoMode(QLineEdit.Password)
         self.agent_auth_token.setPlaceholderText(
             "可填 $MEA_PET_HERMES_DASHBOARD_SESSION_TOKEN"
@@ -165,7 +165,7 @@ class BackendPage(QFrame):
         session_left = QVBoxLayout()
         session_left.addWidget(field_label("当前会话 ID（空值会自动生成）："))
         self.agent_session_id = QLineEdit()
-        self.agent_session_id.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.agent_session_id, "STYLE_INPUT")
         self.agent_session_id.setAccessibleName("Agent 当前会话 ID")
         session_left.addWidget(self.agent_session_id)
         session_right = QVBoxLayout()
@@ -174,7 +174,7 @@ class BackendPage(QFrame):
         )
         session_right.addWidget(self.agent_session_key_label)
         self.agent_session_key = QLineEdit()
-        self.agent_session_key.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.agent_session_key, "STYLE_INPUT")
         self.agent_session_key.setEchoMode(QLineEdit.Password)
         self.agent_session_key.setAccessibleName("Agent 记忆作用域 Key")
         session_right.addWidget(self.agent_session_key)
@@ -209,7 +209,7 @@ class BackendPage(QFrame):
         self.agent_tls_verify.setChecked(True)
         agent_layout.addWidget(self.agent_tls_verify)
         self.agent_ca_file = QLineEdit()
-        self.agent_ca_file.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.agent_ca_file, "STYLE_INPUT")
         self.agent_ca_file.setPlaceholderText("可选：内部 CA 文件路径")
         _field(agent_layout, "Agent CA 文件：", self.agent_ca_file, "Agent CA 文件")
 
@@ -244,13 +244,13 @@ class BackendPage(QFrame):
         listen_col = QVBoxLayout()
         listen_col.addWidget(field_label("本机监听 IP："))
         self.control_listen_host = QLineEdit("127.0.0.1")
-        self.control_listen_host.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.control_listen_host, "STYLE_INPUT")
         self.control_listen_host.setAccessibleName("Companion MCP 本机监听 IP")
         listen_col.addWidget(self.control_listen_host)
         allowed_col = QVBoxLayout()
         allowed_col.addWidget(field_label("唯一允许的 Agent IP："))
         self.control_allowed_ip = QLineEdit("127.0.0.1")
-        self.control_allowed_ip.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.control_allowed_ip, "STYLE_INPUT")
         self.control_allowed_ip.setAccessibleName("Companion MCP 允许的 Agent IP")
         allowed_col.addWidget(self.control_allowed_ip)
         address_row.addLayout(listen_col, 1)
@@ -269,7 +269,7 @@ class BackendPage(QFrame):
         control_layout.addLayout(port_row)
 
         self.control_auth_token = QLineEdit()
-        self.control_auth_token.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.control_auth_token, "STYLE_INPUT")
         self.control_auth_token.setEchoMode(QLineEdit.Password)
         self.control_auth_token.setPlaceholderText("留空时首次启动自动生成；也可填环境变量占位符")
         _field(
@@ -313,13 +313,13 @@ class BackendPage(QFrame):
         control_layout.addWidget(self.insecure_http_warning)
 
         self.control_cert_file = QLineEdit()
-        self.control_cert_file.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.control_cert_file, "STYLE_INPUT")
         _field(control_layout, "HTTPS 证书：", self.control_cert_file, "MCP HTTPS 证书")
         self.control_key_file = QLineEdit()
-        self.control_key_file.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.control_key_file, "STYLE_INPUT")
         _field(control_layout, "HTTPS 私钥：", self.control_key_file, "MCP HTTPS 私钥")
         self.control_ca_file = QLineEdit()
-        self.control_ca_file.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.control_ca_file, "STYLE_INPUT")
         _field(control_layout, "客户端 CA（可选）：", self.control_ca_file, "MCP 客户端 CA")
 
         firewall = QLabel(
