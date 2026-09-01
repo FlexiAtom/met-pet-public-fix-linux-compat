@@ -24,8 +24,7 @@ from meapet.desktop.theme import CHAT_COMPOSER_STYLE
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
     ensure_application_fonts,
-    set_scaled_stylesheet,
-)
+    apply_named_style, )
 from meapet.agent.base import TextAttachment
 from meapet.agent.text_budget import estimate_tokens, can_attach_files
 
@@ -79,7 +78,7 @@ class ChatInputBox(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAccessibleName("和梅尔对话")
         self.setAccessibleDescription("输入消息后按 Enter 或点击发送；按 Escape 关闭")
-        set_scaled_stylesheet(self, CHAT_COMPOSER_STYLE)
+        apply_named_style(self, "CHAT_COMPOSER_STYLE")
 
         self._opacity = 0.0
         self._fade_step = 0.08

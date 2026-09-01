@@ -23,6 +23,7 @@ from wizard.styles import (
 from wizard.page_tts_gsv import TtsPageGsvMixin
 from wizard.page_tts_mimo import TtsPageMimoMixin
 from wizard.page_tts_vits import TtsPageVitsMixin
+from meapet.ui_theme import apply_named_style
 from meapet.config.defaults import (
     DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_MIMO_TTS_CLONE_MODEL,
@@ -39,7 +40,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         super().__init__(parent)
         self._startup_timers = []
         self.setObjectName("PageCard")
-        self.setStyleSheet(STYLE_PAGE_CARD)
+        apply_named_style(self, "STYLE_PAGE_CARD")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 28)
         layout.setSpacing(14)
@@ -123,7 +124,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         self.mimo_api_key_input.setObjectName("MimoTtsApiKey")
         self.mimo_api_key_input.setPlaceholderText("可自动填入；也可手动覆盖")
         self.mimo_api_key_input.setEchoMode(QLineEdit.Password)
-        self.mimo_api_key_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.mimo_api_key_input, "STYLE_INPUT")
         self.mimo_api_key_input.setAccessibleName("MiMo TTS API Key")
         self.mimo_api_key_input.textChanged.connect(lambda _t: self._refresh_mimo_key_status())
         mimo_layout.addWidget(self.mimo_api_key_input)
@@ -134,7 +135,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         self.mimo_api_base_input = QLineEdit(DEFAULT_MEA_PET_MIMO_API_BASE)
         self.mimo_api_base_input.setObjectName("MimoTtsApiBase")
         self.mimo_api_base_input.setPlaceholderText(DEFAULT_MEA_PET_MIMO_API_BASE)
-        self.mimo_api_base_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.mimo_api_base_input, "STYLE_INPUT")
         self.mimo_api_base_input.setAccessibleName("MiMo TTS API 地址")
         mimo_layout.addWidget(self.mimo_api_base_input)
 
@@ -153,7 +154,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         self.mimo_voice_input = QLineEdit("冰糖")
         self.mimo_voice_input.setObjectName("MimoVoice")
         self.mimo_voice_input.setPlaceholderText("内置: 冰糖/Chloe；克隆填 clone")
-        self.mimo_voice_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.mimo_voice_input, "STYLE_INPUT")
         self.mimo_voice_input.setAccessibleName("MiMo 音色")
         voice_row.addWidget(self.mimo_voice_input)
         mimo_layout.addLayout(voice_row)
@@ -192,7 +193,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         self.mimo_clone_ref_input = QLineEdit()
         self.mimo_clone_ref_input.setObjectName("MimoCloneReference")
         self.mimo_clone_ref_input.setPlaceholderText("例如 ./GPT-Sovits/normal/jp_normal.wav")
-        self.mimo_clone_ref_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.mimo_clone_ref_input, "STYLE_INPUT")
         self.mimo_clone_ref_input.setAccessibleName("克隆参考音频路径")
         clone_row.addWidget(self.mimo_clone_ref_input)
         clone_browse = QPushButton("浏览…")
@@ -227,7 +228,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         if os.path.isfile(_default_vits_py):
             self.vits_python_input.setText(_default_vits_py)
         self.vits_python_input.setPlaceholderText("用于 VITS 推理的 Python（需含 PyTorch CUDA）")
-        self.vits_python_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.vits_python_input, "STYLE_INPUT")
         self.vits_python_input.setAccessibleName("VITS Python 路径")
         vpy_layout.addWidget(self.vits_python_input)
         vits_browse_btn = QPushButton("浏览…")
@@ -271,7 +272,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         self.gsv_dir_input = QLineEdit()
         self.gsv_dir_input.setObjectName("GptSovitsDirectory")
         self.gsv_dir_input.setPlaceholderText("点「浏览」选整合包解压后的文件夹")
-        self.gsv_dir_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.gsv_dir_input, "STYLE_INPUT")
         self.gsv_dir_input.setAccessibleName("GPT-SoVITS 整合包目录")
         path_row.addWidget(self.gsv_dir_input)
 
@@ -312,7 +313,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
                 f"GsvReferenceAudio{language.title()}"
             )
             ref_input.setPlaceholderText(reference_examples[language])
-            ref_input.setStyleSheet(STYLE_INPUT)
+            apply_named_style(ref_input, "STYLE_INPUT")
             ref_input.setAccessibleName(
                 f"GPT-SoVITS {label_text}固定参考音频路径"
             )

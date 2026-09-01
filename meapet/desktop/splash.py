@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
 )
 
 from meapet.desktop.theme import SPLASH_STYLE
-from meapet.ui_theme import ensure_application_fonts, set_scaled_stylesheet
+from meapet.ui_theme import ensure_application_fonts, apply_named_style
 
 
 class StartupSplash(QWidget):
@@ -33,7 +33,7 @@ class StartupSplash(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_QuitOnClose, False)
         self.setAccessibleName("MeaPet 启动进度")
-        set_scaled_stylesheet(self, SPLASH_STYLE)
+        apply_named_style(self, "SPLASH_STYLE")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)

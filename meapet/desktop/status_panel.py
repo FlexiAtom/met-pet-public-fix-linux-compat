@@ -17,8 +17,7 @@ from meapet.ui_theme import (
     MIN_TARGET_SIZE,
     PALETTE,
     ensure_application_fonts,
-    set_scaled_stylesheet,
-)
+    apply_named_style, )
 
 
 class StatusPanel(QWidget):
@@ -42,7 +41,7 @@ class StatusPanel(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAccessibleName("梅尔养成状态")
         self.setAccessibleDescription("查看好感度、心情、对话统计和重要记忆")
-        set_scaled_stylesheet(self, STATUS_PANEL_STYLE)
+        apply_named_style(self, "STATUS_PANEL_STYLE")
 
         # 主布局
         main_layout = QVBoxLayout(self)

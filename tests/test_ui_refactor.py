@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -30,12 +31,13 @@ from PyQt5.QtWidgets import (  # noqa: E402
     QGraphicsOpacityEffect,
     QLabel,
     QLineEdit,
+    QListView,
+    QListWidget,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSlider,
-    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -91,7 +93,7 @@ class UiRefactorTests(unittest.TestCase):
         return widget
 
     def test_semantic_palette_meets_text_contrast_targets(self) -> None:
-        from meapet.ui_theme import PALETTE, contrast_ratio
+        from meapet.ui_theme import PALETTES, contrast_ratio
 
         required_pairs = (
             ("text_primary", "surface", 4.5),
@@ -101,15 +103,16 @@ class UiRefactorTests(unittest.TestCase):
             ("success", "surface", 4.5),
             ("danger", "surface", 4.5),
         )
-        for foreground, background, minimum in required_pairs:
-            with self.subTest(foreground=foreground, background=background):
-                self.assertGreaterEqual(
-                    contrast_ratio(PALETTE[foreground], PALETTE[background]),
-                    minimum,
-                )
+        for scheme, palette in PALETTES.items():
+            for foreground, background, minimum in required_pairs:
+                with self.subTest(scheme=scheme, foreground=foreground, background=background):
+                    self.assertGreaterEqual(
+                        contrast_ratio(palette[foreground], palette[background]),
+                        minimum,
+                    )
 
     def test_interactive_borders_meet_ui_graphic_contrast(self) -> None:
-        from meapet.ui_theme import PALETTE, contrast_ratio
+        from meapet.ui_theme import PALETTES, contrast_ratio
 
         required_pairs = (
             ("border_strong", "surface", 3.0),
@@ -118,20 +121,49 @@ class UiRefactorTests(unittest.TestCase):
             ("focus", "surface", 3.0),
             ("focus", "canvas", 3.0),
         )
-        for foreground, background, minimum in required_pairs:
-            with self.subTest(foreground=foreground, background=background):
-                self.assertGreaterEqual(
-                    contrast_ratio(PALETTE[foreground], PALETTE[background]),
-                    minimum,
-                )
+        for scheme, palette in PALETTES.items():
+            for foreground, background, minimum in required_pairs:
+                with self.subTest(scheme=scheme, foreground=foreground, background=background):
+                    self.assertGreaterEqual(
+                        contrast_ratio(palette[foreground], palette[background]),
+                        minimum,
+                    )
 
     def test_input_surface_reads_as_recessed_well(self) -> None:
-        from meapet.ui_theme import PALETTE, _relative_luminance
+        from meapet.ui_theme import PALETTES, _relative_luminance
 
-        self.assertLess(
-            _relative_luminance(PALETTE["surface_input"]),
-            _relative_luminance(PALETTE["canvas"]),
+        for scheme, palette in PALETTES.items():
+            with self.subTest(scheme=scheme):
+                self.assertLess(
+                    _relative_luminance(palette["surface_input"]),
+                    _relative_luminance(palette["canvas"]),
+                )
+
+    def test_theme_mode_switches_palette_and_named_styles(self) -> None:
+        from meapet.ui_theme import (
+            get_active_scheme,
+            get_named_style,
+            get_ui_theme_mode,
+            normalize_theme_mode,
+            resolved_scheme,
+            set_ui_theme_mode,
         )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.assertEqual(normalize_theme_mode("LIGHT"), "light")
+        self.assertEqual(normalize_theme_mode("whatever"), "system")
+        self.assertIn(resolved_scheme("system"), ("light", "dark"))
+        self.assertEqual(resolved_scheme("light"), "light")
+
+        set_ui_theme_mode("dark")
+        self.assertEqual(get_active_scheme(), "dark")
+        dark_sheet = get_named_style("WIZARD_STYLESHEET")
+        set_ui_theme_mode("light")
+        self.assertEqual(get_active_scheme(), "light")
+        light_sheet = get_named_style("WIZARD_STYLESHEET")
+        self.assertNotEqual(dark_sheet, light_sheet)
+        set_ui_theme_mode("dark")
+        self.assertEqual(get_named_style("WIZARD_STYLESHEET"), dark_sheet)
 
     def test_wizard_check_controls_have_visible_focus_ring(self) -> None:
         from wizard.styles import WIZARD_STYLESHEET
@@ -262,26 +294,29 @@ class UiRefactorTests(unittest.TestCase):
         self.assertEqual(dialog.result(), QMessageBox.Cancel)
         self.assertFalse(dialog.isVisible())
 
-    def test_bundled_cute_display_font_loads_with_a_safe_body_font(self) -> None:
+    def test_normal_system_font_is_used_for_body_and_display(self) -> None:
         from meapet.ui_theme import (
             BODY_FONT_NAME,
             BUNDLED_DISPLAY_FONT_PATH,
             DISPLAY_FONT_FAMILY,
+            FALLBACK_BODY_FONT_NAME,
             FONT_FAMILY,
             ensure_application_fonts,
         )
 
         self.assertTrue(BUNDLED_DISPLAY_FONT_PATH.is_file())
-        self.assertEqual(BUNDLED_DISPLAY_FONT_PATH.name, "LXGWWenKai-Regular.ttf")
-        self.assertEqual(DISPLAY_FONT_FAMILY, '"LXGW WenKai"')
-        self.assertEqual(BODY_FONT_NAME, "LXGW WenKai")
+        # 正文与标题统一使用系统正常 UI 字体（Windows 为微软雅黑），不再是手写风内置字体。
+        self.assertEqual(DISPLAY_FONT_FAMILY, f'"{FALLBACK_BODY_FONT_NAME}"')
+        self.assertEqual(BODY_FONT_NAME, FALLBACK_BODY_FONT_NAME)
         self.assertEqual(FONT_FAMILY, f'"{BODY_FONT_NAME}"')
-        self.assertIn("LXGW WenKai", ensure_application_fonts())
+        if sys.platform == "win32":
+            self.assertEqual(FALLBACK_BODY_FONT_NAME, "Microsoft YaHei UI")
+        self.assertIn(FALLBACK_BODY_FONT_NAME, ensure_application_fonts())
 
         from meapet.desktop.theme import CHAT_COMPOSER_STYLE, DIALOGUE_STYLE
 
         self.assertIn(
-            f"QLabel#ComposerTitle {{\n        color: ",
+            "QLabel#ComposerTitle {\n            color: ",
             CHAT_COMPOSER_STYLE,
         )
         self.assertIn(f"font-family: {DISPLAY_FONT_FAMILY};", CHAT_COMPOSER_STYLE)
@@ -332,8 +367,11 @@ class UiRefactorTests(unittest.TestCase):
             1.0,
         )
 
-    def test_configuration_window_uses_tabs_and_accessible_core_actions(self) -> None:
+    def test_configuration_window_uses_side_nav_and_accessible_core_actions(
+        self,
+    ) -> None:
         from wizard.app import SetupWizard
+        from wizard.side_nav import SideNavTabs
         from wizard.styles import MIN_TARGET_SIZE
 
         wizard = self._track(SetupWizard())
@@ -351,7 +389,8 @@ class UiRefactorTests(unittest.TestCase):
             ),
             (1, 1, 1, 1),
         )
-        self.assertIsInstance(wizard.tabs, QTabWidget)
+        self.assertIsInstance(wizard.tabs, SideNavTabs)
+        self.assertIsInstance(wizard.tabs.list, QListWidget)
         self.assertEqual(
             [wizard.tabs.tabText(index) for index in range(wizard.tabs.count())],
             ["环境", "Live2D", "对话", "语音", "屏幕识图", "语音输入"],
@@ -489,7 +528,7 @@ class UiRefactorTests(unittest.TestCase):
             wizard.pet_size_value.minimumWidth(),
         )
         self.assertIn(
-            "QLabel#FontScaleValue,\n    QLabel#PetSizeValue",
+            "QLabel#FontScaleValue,\n        QLabel#PetSizeValue",
             WIZARD_STYLESHEET,
         )
 

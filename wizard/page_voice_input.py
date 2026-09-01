@@ -32,6 +32,7 @@ from wizard.styles import (
     STYLE_PAGE_CARD,
     set_status,
 )
+from meapet.ui_theme import apply_named_style
 from wizard.widgets import WheelSafeComboBox
 
 
@@ -104,7 +105,7 @@ class VoiceInputPage(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("PageCard")
-        self.setStyleSheet(STYLE_PAGE_CARD)
+        apply_named_style(self, "STYLE_PAGE_CARD")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 28)
         layout.setSpacing(12)

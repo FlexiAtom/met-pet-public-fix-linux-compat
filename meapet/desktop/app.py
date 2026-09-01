@@ -153,11 +153,17 @@ class MeaPet(
             self._config_broken = False
 
         self.config = normalize_config(self.config)
-        from meapet.ui_theme import resolve_reduced_motion, apply_reduced_motion_env, set_ui_font_scale
+        from meapet.ui_theme import (
+            apply_reduced_motion_env,
+            resolve_reduced_motion,
+            set_ui_font_scale,
+            set_ui_theme_mode,
+        )
 
         set_ui_font_scale(
             (self.config.get("display") or {}).get("font_scale", 1.0)
         )
+        set_ui_theme_mode((self.config.get("ui") or {}).get("theme"))
         self._apply_motion_preference()
         bub = self.config.get("bubble_duration_ms") or {}
         log.info(

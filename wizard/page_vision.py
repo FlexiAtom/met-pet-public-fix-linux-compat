@@ -18,6 +18,7 @@ from wizard.styles import (
     set_status,
 )
 from wizard.widgets import WheelSafeComboBox
+from meapet.ui_theme import apply_named_style
 from meapet.config.defaults import (
     DEFAULT_MEA_PET_MIMO_API_BASE,
     DEFAULT_OLLAMA_HOST,
@@ -32,7 +33,7 @@ class VisionPage(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("PageCard")
-        self.setStyleSheet(STYLE_PAGE_CARD)
+        apply_named_style(self, "STYLE_PAGE_CARD")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 28)
         layout.setSpacing(12)
@@ -125,7 +126,7 @@ class VisionPage(QFrame):
         self.model_combo.setObjectName("VisionModel")
         self.model_input.setPlaceholderText(DEFAULT_OLLAMA_VISION_MODEL)
         self.model_input.setText(DEFAULT_OLLAMA_VISION_MODEL)
-        self.model_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.model_input, "STYLE_INPUT")
         self.model_combo.setAccessibleName("本地视觉模型")
         self.advanced_layout.addWidget(self.model_input)
 
@@ -135,7 +136,7 @@ class VisionPage(QFrame):
         self.host_input = QLineEdit()
         self.host_input.setObjectName("VisionOllamaHost")
         self.host_input.setPlaceholderText(DEFAULT_OLLAMA_HOST)
-        self.host_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.host_input, "STYLE_INPUT")
         self.host_input.setAccessibleName("识图 Ollama 地址")
         self.advanced_layout.addWidget(self.host_input)
 
@@ -151,7 +152,7 @@ class VisionPage(QFrame):
         self.api_key_input.setObjectName("VisionCloudApiKey")
         self.api_key_input.setPlaceholderText("可留空自动沿用对话 Key")
         self.api_key_input.setEchoMode(QLineEdit.Password)
-        self.api_key_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.api_key_input, "STYLE_INPUT")
         self.api_key_input.setAccessibleName("云端识图 API Key")
         cloud_l.addWidget(self.api_key_input)
         cloud_base_label = QLabel("API Base：")
@@ -159,7 +160,7 @@ class VisionPage(QFrame):
         cloud_l.addWidget(cloud_base_label)
         self.api_base_input = QLineEdit(DEFAULT_MEA_PET_MIMO_API_BASE)
         self.api_base_input.setObjectName("VisionCloudApiBase")
-        self.api_base_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.api_base_input, "STYLE_INPUT")
         self.api_base_input.setAccessibleName("云端识图 API 地址")
         cloud_l.addWidget(self.api_base_input)
         self.advanced_layout.addWidget(self.cloud_box)
@@ -174,13 +175,13 @@ class VisionPage(QFrame):
         self.min_min_input.setObjectName("WatchIntervalMinimum")
         self.min_min_input.setMinimumWidth(80)
         self.min_min_input.setMaximumWidth(96)
-        self.min_min_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.min_min_input, "STYLE_INPUT")
         self.min_min_input.setAccessibleName("最小观察间隔（分钟）")
         self.max_min_input = QLineEdit(str(default_max_minutes))
         self.max_min_input.setObjectName("WatchIntervalMaximum")
         self.max_min_input.setMinimumWidth(80)
         self.max_min_input.setMaximumWidth(96)
-        self.max_min_input.setStyleSheet(STYLE_INPUT)
+        apply_named_style(self.max_min_input, "STYLE_INPUT")
         self.max_min_input.setAccessibleName("最大观察间隔（分钟）")
         minimum_label = QLabel("最小")
         minimum_label.setObjectName("HelperText")
