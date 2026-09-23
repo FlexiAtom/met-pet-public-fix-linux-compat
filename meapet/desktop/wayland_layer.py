@@ -4,7 +4,7 @@ wayland_layer.py —— Niri (wlroots) 点击穿透的 layer-shell 后端。
 原理：通过 liblayer_shell_shim.so 创建【裸】wl_surface（无 xdg_toplevel role），
      挂 layer-shell OVERLAY + 空 input region → pointer/touch 穿透。
 
-该 `.so` 现在是 **Rust cdylib**（`native/layer_shell`，接口真值见 `~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md` §7.1）。
+该 `.so` 现在是 **Rust cdylib**（`native/layer_shell`，接口真值见 `~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md` §7.1）。
 它**自己打开一条到 compositor 的 Wayland 连接**，并在内部跑一个自建的事件泵线程：
 桥接层不从 Qt 借 `wl_display`，Qt 与它之间只有"这块 QImage 贴到那个矩形"这一件事。
 失效模式（为什么必须自建泵，见 §6.4）：一条 Wayland 连接只能有一个读取者，若两处

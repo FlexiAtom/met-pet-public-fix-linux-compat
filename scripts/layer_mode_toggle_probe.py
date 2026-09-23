@@ -4,7 +4,7 @@
 Subject under test: `LayerDebugPanel`'s button (title "穿透开关") toggling
 `PetRenderHostMixin._set_layer_mode`, i.e. exactly what the user clicks.
 
-What it decides (~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §7.3-6, 第 6 项):
+What it decides (~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §7.3-6, 第 6 项):
   across 10 穿透↔交互 round trips, `memfd:meapet-px` must return to the
   interactive-mode baseline every time the ctx is destroyed and never exceed
   `ctx x RING_DEPTH` while live; the compositor-side meapet surface count must

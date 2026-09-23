@@ -6,7 +6,7 @@ Subject under test (the real objects, no fake):
   set_size / update_pixels / set_click_through / disable, on top of the Rust
   bridge that build_layer_shell.sh produced.
 
-What it decides (~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §7.3-6 resource half, T5-6):
+What it decides (~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §7.3-6 resource half, T5-6):
   after each `disable()` the process must return to its baseline count of
   `/memfd:meapet-px` descriptors, and its thread count must never end a cycle
   *above* baseline.  A cycle that leaves a descriptor behind is an I5 leak, and
@@ -199,7 +199,7 @@ def main() -> int:
         # fd and thread use DIFFERENT criteria, on purpose:
         #   * fds are only ever created by a live ctx, so returning to the exact
         #     baseline is the right question;
-        #   * threads are not.  ~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §9 phrases the requirement as
+        #   * threads are not.  ~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §9 phrases the requirement as
         #     线程数**不增长**, and Qt itself retires startup threads, so a
         #     baseline equality check fails on a healthy process (measured
         #     2026-09-20: 5 -> 4 on the very first cycle, then flat).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # WP-G T5-6 / T6 census: sample the LIVE pet process over a time window.
 #
-# Why this exists (~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §7.3-6, §7.3 T6): the fd bound is only
+# Why this exists (~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §7.3-6, §7.3 T6): the fd bound is only
 # meaningful as a *series* taken while mode toggles happen, and the plan's
 # acceptance command is `ls -l /proc/<pid>/fd | grep -c '/memfd:meapet-px'`
 # -- `-l` is load-bearing, `ls` without it prints bare descriptors and every
@@ -70,7 +70,7 @@ verdict_block() {
     max_rss=$(grep '^[0-9]' "$OUT" | grep -o 'VmRSS_kB=[0-9]*' | cut -d= -f2 | sort -n | tail -1)
     min_rss=$(grep '^[0-9]' "$OUT" | grep -o 'VmRSS_kB=[0-9]*' | cut -d= -f2 | sort -n | head -1)
     shim_hits=$(grep '^[0-9]' "$OUT" | grep -c 'shim_map=[1-9]' || true)
-    # ---- the bound itself (~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §7.3-6, F-M7 "先数 ctx 再判 fd") ----
+    # ---- the bound itself (~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §7.3-6, F-M7 "先数 ctx 再判 fd") ----
     # ctx count has a witness in this very file: `meapet_surfaces` is the number
     # of niri layers carrying our namespace, and one ctx maps exactly one layer
     # surface, so the bound `memfd <= ctx x RING_DEPTH` is evaluable per row

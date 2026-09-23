@@ -101,7 +101,7 @@ class Win32ClickThroughTests(unittest.TestCase):
     def test_wayland_inactive(self) -> None:
         # Invariant under test is "no Wayland session => inactive", so the
         # session variables have to be absent from the environment.  The Rust
-        # shim opens its OWN connection (~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §4.7-1), so on a dev box
+        # shim opens its OWN connection (~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §4.7-1), so on a dev box
         # with a live compositor Path 0 really maps a layer-shell surface here
         # and leaks an undisabled ctx.  The old C++ shim took the display from
         # Qt (`nativeResourceForWindow`, `layer_shell_shim.cpp:19-21`), which

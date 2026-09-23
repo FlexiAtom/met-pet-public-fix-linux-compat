@@ -4,7 +4,7 @@
 Subject under test: the running app (`pet.py` under QT_QPA_PLATFORM=wayland)
 pushing frames through the Rust bridge onto a real niri OVERLAY surface.
 
-What it decides (~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §7.3 items 1 and 2, the Agent-objective half):
+What it decides (~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §7.3 items 1 and 2, the Agent-objective half):
   * 第 1 项 -- **only the part a probe without geometry reporting can decide**: pixels
     land inside the rect the app *says* it requested, the rect is non-blank, and
     exactly one meapet OVERLAY is mapped.  Position and size themselves are the app's

@@ -1,4 +1,4 @@
-//! MeaPet Linux layer-shell bridge — see ~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §4–§7 for the contract.
+//! MeaPet Linux layer-shell bridge — see ~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §4–§7 for the contract.
 //!
 //! WP-E closes the surface: the §7.1 symbol table (exactly 11 `extern "C"`
 //! exports, I2), the single panic-capture wrapper (I4, `state::guarded`),

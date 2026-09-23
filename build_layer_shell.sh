@@ -1,5 +1,5 @@
 #!/bin/bash
-# Contract: ~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §5.2 — build the Rust cdylib, install it to the repo
+# Contract: ~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §5.2 — build the Rust cdylib, install it to the repo
 # root (I1: the artifact name IS the contract), then verify the export set
 # equals spec §7.1 (I2) with the three-part judgment (F-M9, spec §9 T7 row).
 # No C/C++ compiler invocation, no Qt detection, no versioned Qt include path
