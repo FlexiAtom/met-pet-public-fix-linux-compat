@@ -121,8 +121,15 @@ class WaylandLayerBackend:
 
     # ---------- 生命周期 ----------
     def enable(self, qwindow, width: int, height: int, pos_x: int, pos_y: int):
-        """创建 layer context，开启穿透。返回 ctx 句柄。"""
+        """创建 layer context，开启穿透。返回 ctx 句柄。幂等：重复调用不累积 ctx。"""
         shim = self._load()
+        # 幂等守卫：任何二次 enable() 先回收上一只 ctx，否则 `self._ctx = create()`
+        # 直接覆盖句柄 → 旧 ctx 连同它的 RING_DEPTH 个 memfd 和已 map 的 OVERLAY
+        # surface 一起变孤儿，门面自身再无引用可回收（旧缺陷；外部只靠 render_host
+        # 的单点 enable 挡住）。用 destroy_context() 精确送这一只退场，而非 disable()
+        # ——后者会连坐 layer_shell_cleanup 把健康后端一并拆掉。
+        if self._ctx:
+            self.destroy_context()
         if shim.layer_shell_init() != 0:
             raise RuntimeError("layer-shell init 失败（compositor 不支持？）")
 
