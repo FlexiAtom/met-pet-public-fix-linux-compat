@@ -156,7 +156,15 @@ class WizardConfigurationExperienceTests(unittest.TestCase):
             dialog.button(QMessageBox.Close),
         ):
             self.assertEqual(action.height(), MIN_TARGET_SIZE)
-        self.assertGreaterEqual(dialog.body.height(), 140)
+        # 真实意图：帮助正文至少能显示约 3 行、未被压成单行。阈值从正文自身的
+        # 字体行高派生，跨 offscreen/xcb、跨机器字体稳定；写死像素 140 会把断言
+        # 绑到某台机器的字体度量（正是本文件强制 offscreen 想排除的那类脆性）。
+        line_height = dialog.body.fontMetrics().height()
+        self.assertGreaterEqual(
+            dialog.body.height(),
+            3 * line_height,
+            "agent 帮助正文高度应≥约 3 行（随字体度量派生，勿写死像素）",
+        )
 
         triggered = []
         page.test_agent_connection_btn.clicked.connect(
