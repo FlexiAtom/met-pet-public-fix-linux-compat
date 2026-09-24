@@ -278,21 +278,21 @@ def fidus_worker(box: dict, ev_move: threading.Event, do_stage_b: bool, pattern)
         box["conns_after_drop"] = compositor_connections()
         return
 
-    def estimates(n):
+    def estimates(engine, n):
         out = []
         for _ in range(n):
             t = time.perf_counter()
             try:
-                out.append((eng.estimate(), time.perf_counter() - t))
+                out.append((engine.estimate(), time.perf_counter() - t))
             except BaseException as exc:
                 out.append((f"RAISED {type(exc).__name__}: {exc}", time.perf_counter() - t))
             time.sleep(0.12)
         return out
 
-    box["est_before"] = estimates(3)
+    box["est_before"] = estimates(eng, 3)
     box["awaiting_move"] = True
     ev_move.wait(timeout=8.0)
-    box["est_after"] = estimates(3)
+    box["est_after"] = estimates(eng, 3)
     box["conns_mid_b"] = compositor_connections()
     del eng
     box["conns_after_drop"] = compositor_connections()
