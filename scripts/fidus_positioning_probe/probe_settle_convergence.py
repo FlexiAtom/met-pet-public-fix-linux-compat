@@ -72,6 +72,12 @@ DX, DY = 180, -120
 INPLACE_PX = 1.5    # 屏幕「到位」判据（NCC 峰值定位是整数像素，留 1.5 px 量化余量）
 SCREEN_OK_PX = 3.0  # 尺子 A 认定「屏幕侧无过渡」的上限
 FIDUS_FIRST_PX = 10.0  # 尺子 B 首条算「明显偏」的下限
+# 失控（--recover 要判的东西）得先有可打印的定义，否则"挽回"无从谈起。
+# 实测大位移下 conf 恰为 0.0000 且读数一路外推——两个条件缺一不可，
+# 只看偏移会把正常的阻尼收敛（首条也偏上百 px）误判成失控。
+RUNAWAY_CONF = 0.001  # conf 上限：高于它就不算失控
+RUNAWAY_GAIN = 2.0    # 且末条离期望 ≥ 该倍数的位移幅值，才算"外推"而非"衰减中"
+RECOVER_OK_PX = 5.0   # 重注册后首条离期望的上限（此时屏幕已稳，比 2 px 略宽留量化余量）
 NAN = float("nan")
 
 
@@ -161,6 +167,32 @@ def along_proj(rows, move_vec, center):
             for row in rows]
 
 
+def is_runaway(arm) -> bool:
+    """`RUNAWAY_CONF` × `RUNAWAY_GAIN` 两条同时成立才算失控（定义见常量处的理由）。
+
+    取**末条**而不是全列 max：位移后首条是锁定读数（conf == ceiling），conf 塌到 0 从第 2 条起
+    ——按全列 max 判会把每一个真位移臂都判成"未失控"（run2 实测踩到，判据自身被否证一次）。
+    """
+    last = arm["rows"][-1]
+    if not last["conf"] <= RUNAWAY_CONF:  # NaN-safe：抛异常的条 conf=-1，但 d_f 是 NaN，下面挡住
+        return False
+    return last["d_f"] == last["d_f"] and last["d_f"] >= RUNAWAY_GAIN * arm["move_px"]
+
+
+def adj_settle(adj, tol=2.0):
+    """最早的第 j 对满足 `|Δ_j| ≤ tol` **且其后各对皆 ≤ tol** ⇒ 敢说"稳"至少要读到第几 *条*。
+
+    fidus 文档的判据是"相邻两条互差不超过容差"，而该判据**是否够用取决于手里有几条**：
+    本函数就是把"要几条"这件事变成一个可打印的数，而不是停在"读 6 条"这个未条件化的常数上。
+    None = 这一列里从未稳过（列数不够或素材本身在抖）。
+    """
+    good = [a == a for a in adj]
+    for j, a in enumerate(adj):
+        if good[j] and a <= tol and all(good[k] and adj[k] <= tol for k in range(j + 1, len(adj))):
+            return j + 2
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--moves", type=int, default=3, help="真位移臂次数")
@@ -169,6 +201,17 @@ def main() -> int:
     ap.add_argument("--no-control", action="store_true", help="跳过「原地 set_position」对照臂")
     ap.add_argument("--tries", type=int, default=4, help="fidus 闸门重试次数")
     ap.add_argument("--commits", type=int, default=3, help="首帧不可见时最多再提交几帧")
+    # 下面两条是为回填 fidus 件 `meapet-settle-count-alignment` 的反证行而加：
+    # 该件要我方证明"读 6 条"是不是**普适常数**，还是要随**位移幅值**与**首枪间隔**条件化。
+    # 不加这两个旋钮就只能重复同一组 (幅值, dt)，那等于把"常数"当成未经检验的前提。
+    ap.add_argument("--amp", type=float, default=1.0,
+                    help=f"位移幅值倍率（基准 hypot({DX},{DY})="
+                         f"{np.hypot(DX, DY):.0f} px）")
+    ap.add_argument("--gap", type=float, default=0.0,
+                    help="set_position 后**先空等**几秒再取第一枪（首枪间隔）")
+    ap.add_argument("--recover", action="store_true",
+                    help="末尾加一臂：不移动，只**重注册**同一模板再读若干条 ⇒ 看"
+                         "大位移失控（conf 恒 0、读数一路外推）能否靠重注册撤销")
     args = ap.parse_args()
 
     print("=== 位移后的两把尺子（grim+NCC 独立实测 vs fidus estimate）===")
@@ -266,6 +309,8 @@ def main() -> int:
     def take(tag, tx, ty, frm, center):
         t_move = time.perf_counter()
         backend.set_position(tx, ty)
+        if args.gap > 0:                       # 首枪间隔（fidus 件要求的第二个变量）
+            pump(app, int(args.gap * 1000))
         shot0 = screen_shot(f"{tag}_t0", pattern, center, args.gscale)
         lag0 = time.perf_counter() - t_move
         rows = read_column(eng, pattern, center, args.col, t_move, args.gscale, tag)
@@ -276,6 +321,9 @@ def main() -> int:
         last, prev = rows[-1], rows[-2]
         usable = all(row["pt"] is not None for row in rows)
         step = NAN if (last["pt"] is None or prev["pt"] is None) else dev(last["pt"], prev["pt"])
+        pts = [row["pt"] for row in rows]
+        adj = [NAN if (pts[k] is None or pts[k - 1] is None)
+               else dev(pts[k], pts[k - 1]) for k in range(1, len(pts))]
         m = {
             "tag": tag, "req": (tx, ty), "frm": frm, "center": center, "shot0": shot0,
             "rows": rows, "err": err, "move_px": float(np.hypot(*mv)),
@@ -284,6 +332,9 @@ def main() -> int:
             "settle": settle_index(rows),
             "last_dev": last["d_f"], "last_step": step,
             "along": along_proj(rows, mv, center),
+            "adj": adj, "gap_med": med([rows[k]["t"] - rows[k - 1]["t"]
+                                        for k in range(1, len(rows))]),
+            "need_col": adj_settle(adj),
         }
         arms.append(m)
         print(f"\n[{tag}] 请求 {frm} → ({tx},{ty})（移动 {m['move_px']:.0f} px）"
@@ -311,15 +362,60 @@ def main() -> int:
         if m["along"] is not None and usable:
             fact("  沿运动方向投影", " ".join(f"{v:+.1f}" for v in m["along"])
                  + f"（越过稳态位最多 {max(m['along']):+.1f} px）")
+        fact("  相邻互差 Δ(px)", " ".join("—" if a != a else f"{a:.2f}" for a in m["adj"])
+             + f"｜dt 中位 {m['gap_med']:.2f}s｜互差判据要读到 "
+             + ("本列内从未稳" if m["need_col"] is None else f"{m['need_col']} 条"))
 
     if not args.no_control:
         take("对照·原地set_position", px, py, (px, py), (cx0, cy0))
     cur = (px, py)
     for i in range(args.moves):
         # 交替落点，但**首臂必须是真位移**（早期版本首臂退化成 0 px ⇒ 白跑一臂还错标）
-        tx, ty = (px + DX, py + DY) if i % 2 == 0 else (px, py)
+        if i % 2 == 0:
+            tx = int(round(np.clip(px + DX * args.amp, 20, geo.width() - H1.PATTERN_W - 20)))
+            ty = int(round(np.clip(py + DY * args.amp, 20, geo.height() - H1.PATTERN_H - 20)))
+        else:
+            tx, ty = px, py
         take(f"位移#{i}", tx, ty, cur, (tx + H1.PATTERN_W / 2, ty + H1.PATTERN_H / 2))
         cur = (tx, ty)
+
+    # ── 恢复臂（--recover）：大位移失控后**不移动**、只重注册，看读数能否回到真位。
+    # 为什么要单独一臂：失控若只能靠"把窗搬回原位"自愈，消费方就得等用户动作；
+    # 若重注册即可撤销，契约才写得出"失控 ⇒ 在 tick 外重注册"这条**可执行**出口。
+    # ── 恢复臂（--recover）：大位移失控后**不移动**、只重注册，看读数能否回到真位。
+    # 为什么要单独一臂：失控若只能靠"把窗搬回原位"自愈，消费方就得等用户动作；
+    # 若重注册即可撤销，契约才写得出"失控 ⇒ 在 tick 外重注册"这条**可执行**出口。
+    # 拆两小臂而不是只跑一种：`register_target` 是否连带清掉 `calibrate_once` 建立的参照系映射
+    # 我方**不知道**——只跑"仅重注册"，失败时分不清"滤波状态没清"还是"校准没了"；
+    # 只跑"重注册+校准"，则可能把本来不必付的校准成本写进契约。两种都测，出口才写得出代价。
+    rec = None
+    if args.recover and not [m for m in arms if m["real"]]:
+        fact("恢复臂", "跳过：--moves 0 时没有「失控前」的参照臂，本臂无意义")
+    elif args.recover:
+        pre = [m for m in arms if m["real"]][-1]
+        ctr = pre["center"]
+        print(f"\n[恢复臂] 停在期望中心 ({ctr[0]:.0f},{ctr[1]:.0f})、不移动"
+              f"｜上一臂 {pre['tag']} 末条离期望 {fnum(pre['last_dev'])} px"
+              f"（其 conf 序列 {[round(r['conf'], 4) for r in pre['rows']]}）"
+              f"⇒ 按判据 {'**算**失控' if is_runaway(pre) else '**不算**失控'}")
+        recs = []
+        for cal in (False, True):
+            label = "重注册+校准" if cal else "仅重注册"
+            t_r = time.perf_counter()
+            eng.register_target(pattern, False)
+            if cal:
+                eng.calibrate_once()
+            reg_ms = (time.perf_counter() - t_r) * 1000.0
+            fact(label, f"{reg_ms:.1f} ms（模板 {H1.PATTERN_W}×{H1.PATTERN_H}，"
+                        f"ceiling={eng.confidence_ceiling!r}）")
+            rows = read_column(eng, pattern, ctr, args.col, t_r, args.gscale, f"rec{int(cal)}")
+            for row in rows:
+                note = row["err"] or f"{row['pt'][0]:9.2f},{row['pt'][1]:9.2f}"
+                print(f"  {row['t']:11.2f}  {note:>18} {fnum(row['d_f'], '{:9.2f}')}"
+                      f" {row['conf']:8.4f}   屏幕 {fnum(row['scr']['d'])}px"
+                      f" 峰={fnum(row['scr']['peak'], '{:.4f}')}")
+            recs.append({"label": label, "ms": reg_ms, "rows": rows})
+        rec = {"pre": pre, "runaway": is_runaway(pre), "arms": recs}
 
     real = [m for m in arms if m["real"] and m["usable"]]
     ctrl = [m for m in arms if not m["real"]]
@@ -360,12 +456,70 @@ def main() -> int:
             mx = max(max(m["along"]) for m in overs)
             print(f"OBS-OVERSHOOT    : {hits}/{len(overs)} 条真位移臂在逼近中越过稳态位"
                   f"（沿运动方向最大越界 {mx:+.1f} px）⇒ 形态是**阻尼收敛**，不是单向逼近。")
+        # ── VERDICT-ADJ：fidus 件 `meapet-settle-count-alignment` 的反证行——"6 条"是不是普适常数
+        need = [m["need_col"] for m in real]
+        print("VERDICT-ADJ      : 幅值倍率 amp={:.2f} 首枪间隔 {:.1f}s 列数上限 {} ⇒ 各臂按"
+              "「相邻互差 ≤2 px」判稳**所需条数** {}".format(args.amp, args.gap, args.col, need))
+        print(f"                   逐臂（幅值 px / dt 中位 s / 所需条数）: " + "；".join(
+            f"{m['move_px']:.0f}/{m['gap_med']:.2f}/"
+            + (">" + str(args.col) if m["need_col"] is None else str(m["need_col"]))
+            for m in real))
+        uniq = {n for n in need}
+        print("                   ⇒ " + ("本组内各臂所需条数**相同** ⇒ 在该幅值该间隔下"
+                                         "条数看不出对幅值的依赖，须换 amp 重跑"
+                                         if len(uniq) == 1 else
+                                         "所需条数在组内就不齐 ⇒ 「读 6 条」是**有条件**的经验值，"
+                                         "契约里必须写成「幅值 × 首枪间隔」的函数或留余量"))
         if ctrl:
             c_jump = med([m["jump"] for m in ctrl])
             print(f"OBS-CONTROL      : 原地 set_position 臂首条离期望 {c_jump:.2f} px、"
                   f"屏幕最大 {max(m['scr_max'] for m in ctrl):.2f} px ⇒ "
                   + ("调用本身不引入过渡（前作复现）。" if c_jump <= 2.0 else
                      "连「原地不动」的 set_position 都引入偏差 ⇒ 归因要重新看。"))
+    if rec is not None:
+        pre = rec["pre"]
+        zc = sum(1 for r in pre["rows"] if r["conf"] <= RUNAWAY_CONF)
+        print(f"VERDICT-RECOVER  : 上一臂 {pre['tag']}（幅值 {pre['move_px']:.0f} px，"
+              f"conf ≤ {RUNAWAY_CONF:g} 的条数 {zc}/{len(pre['rows'])}，末条 "
+              f"{fnum(pre['rows'][-1]['d_f'])} px、末条 conf {pre['rows'][-1]['conf']:.4f}）"
+              f"⇒ 按「末条 conf ≤ {RUNAWAY_CONF:g} 且末条 ≥ {RUNAWAY_GAIN:g}× 幅值」判为 "
+              + ("**失控**" if rec["runaway"] else "**未失控**"))
+        for sub in rec["arms"]:
+            dp = [r["d_f"] for r in sub["rows"]]
+            sp = [r["scr"]["d"] for r in sub["rows"] if r["scr"]["d"] is not None]
+            ok_at = [i for i, v in enumerate(dp) if v == v and v <= RECOVER_OK_PX]
+            print(f"  · {sub['label']}（{sub['ms']:.1f} ms）⇒ 离期望 "
+                  + " ".join("—" if v != v else f"{v:.2f}" for v in dp)
+                  + " px｜conf " + " ".join(f"{r['conf']:.4f}" for r in sub["rows"])
+                  + f"｜同刻屏幕侧最大 {fnum(max(sp) if sp else None)} px")
+            if sp and max(sp) > SCREEN_OK_PX:
+                tail = (f"屏幕本身不在期望位（>{SCREEN_OK_PX:g} px）⇒ 归因不成立，"
+                        "先修可见性/位姿再看 fidus")
+            elif not rec["runaway"]:
+                tail = "上一臂不算失控 ⇒ 本行只说明该动作**是否打断正常跟踪**，不支撑出口结论"
+            elif not ok_at:
+                tail = (f"{len(dp)} 条**无一**回到 ≤ {RECOVER_OK_PX:g} px ⇒ 该动作**不能**撤销失控")
+            else:
+                tail = (f"第 {ok_at[0] + 1} 条即回到 ≤ {RECOVER_OK_PX:g} px ⇒ 该动作**能**撤销失控"
+                        f"（代价 {sub['ms']:.1f} ms，须落在 tick 外）")
+            print("      ⇒ " + tail)
+        can = [s["label"] for s in rec["arms"]
+               if rec["runaway"] and any(r["d_f"] == r["d_f"] and r["d_f"] <= RECOVER_OK_PX
+                                         for r in s["rows"])
+               and not any(r["scr"]["d"] is not None and r["scr"]["d"] > SCREEN_OK_PX
+                           for r in s["rows"])]
+        if rec["runaway"]:
+            best = min((s for s in rec["arms"] if s["label"] in can), key=lambda s: s["ms"])
+            print("      ⇒ 出口判定："
+                  + (f"{'、'.join(can)} 均可撤销失控 ⇒ 取**最便宜**的那个：{best['label']}"
+                     f" {best['ms']:.1f} ms（贵的一档 {max(s['ms'] for s in rec['arms']):.0f} ms "
+                     f"作为「必须附带的动作」的成本下限写进契约）；两者都远超 2 ms tick ⇒ "
+                     f"必须落在 GUI tick 外"
+                     if can else
+                     "两种动作都不能撤销 ⇒ 契约的出口只能是「放弃该素材路径」或「把窗搬回原位」，"
+                     "**不得**承诺 tick 外重注册可恢复"))
+        else:
+            print("      ⇒ 出口判定：本组未复现失控 ⇒ 不产出出口结论，须加大 --amp 重跑")
     gaps = [b["t"] - a["t"] for m in arms for a, b in zip(m["rows"], m["rows"][1:])]
     lags = [row["lag"] for m in arms for row in m["rows"]]
     print(f"  分辨率限制重申: estimate 相邻间隔中位 {med(gaps):.2f} s、单条抓屏耗时最大 "

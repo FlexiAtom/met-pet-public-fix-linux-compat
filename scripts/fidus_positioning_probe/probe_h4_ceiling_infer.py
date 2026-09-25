@@ -49,7 +49,11 @@ import probe_a10_geometry as A10  # noqa: E402
 import probe_h3_targetability as H3  # noqa: E402
 
 TARGET_X0, TARGET_Y0 = 640, 360
-MIN_CONFIDENCE_CEILING = 0.05  # 与 fidus `fidus-estimate/src/lib.rs:164` 同值，此处只用于复算预测
+MIN_CONFIDENCE_CEILING = 0.05  # 与 fidus-estimate 的 `const MIN_CONFIDENCE_CEILING: f32 = 0.05` 同值。
+# 按**符号**引不按行号引：换轮后行号会漂（本轮已从 164 漂到 168），行号引用看着精确、实际易烂。
+# 本件的预测**跟着引擎判据走**（见 `predict_cap`）⇒ 换轮不重跑，"conf ≠ 预测"这一半就失去意义。
+# 所以锚点要显式断言，不能靠人记住（§12h-3）。
+ANCHOR = "v0.1.0-beta.1-47-gf297a54"
 
 
 def fact(label, value) -> None:
@@ -102,11 +106,21 @@ PATTERNS: dict[str, tuple[str, object, object]] = {
 
 
 def predict_cap(rgba: np.ndarray) -> dict:
+    """两把尺子并排：`cap_fine` = 旧「仅细半径」，`cap_f32` = 新「含密铺保留轴」。
+
+    必须两把都给：`47-gf297a54` 起引擎判据含轴向密铺扫描 ⇒ 只留旧的那把会把 `noise` 臂读成
+    "conf 严格小于 ceiling ⇒ conf 跟的是测量得分"，而真实原因是**预测失真**（本轮实测：
+    旧预测 0.98801863… ≠ conf 0.98493719… = 新预测，逐位）。判据的"不等"这一半要有效，
+    预测就得先跟得上引擎。`H6` 惰性导入：它模块级 import `H5`，`H5` 又 import 本件 ⇒ 写在上面成环。
+    """
+    import probe_h6_dense_gate as H6  # noqa: PLC0415
     verdict, worst, _per = H3.localizability(rgba)
     if worst is None:
-        return {"verdict": verdict, "s": None, "cap_f32": None}
-    cap = max(1.0 - worst, MIN_CONFIDENCE_CEILING)
-    return {"verdict": verdict, "s": worst, "cap_f32": float(np.float32(cap))}
+        return {"verdict": verdict, "s": None, "cap_fine": None, "cap_f32": None, "s_dense": None}
+    g = H6.replica_gate(rgba)
+    return {"verdict": verdict, "s": worst, "s_dense": g["s"],
+            "cap_fine": float(np.float32(max(1.0 - worst, MIN_CONFIDENCE_CEILING))),
+            "cap_f32": g["cap"], "at": g["at"], "refused": g["refused"]}
 
 
 def main() -> int:
@@ -115,8 +129,13 @@ def main() -> int:
     ap.add_argument("--est", type=int, default=4, help="每个模板 estimate 次数")
     args = ap.parse_args()
 
-    keys = list(PATTERNS) if args.only == "all" else [k for k in args.only.split(",") if k in PATTERNS]
+    keys = (list(PATTERNS) if args.only == "all"
+            else [k for k in args.only.split(",") if k in PATTERNS])
     print("=== H4 · 宿主自算 confidence_ceiling 是否等于观察 conf ===")
+    anchor = getattr(fidus, "__git_commit__", None)
+    anchor_ok = anchor == ANCHOR
+    fact("fidus.__git_commit__", f"{anchor!r} 期望 {ANCHOR!r} ⇒ "
+         + ("命中" if anchor_ok else "✗ 不是本件的件：预测跟着引擎判据走，锚点不符 ⇒ 本轮读数不可用"))
     app = QApplication(sys.argv)
 
     rows: list[dict] = []
@@ -130,8 +149,13 @@ def main() -> int:
         disp = np.ascontiguousarray(disp_mk(rgba)) if disp_mk is not None else rgba
         pred = predict_cap(rgba)
         print(f"\n[{key}] {label}")
-        fact("复刻链 s(注册的那张)", f"{pred['s']!r} verdict={pred['verdict']}")
-        fact("预测 ceiling=f32(max(1−s,0.05))", pred["cap_f32"])
+        fact("复刻链 s(注册的那张)", f"{pred['s']!r} verdict={pred['verdict']}"
+             + ("" if pred.get("s_dense") is None else f"　含密铺后 s={pred['s_dense']!r} "
+                f"命中 lag={pred.get('at')}"))
+        fact("预测 ceiling=f32(max(1−s,0.05))",
+             f"旧(仅细半径)={_fmt(pred.get('cap_fine'))} 新(含密铺)={_fmt(pred['cap_f32'])}"
+             + ("　⚠ 两把不同 ⇒ 判据加严发生在本格" if pred.get("cap_fine") != pred["cap_f32"]
+                else ""))
         if disp_mk is not None:
             fact("注册≠显示", "注册清晰版、屏上喂模糊版 ⇒ 得分应下降而 ceiling 不变（只在注册期算）")
 
@@ -183,6 +207,8 @@ def main() -> int:
         rows.append({"key": key, "pred": pred, "confs": confs, "eq": eq, "lt": lt, "note": note})
 
     print("\n[判决] 跨模板汇总")
+    print(f"VERDICT-ANCHOR : {anchor!r} vs 登记 {ANCHOR!r} ⇒ "
+          + ("同一轮件，预测与读数可比" if anchor_ok else "✗ 换轮未重跑：下面的『不等』不可归因于复刻链"))
     for r in rows:
         p = r.get("pred", {})
         confs = r.get("confs") or []
@@ -191,8 +217,18 @@ def main() -> int:
                    else "no-conf" if not confs
                    else "全等 ceiling" if all(eq)
                    else "全小于 ceiling" if all(lt) else "混合")
-        fact(f"  {r['key']}", f"s={_fmt(p.get('s'))} 预测={_fmt(p.get('cap_f32'))} "
+        fact(f"  {r['key']}", f"s={_fmt(p.get('s'))} 旧预测={_fmt(p.get('cap_fine'))} "
+             f"新预测={_fmt(p.get('cap_f32'))} "
              f"观察={[_fmt(c) for c in confs]} ⇒ {verdict} {r.get('note', '')[:60]}")
+    scored = [r for r in rows if r.get("confs")]
+    new_eq = [r["key"] for r in scored if r["eq"] and all(r["eq"])]
+    old_eq = [r["key"] for r in scored
+              if all(c == r["pred"].get("cap_fine") for c in r["confs"])]
+    print(f"VERDICT-PRED   : 有 conf 读数的模板 {len(scored)} 张 ⇒ 新预测逐位全等 "
+          f"{new_eq or '无'}；旧预测逐位全等 {old_eq or '无'}"
+          + ("　⇒ 两把尺子可分辨（旧的对得上旧格、新的对得上新格）" if new_eq and old_eq
+             else "　⇒ 只有一把对得上，另一把已失真或本格未命中" if new_eq or old_eq
+             else "　⇒ ✗ 两把都不如观察，复刻链漂移"))
     fact("判别力所在", "只有**预测 ceiling > 0.5** 的模板才真能证伪'conf 是固定标志值'：若那里也逐位相等，"
          "则 conf 随模板而变 ⇒ §12e-4'conf 只取两个值'读法需限定为'该模板 ceiling 恒定'")
     fact("两向性", "等号成立 ⇒ 判'被钳'；`noise_blur` 臂负责另一半：注册清晰、屏上喂模糊 ⇒ "
