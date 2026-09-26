@@ -56,9 +56,9 @@ import fidus  # noqa: E402
 import probe_h3_targetability as H3  # noqa: E402
 import probe_h5_ceiling_surface as H5  # noqa: E402
 
-ANCHOR = "v0.1.0-beta.1-47-gf297a54"
-WHEEL_SHA = "32fa716de68952d1ccc2a914692b99bbdc2441f400415e4c00c1591b1bb08feb"
-SO_SHA = "1c695ea38a6037ee78511c0bd4a19a2440e8e0e6ee719983d8e8b078370e49a9"
+ANCHOR = "v0.1.0-beta.1-53-gccf46f4"
+WHEEL_SHA = "65426dbe71f6c625aa40a9ccf0cc1609dafcb04f89987f35006d054c7ff32c39"
+SO_SHA = "18e9ff81abde3115e18a7d5365931ab0e0348432a37a6044f49f625c03af774a"
 FINE_RADII = (2, 4, 8, 16)        # fidus 保留未动的那四个细半径
 DENSE_BUDGET = 60_000_000         # 像素积预算（fidus 件 §2 原文数字）
 MAX_SELF_SIM = H3.MAX_SELF_SIMILARITY   # 0.98：默认策略的拒绝线
@@ -159,9 +159,19 @@ def arm_identity() -> dict:
     fact("register_target 签名", sig + ("　⇒ 逃生门 `ambiguous` 已在件" if "ambiguous" in sig else "　✗ 无"))
     for probe, lbl in (("every** horizontal and vertical lag", "密铺覆盖已写进文档面"),
                        ("Compare against where", "判稳规则已改为「与我自己摆窗对照」"),
-                       ("class-level", "§3-1 类级赋值那句（fidus 声明**未随本轮重打**）")):
-        hit = probe in doc or probe in (fidus.Fidus.confidence_ceiling.__doc__ or "")
-        fact(f"文档面 · {lbl}", "在件" if hit else "不在件")
+                       ("class-level", "§3-1 类级赋值那句"),
+                       ("nothing changes", "被拒注册是活状态 no-op（-52 新增）"),
+                       ("del", "ceiling 文档明写 del 不是修复（-52 新增）"),
+                       ("vars(Fidus)", "ceiling 文档给出可逆收口写法（-52 新增）"),
+                       ("three-to-five", "旧「三到五条」措辞（应已删）")):
+        hit = probe in doc or probe in (fidus.Fidus.confidence_ceiling.__doc__ or "") \
+            or probe in (fidus.Fidus.estimate.__doc__ or "")
+        want_absent = probe == "three-to-five"
+        ok = (not hit) if want_absent else hit
+        fact(f"文档面 · {lbl}", ("在件" if hit else "不在件")
+             + ("　⇒ 已删，符合 -52 裁定" if want_absent and ok else
+                "　✗ 仍在件，与裁定不符" if want_absent else "")
+             + ("" if ok else "　✗"))
     return {"anchor_ok": anchor == ANCHOR, "so_ok": so_sha == SO_SHA,
             "has_ambiguous": "ambiguous" in sig}
 

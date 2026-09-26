@@ -64,6 +64,56 @@ def _fail_mode() -> tuple[str, int]:
     return (line, r.returncode)
 
 
+def _norm(s: str | None) -> str:
+    import re
+
+    return re.sub(r"\s+", " ", s or "")
+
+
+# (断言名, 方法名, 标记串, 期望在位)。标记串一律挑**不含破折号、不含 markdown 星号**的片段：
+# 件内用 U+2013「–」写区间、用 `*强调*` 包词，两者都会让"看着一样"的 ASCII 标记串假 FAIL
+# （前者 fidus 本轮踩过，后者我方本轮自己踩在 "after clamping" 上——件内是 "*after* clamping"）。
+DOC_FACTS: list[tuple[str, str, str, bool]] = [
+    ("作废规矩已撤", "estimate", "roughly halving during exactly this state", False),
+    ("新规矩：耗时=状态信号", "estimate", "state signal rather than a health signal", True),
+    ("同相对照数在件内", "estimate", "47 ms in this state against 163", True),
+    ("conf!=0 不是正确性证据", "estimate", "is not evidence that a reading is correct", True),
+    ("我方两段失控发现已落地", "estimate", "Coasting is also not where such a failure begins", True),
+    ("贵方 §3-A 机理（夹紧后扫）", "estimate", "clamping it to the frame", True),
+    ("-52 回归：拒注册是 no-op", "register_target",
+     "does nothing at all if that re-registration is itself refused", True),
+    ("-52 回归：可逆正写", "confidence_ceiling", "saved = vars(Fidus)[", True),
+    ("-52 回归：del 不是修复", "confidence_ceiling", "is not a repair", True),
+]
+
+# 公共面（断言之 4）：未增未减。写死成集合，多一个少一个都算变更。
+PUBLIC_FACE = {
+    "build_wayland", "calibrate_once", "confidence_ceiling", "estimate",
+    "gate_status", "probe_gate", "register_target",
+}
+
+
+def _doc_facts(fidus_module) -> bool:
+    ok = True
+    for label, meth, marker, want in DOC_FACTS:
+        doc = _norm(getattr(fidus_module.Fidus, meth).__doc__)
+        hit = marker in doc
+        good = hit is want
+        ok &= good
+        print(f"  {'PASS' if good else 'FAIL'} {label:28s} {meth}."
+              f"{'含' if want else '不含'} {marker!r}"
+              + ("" if good else f"（实际{'含' if hit else '不含'}）"))
+    return ok
+
+
+def _face_facts(fidus_module) -> bool:
+    got = {a for a in dir(fidus_module.Fidus) if not a.startswith("_")}
+    ok = got == PUBLIC_FACE
+    print(f"  {'PASS' if ok else 'FAIL'} 公共面 {len(got)} 法，期望 {len(PUBLIC_FACE)} 法"
+          + ("" if ok else f"（多 {sorted(got - PUBLIC_FACE)}／缺 {sorted(PUBLIC_FACE - got)}）"))
+    return ok
+
+
 def main() -> int:
     print(f"interpreter: {sys.version.split()[0]}  ({sys.executable})")
     try:
@@ -76,10 +126,23 @@ def main() -> int:
 
     print("\n== A9 作废证据：wheel+import 通路 ==")
     print("version:", fidus.__version__)
+    # 轮件身份（fidus 入站件要求可机核的那条）：锚点写死成断言，换轮未记账就会在这里响。
+    # 注意锚点是**模块级**属性（`fidus.__git_commit__`），`Fidus` 类上没有这个名字——
+    # fidus 上一播把路径写错了，本探针按件内实测写：class 上无此名，模块上有。
+    git = getattr(fidus, "__git_commit__", None)
+    want = "v0.1.0-beta.1-53-gccf46f4"
+    print(f"__git_commit__: {git!r} vs 登记 {want!r} ⇒ "
+          + ("命中" if git == want else "✗ 不是登记的那一轮件（换轮后请同步本常量与各探针 ANCHOR）"))
+    print(f"锚点路径自证  : Fidus 类上有此名? {hasattr(fidus.Fidus, '__git_commit__')}"
+          "（期望 False；读错路径会得到 None 而假绿）")
     print("native .so:", getattr(getattr(fidus, "fidus", None), "__file__", "n/a"))
+
+    print("\n== 交付文字断言（fidus -53 轮 §1 四条机核断言之 2/3，读 __doc__ 不用 strings）==")
+    doc_ok = _doc_facts(fidus)
 
     print("\n== 公开 API 面（__all__）==")
     print(sorted(getattr(fidus, "__all__", [])))
+    face_ok = _face_facts(fidus)
 
     print("\n== 调用形态自证：Fidus 直接构造 vs build_wayland 工厂 ==")
     try:
@@ -107,7 +170,12 @@ def main() -> int:
     clean = line.startswith("RAISED") and "True" in line and rc == 0
     print("判定:", "OK 响亮失败=FidusError 子类" if clean
           else "非预期：需人工看这条（崩/挂/意外成功都会落这里）")
-    return 0 if clean else 1
+    anchor_ok = git == want
+    print(f"\nVERDICT-WHEEL  : 锚点 {'命中' if anchor_ok else '✗ 不匹配'}"
+          f"｜交付文字 {'PASS' if doc_ok else '✗ 有 FAIL 项'}"
+          f"｜公共面 {'PASS' if face_ok else '✗ 有增减'}"
+          f"｜离线失败形态 {'PASS' if clean else '✗'}")
+    return 0 if (anchor_ok and doc_ok and face_ok and clean) else 1
 
 
 if __name__ == "__main__":
