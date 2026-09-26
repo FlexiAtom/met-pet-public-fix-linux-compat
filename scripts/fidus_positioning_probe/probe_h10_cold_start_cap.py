@@ -60,11 +60,18 @@ import probe_h8_roi_on_screen as H8  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 SIZES = (640, 634, 633, 600)   # 贵方不等式的两翼：640/634 预测失败，633/600 预测锁定
+# 400 不在刀刃上，是 fidus 出站请求（pid-1295942 (a)）要的一档二值预测：
+# 贵方 work 公式（∝ 位置数 × 模板面积）宣称成本峰在 s≈400 ⇒ 400² 应是**允许臂里最慢的那一个**。
+EXTRA_SIZES = (400,)
+ALLOWED = SIZES + EXTRA_SIZES
 CONTROL_EDGE = 96              # 同一只 640² surface 上的小模板对照
 READS = 3                      # 失败臂连读几条：验"每次调用同样失败"，不是只验首条
 PRESENT_PEAK = 0.9             # 在位线（与 H9 同口径；0.5 只能判"有没有可比的数"）
 SEED = 1024                    # 素材固定：模板指纹随臂打印，跨轮可比
 MAX_POSITIONS = 16_000_000     # 贵方给的常量，用于把实测臂与算术临界对表
+# 宽 except 只准接引擎自己抛的异常。首版我方一行格式化代码抛 TypeError，被同一个 except
+# 吞成"抛 TypeError"，三条允许臂当场判成"✗ 不一致"——量具故障与结论在输出里长得一模一样。
+ENGINE_EXC = {n for n in dir(fidus) if n.startswith("Fidus") and n != "Fidus"} | {"PanicException"}
 APP: QApplication | None = None
 
 
@@ -143,13 +150,24 @@ def read_arm(eng, backend, host, edge: int, out_long: int, x: int, y: int) -> di
     arm["pred_lost"] = pred_lost
     arm["positions"] = n_pos
     reads: list[dict] = []
+    ceil = arm.get("ceiling")
     for k in range(READS):
         start = time.perf_counter()
         try:
             ex_ey = eng.estimate()
-            out = f"读数=({float(ex_ey[0]):.2f},{float(ex_ey[1]):.2f}) conf={H6._f(float(ex_ey[2]))}"
+            cfn = float(ex_ey[2])
+            cf = H6._f(cfn)
+            # 顺带打印 ceiling 并标出 conf==ceiling：fidus 出站请求（pid-1295942 (b)）要这一格
+            # ——它是"conf 满值不能单独当失控签名"的直接数据，正确锁定上同样会出现。
+            tag = "" if ceil is None else f"｜ceiling={H6._f(ceil)}"
+            if ceil is not None:
+                tag += "＝ceiling" if abs(cfn - float(ceil)) < 1e-12 else "≠ceiling"
+            out = f"读数=({float(ex_ey[0]):.2f},{float(ex_ey[1]):.2f}) conf={cf}{tag}"
             err = "lock"
         except BaseException as exc:  # noqa: BLE001
+            if type(exc).__name__ not in ENGINE_EXC:
+                raise RuntimeError(f"量具错（非引擎异常 {type(exc).__name__}）：{exc}"
+                                   " ⇒ 本臂不判，不当作对上游的否证") from exc
             out = f"抛 {type(exc).__name__}"
             err = type(exc).__name__
         ms = (time.perf_counter() - start) * 1e3
@@ -196,6 +214,9 @@ def control_arm(eng, backend, host, edge: int, out_long: int, x: int, y: int) ->
         ex_ey = eng.estimate()
         arm["result"] = f"lock ({float(ex_ey[0]):.2f},{float(ex_ey[1]):.2f})"
     except BaseException as exc:  # noqa: BLE001
+        if type(exc).__name__ not in ENGINE_EXC:
+            raise RuntimeError(f"量具错（对照臂，非引擎异常 {type(exc).__name__}）：{exc}"
+                               " ⇒ 不读成『对照不成立』") from exc
         arm["result"] = f"抛 {type(exc).__name__}"
     arm["ms"] = (time.perf_counter() - start) * 1e3
     fact("对照臂", f"{edge}² surface + {CONTROL_EDGE}² 模板 ⇒ {arm['result']}"
@@ -208,14 +229,14 @@ def main() -> int:
     ap.add_argument("--out-long", type=int, default=1366,
                     help="输出长边（物理像素）；本机 1366，换机器请如实改这个数")
     ap.add_argument("--arms", default="all",
-                    help=f"边长子集（逗号分隔，取自 {'/'.join(str(s) for s in SIZES)}），"
-                         "默认全跑。只重跑对照时给单个失败臂即可（如 `--arms 640`），"
-                         "对照臂总在本子集最大那一臂之后")
+                    help=f"边长子集（逗号分隔，取自 {'/'.join(str(s) for s in ALLOWED)}），"
+                         "默认全跑刀刃四臂。只重跑对照时给单个失败臂即可（如 `--arms 640`），"
+                         "对照臂总在本子集最大那一臂之后；400 是 fidus 要的峰值档，需显式列出")
     args = ap.parse_args()
     sizes = SIZES if args.arms == "all" else tuple(
         int(s) for s in args.arms.replace(" ", "").split(","))
-    if not sizes or any(s not in SIZES for s in sizes):
-        print(f"✗ --arms 只接受 {SIZES} 的子集，收到 {args.arms!r}")
+    if not sizes or any(s not in ALLOWED for s in sizes):
+        print(f"✗ --arms 只接受 {ALLOWED} 的子集，收到 {args.arms!r}")
         return 1
 
     idy = H7.arm_identity()
@@ -279,8 +300,10 @@ def main() -> int:
     bad = [a["edge"] for a in arms if not a.get("match", False)]
     for a in arms:
         pos = a.get("positions")
+        rd = a.get("reads") or []
+        ms0 = "-" if not rd else f"{rd[0]['ms']:.1f} ms"
         fact("  出口", f"{a['edge']}²：注册={a.get('register')} 尺峰={a.get('present')} "
-                       f"位置数={'-' if pos is None else f'{pos:,}'} 预测="
+                       f"位置数={'-' if pos is None else f'{pos:,}'} 首条={ms0} 预测="
                        f"{'TargetLost' if a.get('pred_lost') else 'lock'} "
                        f"一致={a.get('match')}")
     verdict = ("✗ 量具断（无臂达在位线）" if not any("match" in a for a in arms)
@@ -288,6 +311,17 @@ def main() -> int:
     # 出口行自带臂数与子集：`--arms 640` 的 PASS 不能被读成"四臂全中"（复刻首跑那一行）。
     print(f"VERDICT-CAPS     : 本轮 {len(arms)} 臂 {list(sizes)}｜预测失败的边长 {got_lost}"
           f"／预测锁定的边长 {got_lock}｜{verdict}")
+    # fidus 出站请求 (a)：二值预测"400² 应是允许臂里最慢的那一个"（其 work 公式峰在 s≈400）。
+    # 缺臂不判（见本轮坑账）：400 没跑过就绝不打 ✗，那是"没测"不是"否"。
+    if 400 in sizes:
+        locky = [(a["edge"], (a.get("reads") or [{}])[0].get("ms"))
+                 for a in arms if not a.get("pred_lost") and a.get("reads")]
+        peak = max((p for p in locky if p[1] is not None), key=lambda p: p[1], default=None)
+        print(f"VERDICT-PEAK     : 允许臂首条耗时 {[(e, f'{m:.0f}') for e, m in locky]}"
+              f"｜最慢 = {peak[0] if peak else '-'}² ⇒ 贵方"
+              f"「峰在 s≈400」预测 {'成立' if peak and peak[0] == 400 else '✗ 不成立'}")
+    else:
+        print("VERDICT-PEAK     : 本轮未跑 400 臂 ⇒ 本行不判（缺臂不是否定）")
     ctl_ok = ctl.get("result", "").startswith("lock")
     print(f"VERDICT-CONTROL  : {ctl.get('result', '未跑')}"
           f" ⇒ {'失败可归因到模板最长边进不等式，而非 surface 大小' if ctl_ok else '✗ 对照不成立'}")

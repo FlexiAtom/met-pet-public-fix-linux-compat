@@ -130,7 +130,7 @@ def main() -> int:
     # 注意锚点是**模块级**属性（`fidus.__git_commit__`），`Fidus` 类上没有这个名字——
     # fidus 上一播把路径写错了，本探针按件内实测写：class 上无此名，模块上有。
     git = getattr(fidus, "__git_commit__", None)
-    want = "v0.1.0-beta.1-53-gccf46f4"
+    want = "v0.1.0-beta.1-58-ge4947aa"
     print(f"__git_commit__: {git!r} vs 登记 {want!r} ⇒ "
           + ("命中" if git == want else "✗ 不是登记的那一轮件（换轮后请同步本常量与各探针 ANCHOR）"))
     print(f"锚点路径自证  : Fidus 类上有此名? {hasattr(fidus.Fidus, '__git_commit__')}"

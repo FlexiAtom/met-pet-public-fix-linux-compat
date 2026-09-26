@@ -53,7 +53,7 @@ MIN_CONFIDENCE_CEILING = 0.05  # 与 fidus-estimate 的 `const MIN_CONFIDENCE_CE
 # 按**符号**引不按行号引：换轮后行号会漂（本轮已从 164 漂到 168），行号引用看着精确、实际易烂。
 # 本件的预测**跟着引擎判据走**（见 `predict_cap`）⇒ 换轮不重跑，"conf ≠ 预测"这一半就失去意义。
 # 所以锚点要显式断言，不能靠人记住（§12h-3）。
-ANCHOR = "v0.1.0-beta.1-53-gccf46f4"
+ANCHOR = "v0.1.0-beta.1-58-ge4947aa"
 
 
 def fact(label, value) -> None:

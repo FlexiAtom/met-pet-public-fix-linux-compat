@@ -56,9 +56,9 @@ import fidus  # noqa: E402
 import probe_h3_targetability as H3  # noqa: E402
 import probe_h5_ceiling_surface as H5  # noqa: E402
 
-ANCHOR = "v0.1.0-beta.1-53-gccf46f4"
-WHEEL_SHA = "65426dbe71f6c625aa40a9ccf0cc1609dafcb04f89987f35006d054c7ff32c39"
-SO_SHA = "18e9ff81abde3115e18a7d5365931ab0e0348432a37a6044f49f625c03af774a"
+ANCHOR = "v0.1.0-beta.1-58-ge4947aa"
+WHEEL_SHA = "659999369d75fbd422d8f2f997f97856c25860d3fb5812ba0d2fcc92c270fa7c"
+SO_SHA = "8da095803002d6ce61389fe0331c62ea94d3867748dc5cce9970452af8f34a79"
 FINE_RADII = (2, 4, 8, 16)        # fidus 保留未动的那四个细半径
 DENSE_BUDGET = 60_000_000         # 像素积预算（fidus 件 §2 原文数字）
 MAX_SELF_SIM = H3.MAX_SELF_SIMILARITY   # 0.98：默认策略的拒绝线

@@ -33,7 +33,7 @@ import numpy as np
 
 import fidus
 
-ANCHOR = "v0.1.0-beta.1-53-gccf46f4"
+ANCHOR = "v0.1.0-beta.1-58-ge4947aa"
 NAME = "confidence_ceiling"
 
 

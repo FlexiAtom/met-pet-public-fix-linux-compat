@@ -58,7 +58,7 @@ import probe_h1_coexistence as H1  # noqa: E402
 import probe_h3_targetability as H3  # noqa: E402
 import probe_h4_ceiling_infer as H4  # noqa: E402
 
-ANCHOR = "v0.1.0-beta.1-53-gccf46f4"   # 本件重跑时的锚点；换轮必改并全量重跑（§12h-3）
+ANCHOR = "v0.1.0-beta.1-58-ge4947aa"   # 本件重跑时的锚点；换轮必改并全量重跑（§12h-3）
 GATE_RADII = (2, 4, 8, 16)          # fidus 注册期门的采样半径（其文档原文）
 BEYOND_RADII = (20, 24, 32, 48, 64, 96)  # 门**看不见**的那些 lag
 CEIL_FLOOR = 0.05                   # 与 fidus `fidus-estimate/src/lib.rs` 同值，只用于复算
