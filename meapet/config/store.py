@@ -1143,6 +1143,15 @@ def normalize_config(config: dict) -> dict:
     voice.setdefault("auto_send", False)
     cfg["voice_input"] = voice
 
+    # fidus 定位规范化（默认关闭：代价可见——秒级校准 + 屏幕闪现）
+    fidus = (
+        copy.deepcopy(cfg.get("fidus"))
+        if isinstance(cfg.get("fidus"), dict)
+        else {}
+    )
+    fidus.setdefault("enabled", False)
+    cfg["fidus"] = fidus
+
     # ---------- audio 音量规范化（0-100%） ----------
     audio = cfg.get("audio") if isinstance(cfg.get("audio"), dict) else {}
     audio.setdefault("sfx_volume_percent", 80)

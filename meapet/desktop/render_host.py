@@ -9,12 +9,13 @@ Live2D 保留完整模型画布用于渲染动作，但顶层桌宠窗口只暴�
 """
 import os
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from PyQt5.QtWidgets import QApplication, QDialog
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
-from PyQt5.QtGui import QPolygon, QRegion
+from PyQt5.QtGui import QImage, QPolygon, QRegion
 
 from meapet.config.store import (
     normalize_live2d_placement_anchor,
@@ -57,6 +58,10 @@ BUBBLE_TAIL_CORNER_INSET = 36
 LIVE2D_STARTUP_TIMEOUT_MS = 5000
 LIVE2D_PREVIEW_MAX_SOURCE_PIXELS = 8_000_000
 LIVE2D_PREVIEW_MAX_EDGE = 1600
+# fidus 定位的 GUI 侧节拍：16 ms 搬运跨线程请求，摆位后连等 12 拍（≈200 ms、
+# 覆盖 ~6 个 33 ms 推帧）让合成器真的收到新帧，才放行 fidus 线程的下一发读数。
+_FIDUS_POLL_MS = 16
+_FIDUS_SETTLE_TICKS = 12
 # 一次分辨率变更会连发多个屏幕信号，合并后再校正位置。
 SCREEN_GUARD_DEBOUNCE_MS = 400
 # 桌宠宽高各至少露出这么多比例才算「还看得见」，否则拉回可用区域。
@@ -772,6 +777,7 @@ class PetRenderHostMixin:
             self.hide()                        # ③ 最后才隐藏
             self._layer_timer.start()
             safe_print(f"[layer] → 穿透模式 surface={w}x{h} @({x},{y})")
+            self._maybe_start_fidus_locate(x, y, w, h)
         else:
             self._layer_timer.stop()
             widget = getattr(self, "sprite_label", None)
@@ -788,6 +794,158 @@ class PetRenderHostMixin:
             self.raise_()
             safe_print("[layer] → 交互模式（可拖动 / 右键菜单）")
 
+
+    # ------------------------------------------------------------ fidus 定位
+    #
+    # 顺序与提案 §5.1 有一处必要偏差：那里写"测完的那个矩形作为 enable(...) 的位置"，
+    # 而 fidus 量的是屏幕上的像素 —— surface 没挂上去就没有可量的东西。所以产品里
+    # 是"先按信念挂载 → 测 → 用测量值再摆一次"。B 语义（测量值作为摆放请求的输入）
+    # 照样闭合，只是承载它的是第二次摆位（set_position）而不是第一次（enable）。
+    # 好处顺带：切换本身永远立刻发生，测量慢或失败都只影响校正，不会把用户关在门外。
+    #
+    # 引擎在 fidus 自己的线程上（见 fidus_position.request_locate 的线程亲和说明），
+    # 因此这里所有跨线程接触都走"标志 + 引用"，由 _fidus_service 在 GUI 线程上落地：
+    # Qt 对象与 layer 门面都只在 GUI 线程碰。
+
+    def _fidus_enabled(self) -> bool:
+        return bool((self.config.get("fidus") or {}).get("enabled", False))
+
+    def _toggle_fidus_enabled(self) -> None:
+        cfg = self.config.setdefault("fidus", {})
+        cfg["enabled"] = not bool(cfg.get("enabled", False))
+        self._save_config()
+        self._show_bubble(
+            "已启用 fidus 定位：下次切换穿透时开始测量（第一次约需 2 秒校准）"
+            if cfg["enabled"] else "已停用 fidus 定位，切换穿透回到只用请求坐标",
+            bubble_duration_ms(self.config, "interaction"),
+        )
+
+    def _maybe_start_fidus_locate(self, x: int, y: int, w: int, h: int) -> None:
+        if not self._fidus_enabled():
+            return
+        if getattr(self, "_fidus_busy", False):
+            safe_print("[fidus] 上一次定位仍在进行，本次只用请求坐标")
+            return
+        frame = self._fidus_current_frame()
+        if frame is None:
+            return
+        from meapet.desktop import fidus_position as FP  # 延迟导入：关着就不付这份账
+
+        self._fidus_busy = True
+        self._fidus_finished = False
+        self._fidus_result = None
+        self._fidus_move_req = None
+        self._fidus_move_ack = None
+        self._fidus_settle = 0
+        self._fidus_surface = (int(x), int(y), int(w), int(h))
+        if getattr(self, "_fidus_timer", None) is None:
+            self._fidus_timer = QTimer(self)
+            self._fidus_timer.setInterval(_FIDUS_POLL_MS)
+            self._fidus_timer.timeout.connect(self._fidus_service)
+        self._fidus_timer.start()
+        self._show_bubble(
+            "正在定位…（第一次约 2 秒，窗口会闪一下）",
+            bubble_duration_ms(self.config, "interaction"),
+        )
+        FP.request_locate(
+            frame, (x + w / 2.0, y + h / 2.0),
+            move=self._fidus_request_move,
+            on_done=self._fidus_on_result,
+            log=lambda k, v: safe_print(f"[fidus] {k}: {v}"),
+        )
+
+    def _fidus_current_frame(self):
+        """取当前离屏帧的 RGBA numpy 视图（副本）—— fidus 的模板与它同源。"""
+        widget = getattr(self, "sprite_label", None)
+        renderer = getattr(widget, "render_offscreen", None)
+        if not callable(renderer):
+            return None
+        try:
+            import numpy as np
+
+            img = renderer()
+            if img is None or img.isNull():
+                return None
+            if img.format() != QImage.Format_RGBA8888:
+                img = img.convertToFormat(QImage.Format_RGBA8888)
+            w, h = img.width(), img.height()
+            buf = img.constBits()
+            buf.setsize(w * h * 4)
+            # 显式 copy：constBits() 只是 Qt 内存的窗口，img 一析构视图就悬垂
+            return np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
+        except Exception as exc:
+            safe_print(f"[fidus] 取帧失败: {exc}")
+            return None
+
+    def _fidus_request_move(self, dx: float, dy: float) -> None:
+        """在 fidus 线程上被调用：把位移请求交给 GUI 线程，等它落位并提交帧。"""
+        ev = threading.Event()
+        self._fidus_move_req = (dx, dy, ev)
+        ev.wait(timeout=3.0)
+
+    def _fidus_on_result(self, fix) -> None:
+        """在 fidus 线程上被调用：只交一个引用，套用到 GUI 线程里做。"""
+        self._fidus_result = fix
+        self._fidus_finished = True
+
+    def _fidus_service(self) -> None:
+        """GUI 线程上的唯一接触点：搬运移请求、等合成器收帧、套用测量结果。"""
+        if self._fidus_settle > 0:
+            self._fidus_settle -= 1
+            if self._fidus_settle == 0 and self._fidus_move_ack is not None:
+                ev, self._fidus_move_ack = self._fidus_move_ack, None
+                ev.set()
+            return
+        req = self._fidus_move_req
+        if req is not None:
+            self._fidus_move_req = None
+            dx, dy, ev = req
+            cx, cy, _w, _h = self._fidus_surface
+            if self._fidus_place(cx + int(round(dx)), cy + int(round(dy))):
+                self._fidus_move_ack = ev
+                self._fidus_settle = _FIDUS_SETTLE_TICKS
+            else:
+                ev.set()  # 摆不动也放行：下一发读数对不上，闭环自会判失败
+            return
+        if not self._fidus_finished:
+            return
+        fix = self._fidus_result
+        self._fidus_finished = False
+        self._fidus_result = None
+        self._fidus_timer.stop()
+        self._fidus_busy = False
+        if fix is None:
+            self._show_bubble("没能量准位置，沿用原来的位置",
+                              bubble_duration_ms(self.config, "interaction"))
+            return
+        x, y, w, h = self._fidus_surface
+        nx = int(round(fix.center[0] - w / 2.0))
+        ny = int(round(fix.center[1] - h / 2.0))
+        if not self._fidus_place(nx, ny):
+            return
+        widget = getattr(self, "sprite_label", None)
+        if widget is not None:
+            # §5.1：_proxy_rect 与摆位请求吃同一个测量值，两件事不许分叉
+            widget._proxy_rect = QRect(QPoint(nx, ny), QSize(w, h))
+        safe_print(f"[fidus] 校正 ({x},{y})→({nx},{ny}) 贴片 {fix.edge}² "
+                   f"conf={fix.conf:.4f} ceiling={fix.ceiling:.4f}")
+        self._show_bubble("已按屏幕真值校正位置",
+                          bubble_duration_ms(self.config, "interaction"))
+
+    def _fidus_place(self, x: int, y: int) -> bool:
+        backend = getattr(self, "_layer_backend", None)
+        setter = getattr(backend, "set_position", None)
+        if not callable(setter):
+            safe_print("[fidus] 后端不支持 set_position，定位作废")
+            return False
+        try:
+            setter(int(x), int(y))
+        except Exception as exc:
+            safe_print(f"[fidus] set_position 失败: {exc}")
+            return False
+        _x, _y, w, h = self._fidus_surface
+        self._fidus_surface = (int(x), int(y), w, h)
+        return True
 
     def _push_layer_frame(self) -> None:
         """把 Live2D 离屏渲染结果推送到 layer surface。"""

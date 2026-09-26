@@ -2052,6 +2052,9 @@ class UiRefactorTests(unittest.TestCase):
             def _toggle_voice_input(self):
                 pass
 
+            def _toggle_fidus_enabled(self):
+                pass
+
 
         return self._track(MenuHost())
 
@@ -2073,6 +2076,7 @@ class UiRefactorTests(unittest.TestCase):
                 "识图与观察",
                 "开启语音输入",
                 "显示与立绘",
+                "定位与穿透",
                 "设置与数据",
                 "关于",
                 "退出",
@@ -2085,7 +2089,7 @@ class UiRefactorTests(unittest.TestCase):
         }
         self.assertEqual(
             submenu_labels,
-            {"切换表情", "识图与观察", "显示与立绘", "设置与数据"},
+            {"切换表情", "识图与观察", "显示与立绘", "定位与穿透", "设置与数据"},
         )
 
     def test_context_menu_opens_as_movable_standalone_window(self) -> None:
@@ -2112,6 +2116,7 @@ class UiRefactorTests(unittest.TestCase):
                 "切换表情",
                 "识图与观察",
                 "显示与立绘",
+                "定位与穿透",
                 "设置与数据",
             ],
         )
