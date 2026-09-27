@@ -62,6 +62,11 @@ LIVE2D_PREVIEW_MAX_EDGE = 1600
 # 覆盖 ~6 个 33 ms 推帧）让合成器真的收到新帧，才放行 fidus 线程的下一发读数。
 _FIDUS_POLL_MS = 16
 _FIDUS_SETTLE_TICKS = 12
+# 穿透挂载后"回读—夹移"闭环的预算（工作项 #78，接口见 §7.1 #12）。节拍就是
+# _layer_timer 的 33 ms，不新增定时器：configure 由桥接层的泵线程异步送达，
+# 实测 1 拍内落地，12 拍（≈400 ms）是给慢合成器的余量。
+# 夹移只发**一发**：那一发是按模型算出来的全部结论，模型不成立时第二发就是猜——不猜，出声。
+_LAYER_FIT_WAIT_TICKS = 12
 # 一次分辨率变更会连发多个屏幕信号，合并后再校正位置。
 SCREEN_GUARD_DEBOUNCE_MS = 400
 # 桌宠宽高各至少露出这么多比例才算「还看得见」，否则拉回可用区域。
@@ -777,9 +782,13 @@ class PetRenderHostMixin:
             self.hide()                        # ③ 最后才隐藏
             self._layer_timer.start()
             safe_print(f"[layer] → 穿透模式 surface={w}x{h} @({x},{y})")
-            self._maybe_start_fidus_locate(x, y, w, h)
+            # ④ 先问合成器"这块矩形你到底配成了多大"，再决定要不要摆；
+            #    fidus 排在这之后启动（两段都会写 set_position，同时跑会互相
+            #    把对方的读数打乱）。见 _layer_fit_service 的注释。
+            self._layer_fit_start(x, y, w, h)
         else:
             self._layer_timer.stop()
+            self._layer_fit_cancel()
             widget = getattr(self, "sprite_label", None)
             if widget is not None:
                 widget._proxy_rect = None
@@ -793,6 +802,184 @@ class PetRenderHostMixin:
             self.show()
             self.raise_()
             safe_print("[layer] → 交互模式（可拖动 / 右键菜单）")
+
+    # ------------------------------------------------- 回读 configure 尺寸并据此摆位
+    #
+    # 失效模式（本机 niri + 一条 180 px 状态栏实测，正证见
+    # `~/.Athena/projects/meapet/working/layer-configure-size-ignored.md`）：桥接层的
+    # 像素门控只放行"提交尺寸 == 逻辑尺寸"的帧（spec §6.3），而逻辑尺寸是**合成器
+    # configure 出来的事实**，不是我们请求的那个数。可用区被外部 exclusive_zone 扣掉
+    # 一块之后，margin 越界的挂载请求会被夹小（请求 614 高、配出 445）⇒ 从此每一帧都被
+    # 我们自己丢掉：人看不见，grim 也看不见，日志里一个字都没有。旧实现唯一的坐标来源
+    # 是 Qt 的 availableGeometry，而它在 Wayland 下对那条带完全无感（恒等于整屏），
+    # 所以"请求 614 高"这件事没有任何东西能反驳 —— 这一段就是那个反驳。
+    #
+    # 用的模型只有两条，都在 H16 探针上量过（N1b/N1h 两臂，残差 0 px）：
+    #   configure 高 = min(请求高, 可用高 − margin_y)   ⇒  可用高 = configure 高 + margin_y
+    #   真实落点    = 保留带厚度 + margin
+    # 两条合起来给出"往回挪到 margin′ = 可用高 − 请求高，请求尺寸就装得下"。
+    #
+    # 模型错了会怎样：第一份"没按请求配"的读数会立刻触发那一发夹移，之后 12 拍内
+    # 等不到等于请求的 configure ⇒ 走 _layer_fit_report 那条**出声**的出口（日志 + 气泡）。
+    # 夹移只发一发，因为那一发已经是模型的全部结论；再发第二发就是拿猜测冒充测量。
+    # 夹移后读到**夹移前**那个尺寸不算证据（configure 异步），所以旧读数只消耗预算、
+    # 不触发判决——预算用完才判失败。这一段的全部意义是不再静默，
+    # 所以出口本身静默是不允许的形态。
+
+    def _layer_fit_start(self, x: int, y: int, w: int, h: int) -> None:
+        """挂载后开一轮"回读—夹移"；fidus 等它落定再启动。"""
+        pending = (int(x), int(y), int(w), int(h))
+        self._fit_fidus = pending
+        backend = getattr(self, "_layer_backend", None)
+        if backend is None or not callable(getattr(backend, "logical_size", None)):
+            # 没有回读通道（旧产物／假后端）＝这段无从判断，直接放行 fidus。
+            self._fit_rect = None
+            self._layer_fit_finish(pending)
+            return
+        self._fit_rect = pending
+        self._fit_seen = None      # 只在 _fit_rect 非空时被读到，见 _layer_fit_service
+        self._fit_wait = _LAYER_FIT_WAIT_TICKS
+
+    def _layer_fit_cancel(self) -> None:
+        """离开穿透模式：本轮回读作废，别把挂起的 fidus 启动留到下一次挂载。"""
+        self._fit_rect = None
+        self._fit_fidus = None
+        self._fit_seen = None
+
+    def _layer_fit_service(self) -> bool:
+        """每拍一次（骑在 `_layer_timer` 上，不新增定时器）。
+
+        返回 True = 这一拍还在等回读／刚发出夹移请求，**别推帧**——推了也必被门控丢掉，
+        白付一次 Live2D 离屏渲染。
+        """
+        rect = getattr(self, "_fit_rect", None)
+        if rect is None:
+            return False
+        x, y, w, h = rect
+        backend = self._layer_backend
+        try:
+            size = backend.logical_size()
+        except Exception as exc:
+            # 门面自己都不该抛；抛了就等于回读通道坏了 ⇒ 出声，别换成静默。
+            self._layer_fit_finish(None, f"回读异常 {type(exc).__name__}: {exc}")
+            return False
+        if size is not None:
+            size = (int(size[0]), int(size[1]))
+            if size == (w, h):
+                self._layer_fit_finish((x, y, w, h))
+                return False
+            if self._fit_seen is None:
+                # 第一份"没按请求配"的读数 ⇒ 立刻发那一发按模型算出来的夹移。
+                lw, lh = size
+                nx, ny = min(x, lw + x - w), min(y, lh + y - h)
+                if (nx, ny) == (x, y):
+                    # 尺寸对不上、按模型却已无处可挪 ⇒ 模型不适用（带不在顶／左，或该
+                    # 合成器另有夹法）。不猜第二种解法，出声。
+                    self._layer_fit_finish(None, f"合成器配出 {lw}x{lh}（请求 {w}x{h}），"
+                                                 f"且按模型无处可挪")
+                    return False
+                safe_print(f"[layer] 合成器配出 {lw}x{lh}（请求 {w}x{h}）⇒ 可用区 "
+                           f"{lw + x}x{lh + y}，回摆 ({x},{y})→({nx},{ny})")
+                if not self._layer_fit_move(nx, ny):
+                    self._layer_fit_finish(None, f"回摆 ({nx},{ny}) 请求发不出去")
+                    return False
+                self._fit_seen = size
+                self._fit_rect = (nx, ny, w, h)
+                self._layer_fit_proxy_rect(nx, ny, w, h, lh + y)
+                self._fit_wait = _LAYER_FIT_WAIT_TICKS
+                return True
+        # 走到这里 = 本拍没有可行动的新证据（没读数，或已回摆在等那份新的 configure）
+        self._fit_wait -= 1
+        if self._fit_wait > 0:
+            return True
+        seen = self._fit_seen
+        if seen is None:
+            self._layer_fit_finish(None, f"请求 {w}x{h} 从未被 configure"
+                                         f"（等了 {_LAYER_FIT_WAIT_TICKS} 拍）")
+        else:
+            now = ("仍没有任何 configure" if size is None
+                   else f"读到 {size[0]}x{size[1]}")
+            self._layer_fit_finish(None, f"按 {seen[0]}x{seen[1]} 回摆到 ({x},{y}) 后，"
+                                         f"configure 仍未等于请求 {w}x{h}（{now}）")
+        return False
+
+    def _layer_fit_move(self, x: int, y: int) -> bool:
+        """本段的摆位出口，只碰 `set_position`。
+
+        不复用 `_fidus_place`：它顺手写 `_fidus_surface`，而 fidus 可能整场都没启动
+        （默认关）。与其让一段写另一段的状态，不如各记各的账。
+        """
+        setter = getattr(getattr(self, "_layer_backend", None), "set_position", None)
+        if not callable(setter):
+            return False
+        try:
+            setter(int(x), int(y))
+        except Exception as exc:
+            safe_print(f"[layer] ✗ 回摆 set_position 失败: {exc}")
+            return False
+        return True
+
+    def _layer_fit_proxy_rect(self, x: int, y: int, w: int, h: int,
+                              usable_h: int) -> None:
+        """把"我相信自己在屏幕上的哪块矩形"跟着夹移一起改——否则信念与实际分叉。
+
+        margin 是**可用区内**的坐标，`_proxy_rect` 是屏幕坐标，差的就是保留带厚度。
+        `usable_h` 用调用方按模型反解出的那份（`configure 高 + 夹移前的 margin_y`），
+        不在这里重读回读通道：那一读可能已经等到夹移**之后**的新 configure，
+        与正在写的这个 margin 不是同一份事实。假设"带在顶上"——上面那两条模型本来就是
+        这个形状，不成立时那一发夹移会被超时预算否掉。
+        """
+        widget = getattr(self, "sprite_label", None)
+        if widget is not None:
+            widget._proxy_rect = QRect(QPoint(x, y + self._layer_band_thickness(usable_h)),
+                                       QSize(w, h))
+
+    def _layer_band_thickness(self, usable_h: int) -> int:
+        """保留带厚度 = 屏幕高 − 可用高，本模块里唯一一处读屏幕尺寸的地方。
+
+        整屏高取 Qt 的 `geometry()`——Wayland 下它报逻辑整屏（本机实测 1366x768），
+        而 `availableGeometry()` 对外部带完全无感，那正是旧摆位偏 180 px 的来源。
+        读不到屏幕就给 0：宁可不估，也不拿一个编出来的带厚去挪信念矩形。
+        """
+        try:
+            screen = QApplication.primaryScreen()
+            if screen is None:
+                return 0
+            return max(0, screen.geometry().height() - int(usable_h))
+        except Exception:
+            return 0
+
+    def _layer_fit_finish(self, rect, got: str | None = None) -> None:
+        """落定：`rect=None` 表示没救回来（出声，且**不**启动 fidus——量一个不在屏上的
+        surface 只会再补一条"没能量准位置"的误导气泡，真正的原因在尺寸上）。"""
+        pending = getattr(self, "_fit_fidus", None)
+        last = getattr(self, "_fit_rect", None)
+        self._fit_fidus = None
+        self._fit_rect = None
+        if got is not None:
+            self._layer_fit_report(last or pending, got)
+        if rect is None or pending is None:
+            return
+        self._maybe_start_fidus_locate(*rect)
+
+    def _layer_fit_report(self, rect, got: str) -> None:
+        """放不下的那条出口：必须出声，并把桥接层的诊断一起端出来（§7.1 #11）。
+
+        诊断只作为**附注**读：粘性错误按 spec 不参与任何判决（I6），这里也只是把它
+        原样印给人看，不据它分支。旧产物没有 `last_error` 时就没有这一行，不编造。
+        """
+        x, y, w, h = rect
+        backend = getattr(self, "_layer_backend", None)
+        why = ""
+        if backend is not None and callable(getattr(backend, "last_error", None)):
+            text = backend.last_error()
+            if text:
+                why = f"｜桥接层诊断：{text}"
+        safe_print(f"[layer] ✗ 摆位失败：请求 {w}x{h} @({x},{y})，{got}{why}")
+        self._show_bubble(
+            "屏幕放不下这个尺寸的桌宠，穿透画面会保持空白\n（缩小画布或收起状态栏再试）",
+            bubble_duration_ms(self.config, "interaction"),
+        )
 
 
     # ------------------------------------------------------------ fidus 定位
@@ -838,6 +1025,7 @@ class PetRenderHostMixin:
         self._fidus_move_ack = None
         self._fidus_settle = 0
         self._fidus_surface = (int(x), int(y), int(w), int(h))
+        self._fidus_mount = (int(x), int(y), int(w), int(h))
         if getattr(self, "_fidus_timer", None) is None:
             self._fidus_timer = QTimer(self)
             self._fidus_timer.setInterval(_FIDUS_POLL_MS)
@@ -915,6 +1103,15 @@ class PetRenderHostMixin:
         self._fidus_timer.stop()
         self._fidus_busy = False
         if fix is None:
+            # `locate` 的读数取自探针位移**之前**，它自己不回摆：位移之后的每条退回出口
+            # （重注册失败／定不住／闭环超容差）都会把桌宠留在偏 `MOVE_PX` 处，而气泡正
+            # 要说"沿用原来的位置"。所以这句话得有动作撑着——把挂载位再请求一次。
+            # 没动过时这一发幂等，但也不必发：先比一次位置（H15 A2 实测候选全拒时 0 摆位）。
+            mx, my, mw, mh = self._fidus_mount
+            if self._fidus_surface[:2] != (mx, my) and self._fidus_place(mx, my):
+                widget = getattr(self, "sprite_label", None)
+                if widget is not None:
+                    widget._proxy_rect = QRect(QPoint(mx, my), QSize(mw, mh))
             self._show_bubble("没能量准位置，沿用原来的位置",
                               bubble_duration_ms(self.config, "interaction"))
             return
@@ -952,6 +1149,8 @@ class PetRenderHostMixin:
         backend = getattr(self, "_layer_backend", None)
         if backend is None:
             return
+        if self._layer_fit_service():
+            return          # 本拍在等回读／刚发出夹移，推了也必被尺寸门控丢掉
         widget = getattr(self, "sprite_label", None)
         renderer = getattr(widget, "render_offscreen", None)
         if not callable(renderer):
