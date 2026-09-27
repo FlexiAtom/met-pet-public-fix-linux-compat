@@ -315,5 +315,70 @@ class TestConfigAndWiring(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class TestFallbackEatsTheProbeMove(unittest.TestCase):
+    """退回出口必须把探针位移吃掉。
+
+    `locate()` 的读数取自 +`MOVE_PX` 位移**之前**，它自己不回摆：位移之后的三条出口
+    （重注册失败／定不住／闭环超容差）都直接把 `None` 交回。而产品在那一刻弹的气泡是
+    "没能量准位置，沿用原来的位置" —— 若不重新请求挂载位，这句话在屏幕上就是错的。
+    H15 A3 在本机没能触发这条（niri 不夹 layer surface，+48 照单执行 ⇒ 闭环诚实通过），
+    所以这条只能在假引擎上证：真桌面量不到"合成器没照请求摆"，正是本功能的立论前提。
+    """
+
+    MOUNT = (400, 300, 160, 160)
+
+    def _host(self, surface):
+        from types import SimpleNamespace
+
+        from meapet.desktop.render_host import PetRenderHostMixin
+
+        host = object.__new__(PetRenderHostMixin)
+        host.config = {"fidus": {"enabled": True}}
+        host.bubbles = []
+        host.placed = []
+        host.sprite_label = SimpleNamespace(_proxy_rect=None)
+        host._fidus_mount = self.MOUNT
+        host._fidus_surface = surface
+        host._fidus_busy = True
+        host._fidus_finished = True
+        host._fidus_result = None
+        host._fidus_move_req = None
+        host._fidus_move_ack = None
+        host._fidus_settle = 0
+
+        class _Timer:
+            def stop(self):
+                pass
+
+        host._fidus_timer = _Timer()
+
+        def place(x, y):
+            host.placed.append((int(x), int(y)))
+            host._fidus_surface = (int(x), int(y), self.MOUNT[2], self.MOUNT[3])
+            return True
+
+        host._fidus_place = place
+        host._show_bubble = lambda text, *_a, **_k: host.bubbles.append(text)
+        return host
+
+    def test_moved_then_refused_places_the_mount_rect_back(self):
+        moved = (448, 300, 160, 160)          # 探针位移后的位置：合成器只接受了 48 px
+        host = self._host(moved)
+        host._fidus_service()
+        self.assertEqual(host.placed, [(400, 300)])
+        rect = host.sprite_label._proxy_rect
+        self.assertEqual((rect.x(), rect.y(), rect.width(), rect.height()), self.MOUNT)
+        self.assertTrue(any("没能量准" in b for b in host.bubbles))
+        self.assertFalse(host._fidus_busy)
+
+    def test_refused_before_any_move_sends_no_request(self):
+        """候选全拒时一次摆位都不该有：H15 A2 在真机上量到的就是这个 0。"""
+        host = self._host(self.MOUNT)
+        host._fidus_service()
+        self.assertEqual(host.placed, [])
+        self.assertIsNone(host.sprite_label._proxy_rect)
+        self.assertTrue(any("没能量准" in b for b in host.bubbles))
+
+
 if __name__ == "__main__":
     unittest.main()
