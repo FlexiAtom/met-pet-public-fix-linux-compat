@@ -125,7 +125,7 @@ def main():
         return
 
     shim = backend._load()
-    out["env"]["shim_path"] = wl._SHIM_PATH
+    out["env"]["shim_candidates"] = wl.shim_candidates()
 
     rgba = np.zeros((H, W, 4), dtype=np.uint8)
     for _name, color, (lx, ly) in MARKERS:

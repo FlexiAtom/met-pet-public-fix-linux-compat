@@ -660,12 +660,11 @@ def _load_layer_shim():
         import ctypes.util
         from pathlib import Path
 
-        # Prefer a shim sitting next to this package; fall back to system search.
-        candidates = [
-            Path(__file__).resolve().parent.parent.parent / "liblayer_shell_shim.so",
-        ]
-        name = ctypes.util.find_library("layer_shell_shim") or "liblayer_shell_shim.so"
-        candidates.append(name)
+        # 与 wayland_layer 共用同一张候选表：那张表已经管着"打包目录 / 仓库根 / 系统搜索"
+        # 的先后，这里再列一份就是两套真值——冻结态只会有一套能命中。
+        from meapet.desktop.wayland_layer import shim_candidates
+
+        candidates = [Path(c) for c in shim_candidates()]
 
         for cand in candidates:
             try:

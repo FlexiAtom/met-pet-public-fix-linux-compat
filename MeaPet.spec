@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""MeaPet Windows onedir PyInstaller spec (portable data under _internal)."""
+"""MeaPet onedir PyInstaller spec (portable data under _internal)."""
+
+import sys
+from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
 
@@ -11,10 +14,27 @@ try:
 except Exception:
     live2d_pkg_datas = []
 
+# layer-shell 桥接（Linux / Niri 点击穿透）。它是 ctypes 直读的裸 .so，不是 Python
+# 扩展模块，也没有任何 Python 侧 import 指向它——依赖分析**看不见**它。不写这几行，
+# 冻结版就没有 Wayland 那条路，而且这条缺失只在真机上暴露，离线测试一律绿。
+# 落点 "." = _internal，与 meapet/desktop/wayland_layer.py::shim_candidates()
+# 的第一条候选（打包目录）对齐；文件名一致性由 tests/test_layer_shim_packaging.py 钉住。
+LAYER_SHIM_NAME = "liblayer_shell_shim.so"
+_layer_shim = Path(SPECPATH) / LAYER_SHIM_NAME
+if _layer_shim.is_file():
+    layer_binaries = [(str(_layer_shim), ".")]
+elif sys.platform.startswith("linux"):
+    raise SystemExit(
+        f"缺 {LAYER_SHIM_NAME}：Linux 打包前先跑 `bash build_layer_shell.sh`"
+        f"（产物应落在 {SPECPATH}）。带着缺件打出来的包没有穿透模式。"
+    )
+else:
+    layer_binaries = []
+
 a = Analysis(
     ["pet.py"],
     pathex=[],
-    binaries=[],
+    binaries=layer_binaries,
     datas=[
         ("live2d", "live2d"),
         ("sprites", "sprites"),

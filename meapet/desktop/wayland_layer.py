@@ -19,20 +19,53 @@ wayland_layer.py —— Niri (wlroots) 点击穿透的 layer-shell 后端。
   4. layer_update_pixels(ctx, rgba, w, h)  —— 每帧推送像素（Phase 2）
   5. layer_destroy_context(ctx)            —— 销毁
 
-依赖：liblayer_shell_shim.so（在仓库根，由 `bash build_layer_shell.sh` 构建）
+依赖：liblayer_shell_shim.so —— 源码态在仓库根（`bash build_layer_shell.sh` 构建），
+     冻结态由 `MeaPet.spec` 打进打包目录。两条落点由 `shim_candidates()` 排成一张表。
 """
 
 import ctypes
+import ctypes.util
 from ctypes import (POINTER, c_char_p, c_int, c_uint32, c_ubyte, c_void_p)
-from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 
-# shim 位于项目根目录：meapet/desktop/wayland_layer.py -> 上三级
-_SHIM_PATH = str(
-    Path(__file__).resolve().parent.parent.parent / "liblayer_shell_shim.so"
-)
+SHIM_NAME = "liblayer_shell_shim.so"
+
+
+def shim_candidates() -> list:
+    """shim 的加载顺序：打包目录 → 仓库根 → 系统搜索（保序去重）。
+
+    打包目录这一条不能省：它是**被分发产物**的落点。只按"本文件上三级"找，冻结版
+    能不能加载取决于 PyInstaller 给 `__file__` 配的恰好是 `sys._MEIPASS`——那是它的
+    实现细节，不是这里的接口（`meapet.paths` 才是本仓库承认的路径真值）。
+    """
+    from meapet.paths import data_path, is_frozen, project_path
+
+    out = []
+    if is_frozen():
+        out.append(data_path(SHIM_NAME))
+    out.append(project_path(SHIM_NAME))
+    out.append(ctypes.util.find_library("layer_shell_shim") or SHIM_NAME)
+    return list(dict.fromkeys(out))
+
+
+def open_shim() -> ctypes.CDLL:
+    """按 `shim_candidates()` 依次尝试，全失败时把**试过的路径**一起报出来。
+
+    缺件是打包缺陷，不是运行时故障；报"哪个都没找到"才有条可分诊的线索。
+    """
+    tried = shim_candidates()
+    errs = []
+    for cand in tried:
+        try:
+            return ctypes.CDLL(cand)
+        except OSError as exc:
+            errs.append(f"  {cand} —— {type(exc).__name__}: {exc}")
+    raise RuntimeError(
+        f"加载不到 {SHIM_NAME}（冻结版缺这一件 = 打包没带上；源码态 = 先跑 "
+        f"bash build_layer_shell.sh）。已试路径：\n" + "\n".join(errs)
+    )
 
 # wl_shm 格式常量（协议 fourcc，权威定义是 wayland.xml 的 wl_shm format 枚举）。
 # 这张表**不是**"与某份 C 源保持一致"的副本：那正是两份真值靠约定对齐的老问题。
@@ -61,7 +94,7 @@ class WaylandLayerBackend:
     # ---------- 懒加载 shim ----------
     def _load(self) -> ctypes.CDLL:
         if self._shim is None:
-            self._shim = ctypes.CDLL(_SHIM_PATH)
+            self._shim = open_shim()
 
             # init / cleanup
             self._shim.layer_shell_init.restype = c_int
