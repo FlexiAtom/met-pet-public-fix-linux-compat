@@ -838,6 +838,7 @@ class PetRenderHostMixin:
             return
         self._fit_rect = pending
         self._fit_seen = None      # 只在 _fit_rect 非空时被读到，见 _layer_fit_service
+        self._fit_usable_h = None  # 夹过移才有值（按模型反解的可用高），见 _layer_report_head_clip
         self._fit_wait = _LAYER_FIT_WAIT_TICKS
 
     def _layer_fit_cancel(self) -> None:
@@ -845,6 +846,7 @@ class PetRenderHostMixin:
         self._fit_rect = None
         self._fit_fidus = None
         self._fit_seen = None
+        self._fit_usable_h = None
 
     def _layer_fit_service(self) -> bool:
         """每拍一次（骑在 `_layer_timer` 上，不新增定时器）。
@@ -885,6 +887,7 @@ class PetRenderHostMixin:
                     return False
                 self._fit_seen = size
                 self._fit_rect = (nx, ny, w, h)
+                self._fit_usable_h = lh + y
                 self._layer_fit_proxy_rect(nx, ny, w, h, lh + y)
                 self._fit_wait = _LAYER_FIT_WAIT_TICKS
                 return True
@@ -949,17 +952,65 @@ class PetRenderHostMixin:
         except Exception:
             return 0
 
+    def _layer_report_head_clip(self, rect, usable_h: int) -> None:
+        """夹移落定后单独问一次「不透明轮廓是否出屏」——出屏必须出声，**不改摆位**。
+
+        那两条模型只优化"帧装进可用区"，于是它能自救成功（整块上抬）而把头顶推出屏幕上沿：
+        本机 scale=1.5 实测 configure 461x512（请求 461x614）⇒ 夹移到 -102，轮廓行 41..570
+        的顶端因此落在屏幕行 -61，61 px 的头没了而这一段自认正常（正证与三条出口见
+        `~/.Athena/projects/meapet/working/fractional-scale-head-clip.md` §2/§3）。这里只取
+        第一条出口；"按轮廓算夹移"那条不做——轮廓与帧的差是本机这一只模型的属性。
+
+        只在真夹过移时判（`usable_h` 有值）：没夹 ⇒ configure 一开始就等于请求 ⇒ 帧整体在
+        可用区内而轮廓是帧的子集，结构上不可能出屏，不为此多付一次离屏渲染。横向不判：夹移
+        只往上／左挪（`min`），且本模块没有横向的带厚可读。
+        """
+        x, y, _w, _h = rect
+        if usable_h is None:
+            return                      # 没夹过移 ⇒ 帧整体在可用区内，不必为不可能的出屏付一次渲染
+        frame = self._fidus_current_frame()
+        if frame is None:
+            return
+        try:
+            import numpy as np
+
+            from meapet.desktop.fidus_position import ALPHA_MIN
+
+            rows = np.flatnonzero((frame[..., 3] > ALPHA_MIN).any(axis=1))
+            if rows.size == 0:
+                return
+            by0, by1 = int(rows.min()), int(rows.max()) + 1   # 右开，与探针 opaque_bbox 同式
+            band = self._layer_band_thickness(usable_h)
+            screen_y = y + band                 # margin → 屏幕坐标，与 _layer_fit_proxy_rect 同式
+            head = -(screen_y + by0)
+            if head <= 0:
+                return
+        except Exception as exc:
+            safe_print(f"[layer] ⚠ 轮廓出屏这一判没跑成: {type(exc).__name__}: {exc}")
+            return
+        safe_print(f"[layer] ⚠ 帧已装进可用区，但不透明轮廓出屏：头顶被屏上沿切掉 "
+                   f"{head} 逻辑 px（信念屏幕 y={screen_y}，帧内轮廓行 {by0}..{by1}，"
+                   f"可用高 {usable_h}，带厚 {band}）")
+        self._show_bubble(
+            "屏幕高度不够，桌宠的头会被屏上沿切掉一块\n"
+            "（缩小画布或降低桌面缩放比例可避开）",
+            bubble_duration_ms(self.config, "interaction"),
+        )
+
     def _layer_fit_finish(self, rect, got: str | None = None) -> None:
         """落定：`rect=None` 表示没救回来（出声，且**不**启动 fidus——量一个不在屏上的
         surface 只会再补一条"没能量准位置"的误导气泡，真正的原因在尺寸上）。"""
         pending = getattr(self, "_fit_fidus", None)
         last = getattr(self, "_fit_rect", None)
+        usable_h = getattr(self, "_fit_usable_h", None)
         self._fit_fidus = None
         self._fit_rect = None
+        self._fit_usable_h = None
         if got is not None:
             self._layer_fit_report(last or pending, got)
         if rect is None or pending is None:
             return
+        self._layer_report_head_clip(rect, usable_h)
         self._maybe_start_fidus_locate(*rect)
 
     def _layer_fit_report(self, rect, got: str) -> None:

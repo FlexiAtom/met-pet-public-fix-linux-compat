@@ -24,6 +24,8 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+import numpy as np
+
 from meapet.desktop.render_host import PetRenderHostMixin, _LAYER_FIT_WAIT_TICKS
 
 MOUNT = (854, 143, 461, 614)      # 穿透挂载时的那一发请求（margin 坐标）
@@ -92,6 +94,13 @@ def _proxy_rect(host):
     if rect is None:
         return None
     return (rect.x(), rect.y(), rect.width(), rect.height())
+
+
+def _silhouette_frame(top: int, bottom: int, h: int = 614, w: int = 461):
+    """只有 `top..bottom`（右开）那几行不透明的一帧——本机 `mea_live2d` 是 41..570。"""
+    frame = np.zeros((h, w, 4), dtype=np.uint8)
+    frame[top:bottom, :, 3] = 255
+    return frame
 
 
 def _pump(host, ticks):
@@ -223,6 +232,61 @@ class TestLoudExits(unittest.TestCase):
         self.assertEqual(results, [False])
         self.assertIn("回读异常 RuntimeError: 桥没了", log)
         self.assertEqual(host.started, [])
+
+
+class TestHeadClipIsLoud(unittest.TestCase):
+    """夹移把**帧**塞进可用区之后，**轮廓**仍可能出屏 ⇒ 必须出声（#81）。
+
+    形状取自 niri `scale=1.5` 的实测（`working/fractional-scale-head-clip.md` §2）：
+    请求 461x614、配出 461x512 ⇒ 夹移 (213,0)→(213,-102)，轮廓纵向 41..570 的顶端
+    因此落在屏幕行 −61。这一段判的是出口，不改摆位、不拦 fidus。
+    """
+
+    MOUNT_15 = (213, 0, 461, 614)
+    READINGS_15 = [(461, 512), (461, 614)]
+
+    def test_clipped_head_speaks_and_still_positions(self):
+        be = FakeBackend(self.READINGS_15)
+        host = _host(be, band=0)          # 1.5 档没有外部带 ⇒ 带厚 0，屏高 512
+        host._fidus_current_frame = lambda: _silhouette_frame(41, 570)
+        host._layer_fit_start(*self.MOUNT_15)
+        _pump(host, 2)
+        self.assertEqual(len(host.bubbles), 1, f"该只有一句出声，实际 {host.bubbles}")
+        self.assertIn("屏幕高度不够", host.bubbles[0])
+        self.assertEqual(host.started, [(213, -102, 461, 614)],
+                         "削头不许顺带把定位关掉——量具在 1.5 档四臂全绿")
+
+    def test_silhouette_inside_the_screen_stays_quiet(self):
+        """带厚 180 那一档（#74 实测形状）：夹移到 −26 后轮廓顶端在屏幕行 195，没削。"""
+        be = FakeBackend([CLAMPED, MOUNT[2:]])
+        host = _host(be)
+        host._fidus_current_frame = lambda: _silhouette_frame(41, 570)
+        host._layer_fit_start(*MOUNT)
+        _pump(host, 2)
+        self.assertEqual(host.bubbles, [])
+        self.assertEqual(host.started, [(FITTED[0], FITTED[1], *MOUNT[2:])])
+
+    def test_unclamped_settle_does_not_pay_a_render(self):
+        """没夹过移 ⇒ 帧整体在可用区内、轮廓是其子集 ⇒ 结构上不可能出屏，不为此多渲染一次。"""
+        be = FakeBackend([MOUNT[2:]])
+        host = _host(be)
+        seen = []
+        host._fidus_current_frame = lambda: seen.append(1)
+        host._layer_fit_start(*MOUNT)
+        _pump(host, 1)
+        self.assertEqual(seen, [], "判据不该在不可能出屏的那一档取帧")
+        self.assertEqual(host.bubbles, [])
+        self.assertEqual(host.started, [MOUNT])
+
+    def test_unjudgable_frame_is_not_invented_into_a_clip(self):
+        """取不到帧 = 无从判断 ⇒ 不出声也不摆位（跟"没有回读通道就放行"同一档）。"""
+        be = FakeBackend(self.READINGS_15)
+        host = _host(be, band=0)
+        host._fidus_current_frame = lambda: None
+        host._layer_fit_start(*self.MOUNT_15)
+        _pump(host, 2)
+        self.assertEqual(host.bubbles, [])
+        self.assertEqual(host.started, [(213, -102, 461, 614)])
 
 
 class TestRoundLifetime(unittest.TestCase):
