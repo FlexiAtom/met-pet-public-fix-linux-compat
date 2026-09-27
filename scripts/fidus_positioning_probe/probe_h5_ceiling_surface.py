@@ -38,6 +38,7 @@ C 问只主张"这一张周期性模板在这一台机器上的锁点"，不主�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 import time
 from pathlib import Path
@@ -59,6 +60,10 @@ import probe_h3_targetability as H3  # noqa: E402
 import probe_h4_ceiling_infer as H4  # noqa: E402
 
 ANCHOR = "v0.1.0-beta.1-58-ge4947aa"   # 本件重跑时的锚点；换轮必改并全量重跑（§12h-3）
+# ⟦2026-09-28 挂账⟧ 装机轮已是 -61：本件的 A/B（纯 CPU）已在 -61 上复跑过（/tmp/h5_dig_p61.log），
+# 但 C2/C3 要上屏 + 标定 ⇒ 属输出 mutation，未获授权，**本件整体尚未在 -61 上全量重跑**。
+# 因此**故意不改 ANCHOR**：改了就等于替 C2/C3 声明"已在新锚点复跑"，而那是假的。
+# D 段那条 "✗ 不是本件的件" 是**正确的响**，不是故障。
 GATE_RADII = (2, 4, 8, 16)          # fidus 注册期门的采样半径（其文档原文）
 BEYOND_RADII = (20, 24, 32, 48, 64, 96)  # 门**看不见**的那些 lag
 CEIL_FLOOR = 0.05                   # 与 fidus `fidus-estimate/src/lib.rs` 同值，只用于复算
@@ -71,6 +76,15 @@ def fact(label, value) -> None:
 
 def _fmt(v) -> str:
     return "—" if v is None else f"{v:.17g}" if isinstance(v, float) else str(v)
+
+
+def _digest(arr: np.ndarray) -> str:
+    """素材指纹：对**实际交给 register_target 的那块字节**取 sha256 前 16 位。
+
+    fidus 复算对表时无法跑我方这套 Python 生成器（`fixture-dtype-fingerprint`），
+    没有指纹就只能靠"种子相同"这一假设来对齐像素。
+    """
+    return hashlib.sha256(np.ascontiguousarray(arr).tobytes()).hexdigest()[:16]
 
 
 def rgba_of(rgb: np.ndarray) -> np.ndarray:
@@ -216,7 +230,7 @@ def arm_identity(eng, cases: dict[str, np.ndarray], amb: bool = False) -> list[d
         pred_refused = None if dense is None else dense["refused"]
         if note and note.startswith("REFUSED"):
             fact(key, f"注册未成功 ⇒ {note}（--amb {'关' if not amb else '开'}；"
-                      f"新复刻预判 refused={pred_refused}）")
+                      f"新复刻预判 refused={pred_refused}） 素材指纹={_digest(rgba)}")
             rows.append({"key": key, "cap": cap_fine, "cap_new": cap_new, "refused": note,
                          "pred_refused": pred_refused})
             continue
@@ -226,7 +240,8 @@ def arm_identity(eng, cases: dict[str, np.ndarray], amb: bool = False) -> list[d
                 and worst_beyond is not None and worst_beyond >= 0.98)
         eq_old = off == cap_fine
         eq_new = off == cap_new
-        fact(f"[{key}]", f"复刻 s={_fmt(s)} verdict={verdict} 旧预测={_fmt(cap_fine)} "
+        fact(f"[{key}]", f"素材指纹={_digest(rgba)} 复刻 s={_fmt(s)} verdict={verdict} "
+                         f"旧预测={_fmt(cap_fine)} "
                          f"新预测={_fmt(cap_new)} 官方={_fmt(off)} ⇒ "
                          + ("两把都对" if eq_new and eq_old else
                             "仅新对（旧副本已失真）" if eq_new else
