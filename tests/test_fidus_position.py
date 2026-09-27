@@ -7,6 +7,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -313,6 +314,59 @@ class TestConfigAndWiring(unittest.TestCase):
         host._fidus_current_frame = lambda: calls.append("frame") or None
         host._maybe_start_fidus_locate(0, 0, 64, 64)
         self.assertEqual(calls, [])
+
+    def test_absent_engine_is_caught_before_the_round_opens(self):
+        """没带 fidus ⇒ 不起工、不取帧，气泡说的是"没带"，不是"没量准"。
+
+        这条判据的形状与 #78 那条同源：量不了的活儿不放行，且报出的原因要指向真正的
+        缺口。把"随包分发没落地"报成"没能量准位置，沿用原来的位置"，人会去查屏幕，
+        而屏幕上什么都没有——校准那 2 秒和一次闪屏还会照付。
+        """
+        from meapet.desktop.render_host import PetRenderHostMixin
+
+        host = object.__new__(PetRenderHostMixin)
+        host.config = {"fidus": {"enabled": True}}
+        seen = []
+        host._fidus_current_frame = lambda: seen.append("frame") or None
+        host._show_bubble = lambda text, *_a, **_k: seen.append(text)
+        with mock.patch.object(FP, "have_engine", return_value=False):
+            host._maybe_start_fidus_locate(0, 0, 64, 64)
+        self.assertNotIn("frame", seen)
+        self.assertEqual(len(seen), 1)
+        self.assertIn("没带", seen[0])
+        self.assertFalse(getattr(host, "_fidus_busy", False))
+
+    def test_present_engine_still_reaches_the_frame(self):
+        """反向门：`have_engine()` 为真时这条检查不该挡住正常路径。"""
+        from meapet.desktop.render_host import PetRenderHostMixin
+
+        host = object.__new__(PetRenderHostMixin)
+        host.config = {"fidus": {"enabled": True}}
+        seen = []
+        host._fidus_current_frame = lambda: seen.append("frame") or None
+        host._show_bubble = lambda text, *_a, **_k: seen.append(text)
+        with mock.patch.object(FP, "have_engine", return_value=True):
+            host._maybe_start_fidus_locate(0, 0, 64, 64)
+        self.assertEqual(seen, ["frame"])
+
+
+class TestEnginePresence(unittest.TestCase):
+    """「引擎在不在场」是打包面的事实，必须与「这次量没量准」分得开。"""
+
+    def test_have_engine_follows_the_module_spec(self):
+        for present in (True, False):
+            spec = object() if present else None
+            with mock.patch.object(FP.importlib.util, "find_spec",
+                                   return_value=spec), \
+                 mock.patch.object(FP, "_HAVE_FIDUS", None):
+                self.assertIs(FP.have_engine(), present)
+
+    def test_broken_import_is_reported_as_import_not_as_measurement(self):
+        """规格在、导入炸（ABI 不符／产物被裁）时，话要说成"导入不了"。"""
+        with mock.patch.dict(sys.modules, {"fidus": None}):
+            with self.assertRaises(FP.EngineError) as ctx:
+                FP.FidusEngine()
+        self.assertIn("导入", str(ctx.exception))
 
 
 class TestFallbackEatsTheProbeMove(unittest.TestCase):

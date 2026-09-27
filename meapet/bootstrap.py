@@ -98,6 +98,15 @@ _OPTIONAL_SOURCE_DEPENDENCIES = (
     RuntimeDependency("live2d", "live2d-py", "Live2D 模型渲染"),
 )
 
+# fidus 故意**不在**上面那份表里。该表的语义是"启动器负责把完整源码运行环境补齐"
+# （`all_runtime_dependencies` ⇒ `--check all` ⇒ 缺了就 exit 1），而 fidus 目前没有
+# 任何可解析的发行渠道（只有对面递过来的本地 wheel），写进去等于替装不出来的东西背书、
+# 还会把 Windows 打包门整个拦死。它的正确位置是**按配置报降级**：开关开着而现场没有，
+# 启动日志说得出"这项功能已降级"，而不是等用户点下去才发现。
+_FIDUS_DEPENDENCIES = (
+    RuntimeDependency("fidus", "fidus", "切换点定位测量"),
+)
+
 
 def _is_frozen() -> bool:
     """不导入 meapet.paths 也能判断冻结态，避免早期导入失败。"""
@@ -196,6 +205,9 @@ def required_runtime_dependencies(
         and bool(control.get("enabled", False))
     ):
         dependencies.extend(_CONTROL_DEPENDENCIES)
+    fidus = config.get("fidus")
+    if isinstance(fidus, Mapping) and bool(fidus.get("enabled", False)):
+        dependencies.extend(_FIDUS_DEPENDENCIES)
     return _deduplicate(dependencies)
 
 

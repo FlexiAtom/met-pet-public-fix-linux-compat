@@ -301,3 +301,42 @@ def test_windows_launcher_checks_the_complete_runtime_environment():
 
     assert "-m meapet.bootstrap --check all" in launcher
     assert "import PyQt5,PIL,requests,numpy,httpx,OpenGL,jieba" not in launcher
+
+
+def test_fidus_is_not_in_the_launcher_managed_environment():
+    """fidus 不进 `--check all` 那份表：那等于替一个装不出来的东西背书。
+
+    该表的语义是"Windows 启动器负责补齐的完整运行环境"，而 fidus 眼下没有可解析的
+    发行渠道（只有对面递来的本地 wheel）。写进去会让启动器与打包门双双拦死，
+    缺件的真实后果却由"随包分发"这条 standing 裁决管——落点在 spec，不在这份表。
+    """
+    from meapet.bootstrap import all_runtime_dependencies
+
+    assert "fidus" not in _dependency_modules(all_runtime_dependencies())
+
+
+def test_enabled_fidus_switch_degrades_instead_of_blocking(tmp_path):
+    """开关开着而现场没有 fidus：启动日志点名这条能力，但桌宠照常起来。"""
+    from meapet import bootstrap
+
+    deps_on = _dependency_modules(
+        bootstrap.required_runtime_dependencies({"fidus": {"enabled": True}})
+    )
+    deps_off = _dependency_modules(
+        bootstrap.required_runtime_dependencies({"fidus": {"enabled": False}})
+    )
+    assert "fidus" in deps_on
+    assert "fidus" not in deps_off
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"fidus": {"enabled": true}}', encoding="utf-8")
+    err = StringIO()
+    ok = bootstrap.ensure_pet_dependencies(
+        tmp_path,
+        config_path=cfg,
+        stream=err,
+        find_spec=lambda name: None if name == "fidus" else object(),
+    )
+    assert ok is True
+    assert "fidus" in err.getvalue()
+    assert "切换点定位测量" in err.getvalue()

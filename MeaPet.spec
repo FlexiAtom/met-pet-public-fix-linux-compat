@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """MeaPet onedir PyInstaller spec (portable data under _internal)."""
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -30,6 +31,17 @@ elif sys.platform.startswith("linux"):
     )
 else:
     layer_binaries = []
+
+# fidus（切换点定位）按人工 standing 裁决随包分发（"需要时才装得上的转向不是转向"）。
+# 它是普通 Python 包 + 一枚 abi3 扩展，PyInstaller 顺着 `fidus_position.py` 里的函数级
+# import 就能收进来 ⇒ 这里没有要列的产物，只有一条**在场性**断言：没装＝没带，而缺件只在
+# 用户打开那个开关那一刻才暴露，离线一侧全绿。Linux 上拦下来；其他平台眼下没有装得上的
+# 轮子（缺口在发行渠道，不在打包脚本），只响亮提示，不拦构建。
+if importlib.util.find_spec("fidus") is None:
+    _fidus_gap = "本环境没有 fidus ⇒ 这个包不会有「切换点定位」这条能力"
+    if sys.platform.startswith("linux"):
+        raise SystemExit(_fidus_gap + "（Linux 打包前先把那只 wheel 装上）")
+    print(f"[MeaPet.spec] ⚠ {_fidus_gap}", file=sys.stderr)
 
 a = Analysis(
     ["pet.py"],

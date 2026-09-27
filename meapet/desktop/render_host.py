@@ -1013,11 +1013,20 @@ class PetRenderHostMixin:
         if getattr(self, "_fidus_busy", False):
             safe_print("[fidus] 上一次定位仍在进行，本次只用请求坐标")
             return
+        from meapet.desktop import fidus_position as FP  # 延迟导入：关着就不付这份账
+
+        if not FP.have_engine():
+            # 引擎压根不在场：这一轮开不了，也不该开（校准要 2 秒还会闪屏，换不来读数）。
+            # 气泡说的是"没带"，不是"没量准"——后者会把人引去查屏幕，而缺口在打包面。
+            safe_print("[fidus] ✗ 这个环境没有 fidus，定位不启动（随包分发未落地？）")
+            self._show_bubble(
+                "这个版本没带定位引擎，量不了位置",
+                bubble_duration_ms(self.config, "interaction"),
+            )
+            return
         frame = self._fidus_current_frame()
         if frame is None:
             return
-        from meapet.desktop import fidus_position as FP  # 延迟导入：关着就不付这份账
-
         self._fidus_busy = True
         self._fidus_finished = False
         self._fidus_result = None

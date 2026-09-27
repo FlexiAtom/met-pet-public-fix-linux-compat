@@ -21,6 +21,7 @@ Wayland 客户端查不到自己的全局坐标（`_layer_geometry()` 的 docstr
 """
 from __future__ import annotations
 
+import importlib.util
 import queue
 import threading
 from dataclasses import dataclass
@@ -71,6 +72,25 @@ class EngineError(Exception):
     """引擎侧的失败（拒注册 / 丢失目标 / 校准不成），一律导致本模块返回 `None`。"""
 
 
+_HAVE_FIDUS: Optional[bool] = None
+
+
+def have_engine() -> bool:
+    """这个环境里有没有 fidus（只查模块规格，不导入、不建引擎）。
+
+    随包分发是人工 standing 裁决（`fidus-switch-positioning.md` §5.5："需要时才装得上的
+    转向不是转向"），所以"不在场"是**打包缺陷**而非运行时故障：它必须在开这一轮测量
+    **之前**就说得出，而不是等 2 秒校准＋屏幕闪一下之后回一句"没能量准位置"。
+    """
+    global _HAVE_FIDUS
+    if _HAVE_FIDUS is None:
+        try:
+            _HAVE_FIDUS = importlib.util.find_spec("fidus") is not None
+        except (ImportError, ValueError):
+            _HAVE_FIDUS = False
+    return _HAVE_FIDUS
+
+
 class FidusEngine:
     """`fidus.Fidus` 的线程亲和包装：一个线程上建、一个线程上用。
 
@@ -80,7 +100,12 @@ class FidusEngine:
     """
 
     def __init__(self) -> None:
-        import fidus  # 延迟导入：开关关闭时不该付出这份导入
+        try:
+            import fidus  # 延迟导入：开关关闭时不该付出这份导入
+        except ImportError as exc:
+            # `have_engine()` 是第一道门；走到这里说明规格在、导入却炸了
+            # （ABI 不符／产物被裁剪），报出来的原因不能写成"量不准"。
+            raise EngineError(f"fidus 导入不了：{exc}") from None
 
         self._mod = fidus
         self._eng = None

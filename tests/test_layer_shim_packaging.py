@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -36,6 +37,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SPEC_FILE = REPO_ROOT / "MeaPet.spec"
+_REAL_FIND_SPEC = importlib.util.find_spec
 
 
 # ---------- 把 spec 当输入跑一遍 ----------
@@ -50,11 +52,13 @@ class _Stub:
         return iter(())
 
 
-def _run_spec(spec_dir: Path, calls: list) -> dict:
+def _run_spec(spec_dir: Path, calls: list, *, fidus_present: bool = True) -> dict:
     """执行 MeaPet.spec，返回它传给 Analysis(...) 的关键字参数。
 
     spec 顶层 `from PyInstaller.utils.hooks import collect_data_files`，而本仓库的
     测试环境不装 PyInstaller —— 连它一起塞假模块，只保 `collect_data_files` 可调用。
+    `find_spec` 也一并接管：spec 里那条 fidus 在场性断言读的是**构建机**环境，而本
+    文件要判的是规则本身，不该随测试机装没装 fidus 漂移。
     """
     src = SPEC_FILE.read_text(encoding="utf-8")
     hooks = types.ModuleType("PyInstaller.utils.hooks")
@@ -78,6 +82,11 @@ def _run_spec(spec_dir: Path, calls: list) -> dict:
         "EXE": fake,
         "COLLECT": fake,
     }
+    def fake_find_spec(name):
+        if name == "fidus":
+            return object() if fidus_present else None
+        return _REAL_FIND_SPEC(name)
+
     with mock.patch.dict(
         sys.modules,
         {
@@ -85,7 +94,7 @@ def _run_spec(spec_dir: Path, calls: list) -> dict:
             "PyInstaller.utils": utils,
             "PyInstaller.utils.hooks": hooks,
         },
-    ):
+    ), mock.patch.object(importlib.util, "find_spec", fake_find_spec):
         exec(compile(src, str(SPEC_FILE), "exec"), globals_for_spec)
     assert calls, "spec 没有调用 Analysis()"
     return calls[0]
@@ -128,6 +137,25 @@ def test_spec_tolerates_missing_shim_off_linux(tmp_path):
     with mock.patch.object(sys, "platform", "win32"):
         kwargs = _run_spec(tmp_path, calls)
     assert _bundle_sources(kwargs["binaries"]) == []
+
+
+def test_spec_fails_loud_on_linux_when_fidus_absent(tmp_path):
+    """fidus 随包分发是 standing 裁决：Linux 上没装＝打出一个没有定位能力的包。"""
+    calls: list = []
+    with mock.patch.object(sys, "platform", "linux"):
+        with pytest.raises(SystemExit) as exc:
+            _run_spec(REPO_ROOT, calls, fidus_present=False)
+    assert "fidus" in str(exc.value)
+
+
+def test_spec_only_warns_off_linux_when_fidus_absent(tmp_path, capsys):
+    """其他平台眼下没有装得上的轮子（缺口在发行渠道）⇒ 提示，不拦构建。"""
+    calls: list = []
+    with mock.patch.object(sys, "platform", "win32"):
+        _run_spec(REPO_ROOT, calls, fidus_present=False)
+    err = capsys.readouterr().err
+    assert "fidus" in err
+    assert calls, "只是提示，spec 该照常走到 Analysis"
 
 
 # ---------- 加载面 ----------
