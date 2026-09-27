@@ -56,6 +56,7 @@ class WaylandLayerBackend:
         self._shim = None
         self._ctx = None
         self._pixel_format = 0  # 0 = 自动选择
+        self._err_fn = None     # §7.1 #11 的探测结果，_load() 里填
 
     # ---------- 懒加载 shim ----------
     def _load(self) -> ctypes.CDLL:
@@ -90,6 +91,21 @@ class WaylandLayerBackend:
                 fn.restype = None
                 fn.argtypes = argtypes
                 self._optional.add(name)
+
+            # §7.1 #12：回读合成器**实际**配出的逻辑尺寸。无条件绑定（该行标"必需"）——
+            # 产物缺这一枚就是过期产物，`build_layer_shell.sh` 的 REQUIRED 门本来就不放行。
+            self._shim.layer_logical_size.restype = c_int
+            self._shim.layer_logical_size.argtypes = [
+                c_void_p,
+                POINTER(c_int),
+                POINTER(c_int),
+            ]
+
+            # §7.1 #11：诊断通道。按该行原文用 getattr 探测——它**不参与后端可用性判决**
+            # （I6），所以不能因为缺一个只读符号就把整个后端判死；探测不到时 last_error() 给 ""。
+            self._err_fn = getattr(self._shim, "layer_last_error", None)
+            if self._err_fn is not None:
+                self._err_fn.restype = c_char_p   # 指向固定 256 B 静态缓冲，永不 NULL
 
             # Phase 2: 像素上传
             self._shim.layer_update_pixels.restype = None
@@ -155,6 +171,40 @@ class WaylandLayerBackend:
         if self._ctx and "layer_set_size" in getattr(self, "_optional", ()):
             self._shim.layer_set_size(self._ctx, w, h)
 
+    def logical_size(self):
+        """§7.1 #12：合成器最近一次 `configure` **实际**配出的逻辑尺寸 `(w, h)`。
+
+        与 `enable(...)` 传进去的**请求**尺寸可以不同：带外部 `exclusive_zone` 的合成器
+        （本机 niri + 状态栏）会把可用区扣掉一块，`Top/Left` margin 因此可能被夹小，
+        配出来的高度就是夹后的值。桥接层的像素门控以配出的尺寸为唯一准绳（§6.3），
+        所以摆位想知道"这块 surface 到底落在哪块矩形"，只有这一条通道。
+
+        `None` = 读不到：还没有 `configure` 落地（瞬态，静默，§6.3），或句柄被拒
+        （那种会在 `last_error()` 里点名 `layer_logical_size`）。这里不区分两者，
+        也不兜底成请求尺寸——把"没读到"伪装成一个数是 I7 禁的那种形态。
+        """
+        if not self._ctx:
+            return None
+        # 传 c_int 实例（不是 byref）：argtypes 声明的是 POINTER(c_int)，ctypes
+        # 会把实例按引用递进去，被调方写回 `.value`。同一个形状也让假 shim 能写。
+        w, h = c_int(0), c_int(0)
+        if self._shim.layer_logical_size(self._ctx, w, h) != 1:
+            return None
+        return (w.value, h.value)
+
+    def last_error(self) -> str:
+        """§7.1 #11：最近一次"拒绝/报错"的原因，无错误时为 `""`。
+
+        只用于把桥接层的诊断说给人看，不参与任何判决（I6）。旧产物没有这个符号时
+        返回 `""`（探测不到 ≠ 没有错误，调用方不得据此判"一切正常"）。
+        """
+        if self._err_fn is None:
+            return ""
+        raw = self._err_fn()          # c_char_p → bytes，或 NULL → None
+        if not raw:
+            return ""
+        return raw.decode("utf-8", "replace")
+
     def disable(self):
         if self._ctx:
             self._shim.layer_destroy_context(self._ctx)
@@ -204,9 +254,8 @@ class WaylandLayerBackend:
             注意 ARGB8888 的枚举值本身就是 0，所以"强制 ARGB"与"自动"在这一层
             不可区分——要验证回退路径只能靠不支持 ABGR 的合成器，不是靠传这个值。
           * ABGR8888 —— 强制整体拷贝（内存布局 [R,G,B,A] 与 QImage RGBA8888 一致）。
-          * 其他任何值 —— **该帧不提交** + 粘性错误。错误文本在桥接层的
-            `layer_last_error()` 里（§7.1 #6/#11；注意本模块目前没有绑定那个符号，
-            要读它得自己 `ctypes` 一次——该缺口登记为挂起项 gap#1）。这是有意的：
+          * 其他任何值 —— **该帧不提交** + 粘性错误。错误文本用 `last_error()` 读
+            （§7.1 #6/#11）。这是有意的：
             调试通道要"响"，而不是悄悄替你选一个看起来对的格式（agents-rules §4）。
             旧 C 实现把任意 uint32 直接喂给 `wl_shm_pool_create_buffer`，代价是
             合成器发 fatal protocol error、**整条 Wayland 连接被断**（§4.7 第 11 行）。

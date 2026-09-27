@@ -20,6 +20,10 @@ fake shim 复刻的三条桥语义（源自 render_host.py:715-733 记录的 L3 
 
 本文件能证明：门面二次 `enable()` 不留孤儿、`disable()` 归零、`destroy_context()`
 不触发 cleanup。不能证明：真合成器上的 fd / RING_DEPTH 收支（属 L3，见 render_host 记录）。
+
+追加（#78）：`FakeShim` 另外复刻 §7.1 #12 `layer_logical_size` 与 #11 `layer_last_error`
+两条回读通道的形状，供 `ReadbackFacadeTest` 判门面的 `logical_size()` / `last_error()`。
+这里判的是 **Python 侧的出参形状与不兜底**——真合成器配出什么数不在本文件范围（L3）。
 """
 
 from __future__ import annotations
@@ -43,6 +47,22 @@ class FakeShim:
         self.destroy_calls: list[int] = []   # 每次 destroy 点名的句柄
         self.cleanup_calls = 0               # layer_shell_cleanup 次数（连坐）
         self.init_calls = 0
+        # §7.1 #12/#11 的形状：logical 是"合成器配出的尺寸"，None = 还没 configure。
+        self.logical: tuple[int, int] | None = None
+        self.logical_rc = 1
+        self.logical_calls = 0
+        self.error_text = b""
+
+    def layer_logical_size(self, ctx, out_w, out_h) -> int:
+        # 出参按引用递进来（门面传的是 c_int 实例），只有返回 1 时才写。
+        self.logical_calls += 1
+        if self.logical is None:
+            return 0
+        out_w.value, out_h.value = self.logical
+        return self.logical_rc
+
+    def layer_last_error(self) -> bytes:
+        return self.error_text
 
     def layer_shell_init(self) -> int:
         self.init_calls += 1
@@ -146,6 +166,58 @@ class FacadeLifecycleTest(unittest.TestCase):
             be.enable(None, 100, 100, 0, 0)
         self.assertIsNone(be._ctx)
         self.assertEqual(shim.live, set())
+
+
+class ReadbackFacadeTest(unittest.TestCase):
+    """§7.1 #12/#11 的 Python 侧形状（#78：摆位要知道"合成器到底配成了多大"）。
+
+    这里判的是门面的三条约定，全部是**只有 Python 能判**的部分：
+    1. 出参得按引用递进去（`c_int` 实例）——假 shim 靠写 `.value` 才成立，
+       传成普通 int 会当场 AttributeError，不会静默给出一个旧数；
+    2. 桥返回 0 时给 `None`，**不兜底成请求尺寸**（I7）；
+    3. 没有 ctx 时连问都不问桥（句柄都不合法，问了也是噪声）。
+    真合成器会不会真的配出别的尺寸，不在这个文件的判决范围（L3，见 #78 working 记录）。
+    """
+
+    def _backend(self, init_rc: int = 0) -> tuple[WaylandLayerBackend, FakeShim]:
+        be = WaylandLayerBackend()
+        shim = FakeShim(init_rc=init_rc)
+        be._shim = shim          # 绕开 _load() 的真 ctypes.CDLL
+        return be, shim
+
+    def test_reads_back_the_configured_pair(self):
+        be, shim = self._backend()
+        be.enable(None, 461, 614, 854, 143)
+        shim.logical = (461, 445)
+        self.assertEqual(be.logical_size(), (461, 445))
+
+    def test_refusal_is_none_not_the_requested_size(self):
+        """还没 configure（或句柄被拒）⇒ `None`。把"没读到"伪装成 614 就是编数。"""
+        be, shim = self._backend()
+        be.enable(None, 461, 614, 854, 143)
+        self.assertIsNone(be.logical_size(), "fake 的 logical 仍是 None ⇒ 桥该被问一次")
+        self.assertEqual(shim.logical_calls, 1)
+        shim.logical = (461, 445)
+        shim.logical_rc = 0
+        self.assertIsNone(be.logical_size())
+
+    def test_no_ctx_asks_the_bridge_nothing(self):
+        be, shim = self._backend()
+        self.assertIsNone(be.logical_size())
+        self.assertEqual(shim.logical_calls, 0, "无句柄就不该越界问桥")
+        be.enable(None, 100, 100, 0, 0)
+        be.destroy_context()
+        self.assertIsNone(be.logical_size())
+        self.assertEqual(shim.logical_calls, 0)
+
+    def test_last_error_decodes_and_degrades_to_empty(self):
+        be, shim = self._backend()
+        # 未走 _load()（注入 fake）⇒ 探测结果 `_err_fn` 是 None：旧产物的降级形态。
+        self.assertEqual(be.last_error(), "")
+        be._err_fn = shim.layer_last_error        # 等价于 _load() 那次 getattr 探测
+        self.assertEqual(be.last_error(), "")
+        shim.error_text = "layer_logical_size: 句柄非法".encode("utf-8")
+        self.assertEqual(be.last_error(), "layer_logical_size: 句柄非法")
 
 
 if __name__ == "__main__":

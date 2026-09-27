@@ -3,7 +3,7 @@
 本文件能证明什么（L0/L1/L2，agents-rules §10）
 ------------------------------------------------
 * **产物来源核验**（T7 行的三段式判定，本文件的准入前提）：仓库根那个 `.so` 的
-  `nm -D --defined-only` 集合 == `~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md` §7.1 的 11 个符号。这一步之所以排在
+  `nm -D --defined-only` 集合 == `~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md` §7.1 全表的符号。集合判定按解析出的表走、不照抄名单；另有一条**故意写死**的行数断言（`test_spec_7_1_table_is_the_expected_cardinality`），防的是"删掉表里一行 + 同步删掉 REQUIRED 里那个名字"这种两侧一起漂移、集合判定照样绿的形态。这一步之所以排在
   一切行为断言之前，是因为该路径**在 P0 之前长期放着旧 C 实现的同名产物**，而
   `*.so` 被 `.gitignore` 排除（不进 VCS）⇒ 行为类断言（`init==-1`、非法参数=NULL、
   double-destroy 不崩……）**对 C 产物同样会通过**。C 产物导出 19 个符号（含 §4.1
@@ -18,6 +18,8 @@
 * **Python 绑定面与 §7.1 的必需/可选分级一致**：`wayland_layer.py` 无条件绑定的符号
   不得包含 spec 标"可选"的行，反之探测集必须恰是那三个可选符号（agents-rules §5 点名的
   固化风险：把 #6 与 #7–#9 读成同一类，就把一次真实的整体失效固化成了合法行为）。
+  #11 是**第三种**形态：按该行原文就地 `getattr` 探测，同时必须真有一个方法把它交出去
+  （闭掉旧 gap#1"粘性通道无人读"）；#12 与 #1–#6/#10 同列，无条件绑定。
 * **产物不链接 Qt**（§4.7 第 1 行：消灭 Qt5 私有头依赖）。
 
 本文件**不能**证明什么（不静默，逐条给出判决力的实际落点）
@@ -192,7 +194,7 @@ def _nm_defined_dynamic(path: Path) -> set[str]:
 def _export_set_verdict(actual: set[str]) -> str | None:
     """三段式判定（F-M9）。返回 ``None`` = 通过；否则返回可直接读的失败说明。
 
-    ①必需的 11 个逐项在场（不是"至少命中一个"）；②白名单 = 脚本 `ALLOWED`；
+    ①§7.1 全表的符号逐项在场（不是"至少命中一个"）；②白名单 = 脚本 `ALLOWED`；
     ③其余任何导出符号都违反 I2（双向差集为空）。
 
     `actual` 是参数而不是内部读盘：判定函数自己必须能被**喂进一个已知错误的集合**
@@ -279,9 +281,16 @@ def artifact():
 # 准入判定的三个面：spec / 脚本 / 产物
 # --------------------------------------------------------------------------
 def test_spec_7_1_table_is_the_expected_cardinality():
-    """§9 T7 行把门禁写成"必需 11 符号逐项在场"，所以 11 这个数出自 spec 原文。"""
+    """**故意**把行数写死在这里（12，#78 起；此前 11）。
+
+    其余判据都是表驱动的：`_export_set_verdict` 拿解析出的表比 REQUIRED、再比 `nm`，
+    所以"加一行而忘了别的"会在下游红。但**删**一行不会被那两道抓到——表少一行、脚本
+    REQUIRED 同步少一个名字、产物重建成 11 枚，三段判定仍然全绿，而契约已经缩水了。
+    这一条就是那道"两侧一起漂移"的兜底：漂移必须同时改这个数，改这个数就得写下理由。
+    """
     rows = _spec_7_1_rows()
-    assert len(rows) == 11, f"§7.1 表解析到 {len(rows)} 行：{sorted(rows)}"
+    assert len(rows) == 12, f"§7.1 表解析到 {len(rows)} 行：{sorted(rows)}"
+    assert "layer_logical_size" in rows, sorted(rows)
     assert all(name.startswith("layer_") for name in rows), sorted(rows)
     # 必需/可选两列必须能被判出——`test_python_binding_surface_matches_spec` 依赖
     # "可选"前缀这个形态；哪天写成"（可选）"或挪列，这里先红，不要让下游静默拿到空集。
@@ -298,8 +307,8 @@ def test_provenance_gate_rejects_a_non_rust_export_set():
     """判定函数自己必须有判决力——否则"绿"只证明没人看过它（agents-rules §8 表第 2 行）。
 
     反例集合按旧 C 产物的**形态**构造（记录 1J 第 8 条实测：仓库根曾长期放着 57312 B 的
-    C 版 `liblayer_shell_shim.so`，导出 19 个符号、没有 `layer_last_error`）：§7.1 的 11
-    个里缺 #11，外加 C++ mangled 名与协议 `*_interface` 表。这里注入符号集合而不是加载
+    C 版 `liblayer_shell_shim.so`，导出 19 个符号、没有 `layer_last_error`）：§7.1 全表
+    里缺 #11，外加 C++ mangled 名与协议 `*_interface` 表。这里注入符号集合而不是加载
     那份 C 产物：判据要证的是**集合判定**，不是磁盘上那个历史文件还在不在。
     """
     rows = set(_spec_7_1_rows())
@@ -406,6 +415,43 @@ def _binding_surface() -> tuple[set[str], set[str]]:
     return unconditional, optional
 
 
+def _probe_getattrs() -> set[str]:
+    """`getattr(self._shim, "<符号>", …)` 这种**就地探测**里点到的符号名。
+
+    单独一类，是因为 §7.1 #11 的必需性列写的形态是"调用方须 getattr 探测"：它既不该
+    无条件绑定（缺一个**只读诊断**符号就把整个后端判死，正是 I6"不参与判决"的反面），
+    也不属于那三行标"可选"的降级功能。三种形态挤进同一个集合去判，就一定有一种漂移
+    判不出来——这里判的是形态，不是当前实现恰好写了什么。
+    """
+    tree = ast.parse(SHIM_PY.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) == 3
+            and isinstance(node.args[0], ast.Attribute)
+            and node.args[0].attr == "_shim"
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            found.add(node.args[1].value)
+    return found
+
+
+def _backend_methods() -> set[str]:
+    """类里的方法名（不是模块级门面函数）——`last_error` 必须挂在后端对象上。"""
+    tree = ast.parse(SHIM_PY.read_text(encoding="utf-8"))
+    return {
+        n.name
+        for cls in ast.walk(tree)
+        if isinstance(cls, ast.ClassDef)
+        for n in cls.body
+        if isinstance(n, ast.FunctionDef)
+    }
+
+
 def test_python_binding_surface_matches_spec():
     """Python 的绑定方式必须与 §7.1 的必需性列同构（agents-rules §5 点名的固化风险）。
 
@@ -425,11 +471,17 @@ def test_python_binding_surface_matches_spec():
     assert "layer_update_pixels_with_format" in unconditional, (
         "#6 是“必需且非可选”（§7.1 该行原文），必须无条件绑定"
     )
-    # #11 由 Python 侧完全不读——这正是 gap#1（§7.1 #11"不参与任何判决"却无人被指定读）。
-    # 把它写成断言而不是注释：将来谁接上它，这条会红并指向挂起清单，而不是留一句谎言。
+    # #11 既不在无条件集、也不在可选降级集，而是第三种形态（见 `_probe_getattrs`）。
+    # 但"不判决"不等于"没人读"——旧 gap#1 登记的正是这条通道有了实现却无人被指定读。
+    # 所以判两件事：探测形态存在，且后端上真有一个方法把它交出去。
     assert (unconditional | optional) == set(rows) - {"layer_last_error"}, (
         f"门面绑定集与 §7.1 差一项都读不到：{sorted(unconditional | optional)}"
     )
+    assert _probe_getattrs() == {"layer_last_error"}, (
+        f"就地探测集应恰为 #11（其余符号要么无条件、要么走可选循环）："
+        f"{sorted(_probe_getattrs())}"
+    )
+    assert "last_error" in _backend_methods(), "#11 读到了却没交出去：gap#1 未闭"
 
 
 # --------------------------------------------------------------------------
@@ -456,6 +508,8 @@ shim.layer_update_pixels_with_format.argtypes = [
 shim.layer_clear.argtypes = [c_void_p]
 shim.layer_set_position.argtypes = [c_void_p, c_int, c_int]
 shim.layer_set_size.argtypes = [c_void_p, c_int, c_int]
+shim.layer_logical_size.restype = c_int
+shim.layer_logical_size.argtypes = [c_void_p, POINTER(c_int), POINTER(c_int)]
 
 def err_addr():
     return shim.layer_last_error()
@@ -562,13 +616,19 @@ calls = [
     ("layer_update_pixels", lambda: shim.layer_update_pixels(VP(0x1234), None, 400, 400)),
     ("layer_update_pixels_with_format",
      lambda: shim.layer_update_pixels_with_format(VP(0x1234), BUF, 400, 400, 0xdeadbeef)),
+    ("layer_logical_size", lambda: shim.layer_logical_size(VP(0x1234), None, None)),
     ("layer_destroy_context", lambda: shim.layer_destroy_context(VP(0x1234))),
 ]
 observed = []
 for sym, fn in calls:
     fn()
     observed.append({"label": sym, "sym": sym, "err": err_text()})
-emit({"created": created, "calls": observed})
+# #12 的两条额外形状：NULL 出参不得崩（上面那条已走过），且**失败时一个轴都不写**
+# （I7：不能把"没读到"伪装成"合成器配出了 0"）。
+lw, lh = ctypes.c_int(-7), ctypes.c_int(-9)
+lrc = shim.layer_logical_size(VP(0x1234), ctypes.byref(lw), ctypes.byref(lh))
+emit({"created": created, "calls": observed,
+      "logical": {"rc": lrc, "w": lw.value, "h": lh.value}})
 """
     )
     for c in r["created"]:
@@ -587,6 +647,7 @@ emit({"created": created, "calls": observed})
         "layer_update_pixels_with_format",
         "layer_create_context",
         "layer_update_pixels",
+        "layer_logical_size",
         "layer_set_click_through",
         "layer_set_position",
         "layer_set_size",
@@ -603,6 +664,11 @@ emit({"created": created, "calls": observed})
         assert named in accept.get(c["sym"], {c["sym"]}), (
             f"{c['label']} 的诊断点名了 {named}，疑似读到上一次调用的残留：{c['err']!r}"
         )
+    # §7.1 #12 的失败形态：`0` = 两轴都不写。写 0 会让调用方把"读不到"当成
+    # "合成器配出了 0×0"，而 0 恰是 §6.3 里"保持请求值"的协议值——两种含义撞在同一个数上。
+    assert r["logical"] == {"rc": 0, "w": -7, "h": -9}, (
+        f"#12 在非法句柄上的形态不是“拒绝且不写出参”：{r['logical']}"
+    )
 
 
 def test_unknown_and_repeated_destroy_do_not_crash(artifact):

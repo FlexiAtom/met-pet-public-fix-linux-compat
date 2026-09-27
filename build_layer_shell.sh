@@ -16,7 +16,11 @@ echo ">>> 安装到仓库根：liblayer_shell_shim.so"
 cp -f native/layer_shell/target/release/liblayer_shell_shim.so liblayer_shell_shim.so
 
 # ---- export-set verification (I2) ----
-# REQUIRED = the 11 spec §7.1 symbols, verbatim. Ownership: WP-C (计划书 WP-C
+# REQUIRED = the 12 spec §7.1 symbols, verbatim. The count follows §7.1's table
+#   (11 before #78 added `layer_logical_size`; the table is the only truth — this
+#   array is a copy of it and `tests/test_layer_bridge_abi.py` asserts set equality
+#   against the parsed table, so a drift here is loud, not silent).
+#   Ownership: WP-C (计划书 WP-C
 #   改动摘要). Empty during the WP-A scaffold — a permanently-empty REQUIRED
 #   would be an impossible-to-fail gate (agents-rules §9), so the script prints a
 #   WARN whenever it is empty and WP-C's acceptance must not pass with it empty.
@@ -32,6 +36,7 @@ REQUIRED=(
   layer_set_size
   layer_destroy_context
   layer_last_error
+  layer_logical_size
 )
 # ALLOWED = explicit whitelist of toolchain-injected symbols (F-M9②), pinned
 #   by evidence from the first real Rust artifact. The empty-shell artifact
@@ -72,7 +77,7 @@ if [ -n "$extra" ]; then
 fi
 
 if [ "$n_req" -eq 0 ]; then
-  echo "[WARN] REQUIRED 为空集——仅在 WP-C 写入 spec §7.1 的 11 个符号之前合法。"
+  echo "[WARN] REQUIRED 为空集——仅在 WP-C 写入 spec §7.1 的符号表之前合法。"
 fi
 
 if [ "$fail" -ne 0 ]; then
