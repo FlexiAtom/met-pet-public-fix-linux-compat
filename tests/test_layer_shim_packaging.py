@@ -149,13 +149,39 @@ def test_spec_fails_loud_on_linux_when_fidus_absent(tmp_path):
 
 
 def test_spec_only_warns_off_linux_when_fidus_absent(tmp_path, capsys):
-    """其他平台眼下没有装得上的轮子（缺口在发行渠道）⇒ 提示，不拦构建。"""
+    """非 Linux 缺 fidus 不拦构建（那条路本来就不带它）⇒ 只提示，照常走到 Analysis。"""
     calls: list = []
     with mock.patch.object(sys, "platform", "win32"):
         _run_spec(REPO_ROOT, calls, fidus_present=False)
     err = capsys.readouterr().err
     assert "fidus" in err
     assert calls, "只是提示，spec 该照常走到 Analysis"
+
+
+def test_spec_excludes_fidus_off_linux_even_when_present(tmp_path):
+    """"Windows 打包不带 fidus"是**裁决**，不是"这台构建机恰好没装"的副产品。
+
+    判法：在 win32 上把 fidus 造成本机**在场**，要求它仍然进不了包 —— 即 `fidus`
+    出现在 `Analysis(excludes=...)` 里。将来撤销那个裁决 = 删 spec 里 `fidus_excludes`
+    那一行，这条测试跟着红；这正是它要钉住的东西。
+    """
+    calls: list = []
+    with mock.patch.object(sys, "platform", "win32"):
+        kwargs = _run_spec(tmp_path, calls, fidus_present=True)
+    assert "fidus" in kwargs["excludes"], f"非 Linux 竟会把 fidus 收进包：{kwargs['excludes']}"
+
+
+def test_spec_does_not_exclude_fidus_on_linux():
+    """Linux 那一档反过来：不能把裁决写反成 excludes（在场性检查与包内容必须同向）。"""
+    from meapet.desktop import wayland_layer
+
+    if not (REPO_ROOT / wayland_layer.SHIM_NAME).is_file():
+        pytest.skip("仓库根没有产物：Linux 档走不到 Analysis（先跑 build_layer_shell.sh）")
+    calls: list = []
+    with mock.patch.object(sys, "platform", "linux"):
+        kwargs = _run_spec(REPO_ROOT, calls, fidus_present=True)
+    assert "fidus" not in kwargs["excludes"]
+    assert REPO_ROOT / wayland_layer.SHIM_NAME in _bundle_sources(kwargs["binaries"])
 
 
 # ---------- 加载面 ----------

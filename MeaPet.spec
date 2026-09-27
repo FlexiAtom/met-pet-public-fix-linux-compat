@@ -9,6 +9,10 @@ from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
 
+# 平台分档只用这一个判据，两处（桥接层 / fidus）共用：写三遍 `startswith` 就是三处
+# 可以互相不一致的地方。
+IS_LINUX = sys.platform.startswith("linux")
+
 # live2d-py package data (native resources); project tree live2d/ is listed in datas.
 try:
     live2d_pkg_datas = collect_data_files("live2d")
@@ -24,7 +28,7 @@ LAYER_SHIM_NAME = "liblayer_shell_shim.so"
 _layer_shim = Path(SPECPATH) / LAYER_SHIM_NAME
 if _layer_shim.is_file():
     layer_binaries = [(str(_layer_shim), ".")]
-elif sys.platform.startswith("linux"):
+elif IS_LINUX:
     raise SystemExit(
         f"缺 {LAYER_SHIM_NAME}：Linux 打包前先跑 `bash build_layer_shell.sh`"
         f"（产物应落在 {SPECPATH}）。带着缺件打出来的包没有穿透模式。"
@@ -32,16 +36,27 @@ elif sys.platform.startswith("linux"):
 else:
     layer_binaries = []
 
-# fidus（切换点定位）按人工 standing 裁决随包分发（"需要时才装得上的转向不是转向"）。
-# 它是普通 Python 包 + 一枚 abi3 扩展，PyInstaller 顺着 `fidus_position.py` 里的函数级
-# import 就能收进来 ⇒ 这里没有要列的产物，只有一条**在场性**断言：没装＝没带，而缺件只在
-# 用户打开那个开关那一刻才暴露，离线一侧全绿。Linux 上拦下来；其他平台眼下没有装得上的
-# 轮子（缺口在发行渠道，不在打包脚本），只响亮提示，不拦构建。
-if importlib.util.find_spec("fidus") is None:
-    _fidus_gap = "本环境没有 fidus ⇒ 这个包不会有「切换点定位」这条能力"
-    if sys.platform.startswith("linux"):
-        raise SystemExit(_fidus_gap + "（Linux 打包前先把那只 wheel 装上）")
-    print(f"[MeaPet.spec] ⚠ {_fidus_gap}", file=sys.stderr)
+# fidus（切换点定位）随包分发的**平台分档**（2026-09-28 人工 standing 裁决）：
+#   Linux   ⇒ 必须在场。wheel 走发行渠道；没装上＝打包缺陷 ⇒ 拦构建，别让缺件出厂。
+#   非 Linux ⇒ **显式排除**，直到 fidus 宣布支持该平台。
+# "排除"必须写出来，不能靠"这台构建机恰好没装"：眼下 Windows 侧确实是空场，那份"不带"
+# 是构建机环境的**副产品**——谁哪天装了个来源不明的 fidus，它就被静默收进 Windows 产物，
+# 而那条路在非 Linux 上没有已知的可用引擎。写成 excludes 之后，"不带"是一个可被测试钉住、
+# 也可被将来一句话撤销的**决定**。
+# 运行面不受影响：`fidus_position.have_engine()` 只在菜单「定位与穿透」那一刻查 ⇒
+# 排除掉的效果是那个开关响亮拒绝，不影响开工。
+fidus_excludes = [] if IS_LINUX else ["fidus"]
+if IS_LINUX:
+    if importlib.util.find_spec("fidus") is None:
+        raise SystemExit(
+            "本环境没有 fidus ⇒ 这个包不会有「切换点定位」这条能力"
+            "（Linux 打包前先把那只 wheel 装上）"
+        )
+else:
+    print(
+        "[MeaPet.spec] fidus 按裁决不进非 Linux 包（显式 excludes，撤销见本文件注释）",
+        file=sys.stderr,
+    )
 
 a = Analysis(
     ["pet.py"],
@@ -120,7 +135,7 @@ a = Analysis(
         "unittest",
         "pydoc",
         "doctest",
-    ],
+    ] + fidus_excludes,
     noarchive=False,
     optimize=0,
 )
