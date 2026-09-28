@@ -43,7 +43,7 @@ python pet.py
 ```bash
 pip install -r linux_requirements.txt
 python setup_wizard.py
-QT_QPA_PLATFORM=xcb python pet.py
+python pet.py
 ```
 
 `live2d-py` is optional; falls back to PNG when unavailable. Prebuilt packages are available at [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py).

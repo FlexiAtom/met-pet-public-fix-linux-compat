@@ -1724,8 +1724,6 @@ class SetupWizard(QWidget):
             self.config_saved.emit(final_cfg)
             if PLATFORM["is_windows"]:
                 launch_hint = "现在双击「启动桌宠.bat」或运行 python pet.py 就能开玩啦 🐱"
-            elif PLATFORM["is_linux"]:
-                launch_hint = "启动：QT_QPA_PLATFORM=xcb python pet.py 🐱"
             else:
                 launch_hint = "启动：python pet.py 🐱"
             styled_message_box(

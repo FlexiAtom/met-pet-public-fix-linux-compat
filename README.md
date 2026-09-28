@@ -43,7 +43,7 @@ python pet.py
 ```bash
 pip install -r linux_requirements.txt
 python setup_wizard.py
-QT_QPA_PLATFORM=xcb python pet.py
+python pet.py
 ```
 
 `live2d-py` 是可选依赖；不可用时会回退到 PNG。预编译包可从 [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py) 获取。

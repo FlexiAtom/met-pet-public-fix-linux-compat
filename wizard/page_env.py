@@ -340,9 +340,10 @@ class EnvCheckPage(QFrame):
 
         # 平台提示
         if PLATFORM["is_linux"]:
-            self.log("Linux 提示: 启动可用 QT_QPA_PLATFORM=xcb python pet.py")
             if PLATFORM["is_wsl"]:
                 self.log("WSL 提示: 需可用的 GUI（WSLg / X11）；音频与截屏能力视子系统而定")
+            else:
+                self.log("Linux 提示: 直接 python pet.py 启动即可，Qt 会自己选 wayland/xcb")
         elif PLATFORM["is_macos"]:
             self.log("macOS 提示: Live2D/OpenGL 依赖本机图形栈；首次运行可能需授权辅助功能")
         elif PLATFORM["is_windows"]:
