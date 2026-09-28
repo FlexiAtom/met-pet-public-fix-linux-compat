@@ -28,3 +28,19 @@ websockets>=13,<16
 cryptography>=42
 mcp>=1.27,<2
 uvicorn>=0.30
+
+# 可选：fidus 定位引擎 —— 只服务 Linux/Wayland 上「点击穿透切换时量窗口位置」那一格。
+# 故意**不写成依赖**，也不要 pip 它。三条理由（出处：fidus 2026-09-29 的渠道裁定
+# ~/.Athena/projects/meapet/pool/fidus-wheel-channel-direct-link.md）：
+#   1) 它的版本恒为 0.1.0.dev0（身份靠 git tag，不在版本号里），而 pip 只按版本解析
+#      ⇒ 装到哪一个由不得装机的人。
+#   2) **渠道已定、链接待定**：官方唯一形态是 GitHub Release 资产直链
+#      https://github.com/FlexiAtom/fidus/releases/download/<tag>/fidus-0.1.0.dev0-cp310-abi3-manylinux_2_35_x86_64.whl
+#      但当前交付轮尚未挂上 release（唯一 release v0.1.0-beta.1 落后交付内容 61 个 commit）。
+#   3) PyPI、任何索引/镜像、以及把 wheel 提交进本仓（vendor）都算二次分发，官方不为其行为负责。
+# 真取到之后**三步缺一不可**：钉完整 URL（tag 是身份第一来源）→ 同目录 .sha256 边车
+# `sha256sum -c` → 读 `fidus.__git_commit__` 比对。只按版本号或只按文件名取都不算数。
+# 当前交付轮身份：v0.1.0-beta.1-61-gf75e05b｜sha256 2d56e9b36284d90c11c51a8551fb0fb25849e5d1591b62d5b884aba4b35b7c31｜548,843 B｜glibc 下限 2.35。
+# Windows 不带 fidus：那边没有 layer-shell 这条路（打包面已显式 excludes 并钉住测试）。
+# 没有它桌宠照常跑：菜单「启用 fidus」在开工前先查在场性，缺件就明说"这个版本没带定位引擎"，
+# 不混报成"没能量准位置"；Linux 打包缺这只轮子时 spec 直接 SystemExit 点名缺口。
