@@ -1,4 +1,5 @@
-"""穿透挂载后"回读 configure 尺寸 → 据此夹移"那一轮的回归（工作项 #78）。
+"""穿透挂载后"回读 configure 尺寸 → 据此夹移"那一轮的回归（工作项 #78），
+以及落定之后的**稳态重查**（工作项 #89，人工裁决「带撤之后夹移无声错 b 即可」）。
 
 被测真身：`PetRenderHostMixin._layer_fit_*`。后端一律是**假的**——本文件判的是
 **算法与出口**：读数怎么用、什么时候发那一发夹移、什么时候必须出声、fidus 什么时候
@@ -26,13 +27,18 @@ from unittest import mock
 
 import numpy as np
 
-from meapet.desktop.render_host import PetRenderHostMixin, _LAYER_FIT_WAIT_TICKS
+from meapet.desktop.render_host import (
+    PetRenderHostMixin,
+    _LAYER_FIT_WAIT_TICKS,
+    _LAYER_FIT_WATCH_TICKS,
+)
 
 MOUNT = (854, 143, 461, 614)      # 穿透挂载时的那一发请求（margin 坐标）
 CLAMPED = (461, 445)              # 合成器实际配出的：高被 588 − 143 夹小
 FITTED = (854, -26)               # 按模型回摆的位置（margin 可为负）
 BAND = 180                        # 保留带厚度（本文件的常量替身，见 _host）
 ON_SCREEN_TOP = 154               # 信念矩形的 y：-26 + 180 == 768 - 614
+FIT = MOUNT[2:]                   # 461x614＝"配得等于请求"
 
 
 class FakeBackend:
@@ -46,9 +52,15 @@ class FakeBackend:
         self.readings = list(readings) or [None]
         self.positions = []
         self.frames = []
+        self.reads = 0
         self.error = error
 
+    def feed(self, *sizes):
+        """换一份读数脚本（稳态重查的测试要能事后改合成器的行为）。"""
+        self.readings = list(sizes)
+
     def logical_size(self):
+        self.reads += 1
         if len(self.readings) > 1:
             return self.readings.pop(0)
         return self.readings[0]
@@ -87,6 +99,7 @@ def _host(backend, band=BAND):
     host._maybe_start_fidus_locate = lambda *r: host.started.append(tuple(r))
     host._show_bubble = lambda text, *_a, **_k: host.bubbles.append(text)
     return host
+
 
 
 def _proxy_rect(host):
@@ -318,7 +331,144 @@ class TestRoundLifetime(unittest.TestCase):
         self.assertEqual(len(be.frames), 2, "落定之后每拍照常推，不再拦")
 
 
+class TestSteadyRecheck(unittest.TestCase):
+    """落定之后的稳态重查（#89）：configure 变了才重算那一发夹移。
+
+    节奏由 `_LAYER_FIT_WATCH_TICKS` 控制，本文件把它和回读预算一起吃——所以每个用例
+    先 `pump` 掉一整周期再断言，别指望"下一拍就有读数"。
+    """
+
+    def _land(self, host, be):
+        """跑完挂载那一轮：夹移到 −26，然后配满 614 ⇒ 落定。"""
+        host._layer_fit_start(*MOUNT)
+        _pump(host, 2)
+        self.assertEqual(be.positions, [FITTED], "前置：挂载轮该只发那一发夹移")
+        return be.positions
+
+    def test_unchanged_configure_sends_nothing_and_reads_once_per_period(self):
+        be = FakeBackend([CLAMPED, FIT])
+        host = _host(be)
+        self._land(host, be)
+        reads = be.reads
+        results, log = _pump(host, _LAYER_FIT_WATCH_TICKS * 3)
+        self.assertEqual(be.positions, [FITTED], "读数没变就不该有任何一发")
+        self.assertEqual(log, "")
+        self.assertEqual(set(results), {False}, "稳态不该拦推帧")
+        self.assertEqual(be.reads - reads, 3,
+                         "稳态成本＝每周期一次缓存读数，不是每帧一次")
+
+    def test_band_removal_after_a_successful_clamp_is_INVISIBLE(self):
+        """**本件测不到的那一格**（裁决 (b) 的字面对象）：钉成失败模式，别当已通过。
+
+        夹移落定之后 configure 已经等于请求（461x614）；带整条撤走时 niri 重发的 configure
+        **数值不变**（`min(614, 768+26)=614`），而桥接层只缓存那个数值（`state.rs` 的
+        `logical_size`），没有"configure 来过一发"的序号 ⇒ 宿主侧无从发现这一相。
+        要补它得动 Rust 桥（第 13 枚符号），不在本次授权面（render_host.py）内。
+        已登记 `pending.md`，不赌它不发生。
+        """
+        be = FakeBackend([CLAMPED, FIT])
+        host = _host(be)
+        self._land(host, be)
+        be.feed(FIT)                       # 带撤走：configure 重发，还是 461x614
+        _pump(host, _LAYER_FIT_WATCH_TICKS * 3)
+        self.assertEqual(be.positions, [FITTED], "这一相无从触发，所以一发都不该有")
+        self.assertEqual(_proxy_rect(host), (FITTED[0], ON_SCREEN_TOP, *FIT),
+                         "信念仍停在带在时那一格——这就是那条 180 px 无声错位")
+
+    def test_narrower_usable_area_reclamps_from_the_current_margin(self):
+        """带变厚 ⇒ 配出的尺寸掉下来 ⇒ 按新可用区再夹一发，并交回确认轮。"""
+        be = FakeBackend([CLAMPED, FIT])
+        host = _host(be)
+        self._land(host, be)
+        be.feed((461, 434))                # 可用区又少了 11 px（445→434 那一类）
+        _pump(host, _LAYER_FIT_WATCH_TICKS)
+        # ny = min(锚点 143, 434 + 当前 margin(−26) − 614) = −206
+        self.assertEqual(be.positions, [FITTED, (854, -206)])
+        self.assertEqual(_proxy_rect(host), (854, -206 + BAND, *FIT),
+                         "信念要跟着重算的那一发走，吃的也是新带厚")
+        started = list(host.started)
+        be.feed(FIT)
+        _pump(host, _LAYER_FIT_WAIT_TICKS)
+        self.assertEqual(host.started, started,
+                         "重查轮落定不许再启一轮 fidus：#78 把它排在落定之后一次")
+
+    def test_wider_usable_area_probes_back_to_the_anchor_then_self_corrects(self):
+        """宽裕相：收一发回锚点是**探针**，锚点装不下时确认轮会自己再夹回来。
+
+        起手用"挂载轮没救回来"那一相（configure 一直停在 445）：那里 margin 已夹到 −26、
+        锚点还在 143，而读数有事实可比（445→614 是真变化），所以这一支可达。
+        """
+        be = FakeBackend([CLAMPED])
+        host = _host(be)
+        host._layer_fit_start(*MOUNT)
+        # 预算那一拍是**减到 0 才判**，所以失败出口落在第 WAIT+1 拍：多泵一拍，
+        # 少泵的话挂载轮还开着，下一份读数会被它自己吃掉（那是另一条正确路径）。
+        _pump(host, _LAYER_FIT_WAIT_TICKS + 1)
+        self.assertEqual(be.positions, [FITTED])
+
+        be.feed(FIT)                                  # 带撤：445 → 614，看得见的一变
+        _pump(host, _LAYER_FIT_WATCH_TICKS)
+        self.assertEqual(be.positions, [FITTED, MOUNT[:2]],
+                         "宽裕相该把位置朝锚点收那一发（回收夹移）")
+        self.assertIsNone(host._fit_band, "回到锚点那一发没有夹移可记")
+        self.assertEqual(_proxy_rect(host), (MOUNT[0], MOUNT[1], *FIT))
+
+        be.feed(CLAMPED)                              # 锚点上其实装不下 ⇒ 合成器再夹
+        _pump(host, _LAYER_FIT_WAIT_TICKS)
+        self.assertEqual(be.positions, [FITTED, MOUNT[:2], FITTED],
+                         "探针失败要自己夹回来，不该停在错位置也不该猜第二解")
+
+    def test_fidus_running_makes_the_whole_watch_yield(self):
+        """两个作者抢一个 set_position：fidus 在跑时重查整段让路（约束第 1 条的答复）。"""
+        be = FakeBackend([CLAMPED, FIT])
+        host = _host(be)
+        self._land(host, be)
+        host._fidus_busy = True
+        be.feed((461, 434))
+        _pump(host, _LAYER_FIT_WATCH_TICKS * 2)
+        self.assertEqual(be.positions, [FITTED], "fidus 跑动期间插一发会把它的读数打乱")
+
+    def test_old_artifact_pays_no_read_in_steady_state(self):
+        """没有回读通道 ⇒ 不设锚 ⇒ 稳态一次都不读（#78 §8.1 那句成本口径不外溢）。"""
+        be = NoChannelBackend()
+        host = _host(be)
+        host._layer_fit_start(*MOUNT)
+        results, log = _pump(host, _LAYER_FIT_WATCH_TICKS * 2)
+        self.assertEqual(be.reads, 0)
+        self.assertEqual(be.positions, [])
+        self.assertEqual(log, "")
+        self.assertEqual(set(results), {False})
+
+    def test_anchor_survives_our_own_clamp_but_not_fidus(self):
+        """锚点的归属：夹移是"被迫的"，不该把锚点搬过去，否则宽裕相无处可回收。"""
+        be = FakeBackend([CLAMPED, FIT])
+        host = _host(be)
+        self._land(host, be)
+        self.assertEqual(host._fit_anchor, MOUNT, "夹移之后锚点仍是挂载那一刻的请求")
+        self.assertEqual(host._fit_margin, FITTED, "而 margin 记的是最后一次发出的那一发")
+        host._fidus_owns_placement(700, 100)
+        self.assertEqual(host._fit_anchor, (700, 100, *FIT),
+                         "fidus 的主动摆放才是此后该被回收的位置")
+
+    def test_watch_reports_a_broken_channel_once_per_period(self):
+        """稳态读数坏了：报本周期，不撤锚也不静默消失。"""
+        be = FakeBackend([CLAMPED, FIT])
+        host = _host(be)
+        self._land(host, be)
+
+        def boom():
+            raise RuntimeError("桥没了")
+
+        be.logical_size = boom
+        _pump(host, _LAYER_FIT_WATCH_TICKS)
+        results, log = _pump(host, _LAYER_FIT_WATCH_TICKS)
+        self.assertIn("稳态重查回读异常", log)
+        self.assertEqual(set(results), {False}, "读坏了不该把推帧拦下来")
+        self.assertIsNotNone(host._fit_anchor, "撤锚＝把「这一段不再管事」当成结论")
+
+
 class TestBandThickness(unittest.TestCase):
+
     """带厚 = 整屏高 − 可用高：本模块唯一一处读屏幕尺寸的地方。"""
 
     def test_derives_from_the_screen_height(self):

@@ -67,6 +67,11 @@ _FIDUS_SETTLE_TICKS = 12
 # 实测 1 拍内落地，12 拍（≈400 ms）是给慢合成器的余量。
 # 夹移只发**一发**：那一发是按模型算出来的全部结论，模型不成立时第二发就是猜——不猜，出声。
 _LAYER_FIT_WAIT_TICKS = 12
+# 稳态重查的节流（工作项 #89 · 裁决 (b)）：回读轮落定之后，每这么多拍读一次
+# `logical_size()`，只跟"上一次读到的那一份"比，变了才重算那一发夹移。
+# 30 拍 ≈ 1 s：夹移的失效是 180 px 级的静默错位，一秒的滞后换得起；每拍一读则是
+# 把 #78 §8.1 那条"稳态零次"的成本口径按整个穿透期打折，那不打。
+_LAYER_FIT_WATCH_TICKS = 30
 # 一次分辨率变更会连发多个屏幕信号，合并后再校正位置。
 SCREEN_GUARD_DEBOUNCE_MS = 400
 # 桌宠宽高各至少露出这么多比例才算「还看得见」，否则拉回可用区域。
@@ -825,20 +830,45 @@ class PetRenderHostMixin:
     # 夹移后读到**夹移前**那个尺寸不算证据（configure 异步），所以旧读数只消耗预算、
     # 不触发判决——预算用完才判失败。这一段的全部意义是不再静默，
     # 所以出口本身静默是不允许的形态。
+    #
+    # 落定之后还有一段**稳态重查**（工作项 #89，人工裁决「带撤之后夹移无声错 b 即可」）：
+    # 上面那一轮只在挂载那一刻开一次，之后 exclusive-zone 带**改厚度或再出现**时，
+    # 那一发夹移吃的带厚就成了旧事实。修法是把手上那个量从"换算所得的 margin"改成
+    # "带厚"本身（`_fit_band`），并在每次 configure 变化时重算：紧张相（配得比请求小）
+    # 按新可用区往上/左夹一发，宽裕相（配得够大）把位置朝锚点收一发。两边都**只发一发，
+    # 然后交回上面那一轮确认**——回读、预算、出声出口全部复用，不另造一套判决。
+    # 锚点是"最后一次由本产品主动发出的请求"：夹移不搬动它（那是被迫的），`_fidus_place`
+    # 搬动它（那是量出来的），所以 fidus 挪过之后回收的是 fidus 的位置。
+    # fidus 正在跑时整段让路（见 `_layer_fit_watch`）。
+    #
+    # **有一相补不到，写在脸上**：夹移**已经落定**之后带整条撤走，configure 重发的
+    # **数值不变**（`min(请求高, 可用高 − margin)` 早已等于请求），而桥接层只缓存那个
+    # 数值、没有"configure 来过一发"的序号 ⇒ 宿主无从发现这一相，那 180 px 的无声错位
+    # 照旧。补它要动 Rust 桥（第 13 枚符号），超出本次授权面（render_host.py）；已登记
+    # `~/.Athena/projects/meapet/pending.md`，回归里也钉了一条同名用例
+    # （`test_band_removal_after_a_successful_clamp_is_INVISIBLE`）防后来人误以为已修。
 
     def _layer_fit_start(self, x: int, y: int, w: int, h: int) -> None:
         """挂载后开一轮"回读—夹移"；fidus 等它落定再启动。"""
         pending = (int(x), int(y), int(w), int(h))
         self._fit_fidus = pending
+        # 锚点＝本轮请求。此后**只有 `_fidus_place` 搬它**（夹移是被迫的，不配改锚），
+        # 宽裕相要回收的就是它。见 `_fidus_owns_placement`。
+        self._fit_anchor = pending
+        self._fit_margin = (int(x), int(y))
+        self._fit_band = None       # 带厚：None＝这一相没证据说有带；夹过移才有整数值
+        self._fit_size = None       # 最近一次读到的 configure（稳态重查的基准）
+        self._fit_watch = _LAYER_FIT_WATCH_TICKS
         backend = getattr(self, "_layer_backend", None)
         if backend is None or not callable(getattr(backend, "logical_size", None)):
             # 没有回读通道（旧产物／假后端）＝这段无从判断，直接放行 fidus。
+            # 顺带**不设锚**：稳态重查吃的就是这条通道，没有它就没有那一相（今天的行为）。
             self._fit_rect = None
+            self._fit_anchor = None
             self._layer_fit_finish(pending)
             return
         self._fit_rect = pending
         self._fit_seen = None      # 只在 _fit_rect 非空时被读到，见 _layer_fit_service
-        self._fit_usable_h = None  # 夹过移才有值（按模型反解的可用高），见 _layer_report_head_clip
         self._fit_wait = _LAYER_FIT_WAIT_TICKS
 
     def _layer_fit_cancel(self) -> None:
@@ -846,7 +876,10 @@ class PetRenderHostMixin:
         self._fit_rect = None
         self._fit_fidus = None
         self._fit_seen = None
-        self._fit_usable_h = None
+        self._fit_band = None
+        self._fit_anchor = None
+        self._fit_margin = None
+        self._fit_size = None
 
     def _layer_fit_service(self) -> bool:
         """每拍一次（骑在 `_layer_timer` 上，不新增定时器）。
@@ -856,7 +889,7 @@ class PetRenderHostMixin:
         """
         rect = getattr(self, "_fit_rect", None)
         if rect is None:
-            return False
+            return self._layer_fit_watch()
         x, y, w, h = rect
         backend = self._layer_backend
         try:
@@ -867,6 +900,7 @@ class PetRenderHostMixin:
             return False
         if size is not None:
             size = (int(size[0]), int(size[1]))
+            self._fit_size = size      # 稳态重查的基准：落定那一读就是它该认的第一份事实
             if size == (w, h):
                 self._layer_fit_finish((x, y, w, h))
                 return False
@@ -887,8 +921,8 @@ class PetRenderHostMixin:
                     return False
                 self._fit_seen = size
                 self._fit_rect = (nx, ny, w, h)
-                self._fit_usable_h = lh + y
-                self._layer_fit_proxy_rect(nx, ny, w, h, lh + y)
+                self._fit_band = self._layer_band_thickness(lh + y)
+                self._layer_fit_proxy_rect(nx, ny, w, h)
                 self._fit_wait = _LAYER_FIT_WAIT_TICKS
                 return True
         # 走到这里 = 本拍没有可行动的新证据（没读数，或已回摆在等那份新的 configure）
@@ -906,11 +940,111 @@ class PetRenderHostMixin:
                                          f"configure 仍未等于请求 {w}x{h}（{now}）")
         return False
 
+    def _layer_fit_watch(self) -> bool:
+        """稳态重查（#89）：带撤走／改厚度之后重算那一发夹移，别让它在无声里错 180 px。
+
+        入口是 **configure 变化本身**：每 `_LAYER_FIT_WATCH_TICKS` 拍读一次桥接层缓存的
+        最近一份 configure，只跟上一次读到的那份比。没有变化就没有新事实，也就不该有动作。
+        这不是请求-应答式的往返（那才是 #78 禁止的每帧跨 FFI 回读），成本是一秒一次
+        一个 `c_int` 写回——把 #78 §8.1 那条"稳态零次"进一步打折成"稳态一秒一次"，按打折记。
+
+        两相：
+          紧张相（配出的尺寸比请求小）⇒ 可用区缩了 ⇒ `U = 配高 + 当前 margin`，
+            按模型往上/左夹一发。`min` 保证只会缩，所以永远不会把 fidus 挪走的方向扳回来。
+          宽裕相（配出的尺寸够大）⇒ 帧在当前 margin 装得下 ⇒ 把位置朝锚点收一发。
+            锚点此刻装不装得下**不可证明**（configure 等于请求只给 `U ≥ margin + 请求高`
+            这个下界），所以那一发是**探针**：收过去之后交回 `_layer_fit_service` 确认，
+            确认不了它会按新读数自己再夹回来——那条自愈路径是挂载那一轮现成的。
+
+        两相都只发一发，且发完就把这一拍当作"在等回读"拦掉推帧（推了也必被尺寸门控丢掉）。
+
+        fidus 正在跑（`_fidus_busy`）时整段让路：它和我都在写 `set_position`，而它的闭环
+        吃的是"我请求 X、屏上是 Y"这个对应关系，中途插一发就把对方的读数打乱了。
+        这一拍不重查，下一个周期再看——带不会在一秒内来回变。
+        """
+        anchor = getattr(self, "_fit_anchor", None)
+        if anchor is None:
+            return False
+        if getattr(self, "_fidus_busy", False):
+            return False
+        self._fit_watch -= 1
+        if self._fit_watch > 0:
+            return False
+        self._fit_watch = _LAYER_FIT_WATCH_TICKS
+        backend = self._layer_backend
+        try:
+            size = backend.logical_size()
+        except Exception as exc:
+            # 稳态这一读坏了：一个只出声一次就再刷一遍的循环会淹掉日志，所以这里只报
+            # 本周期，也**不撤锚**——撤锚等于把"这一段不再管事"当成结论，而实情是"这次没读到"。
+            safe_print(f"[layer] ⚠ 稳态重查回读异常，本周期跳过: "
+                       f"{type(exc).__name__}: {exc}")
+            return False
+        if size is None:
+            return False
+        size = (int(size[0]), int(size[1]))
+        prev, self._fit_size = self._fit_size, size
+        if prev is None or prev == size:
+            return False                  # 还没有基准，或这一份不是"新事实"
+        ax, ay, w, h = anchor
+        mx, my = getattr(self, "_fit_margin", None) or (ax, ay)
+
+        if size[0] < w or size[1] < h:
+            # 紧张相：从**当前** margin 反解可用区（模型只在被夹这一支给出等式）。
+            nw, nh = size
+            nx, ny = min(ax, nw + mx - w), min(ay, nh + my - h)
+            if (nx, ny) == (mx, my):
+                safe_print(f"[layer] configure {prev[0]}x{prev[1]}→{nw}x{nh}，"
+                           f"按模型已在无处可挪（margin=({mx},{my})）⇒ 不动")
+                return False
+            band = self._layer_band_thickness(nh + my)
+            safe_print(f"[layer] configure {prev[0]}x{prev[1]}→{nw}x{nh} ⇒ 可用高 "
+                       f"{nh + my}（带厚 {band}），重摆 ({mx},{my})→({nx},{ny})")
+            if not self._layer_fit_move(nx, ny):
+                return False
+            self._fit_band = band
+            self._layer_fit_proxy_rect(nx, ny, w, h)
+            # 这一份读数就是触发因，不是"夹移之前的旧证据" ⇒ _fit_seen 直接占上，
+            # 确认轮里不再据它发第二发。
+            self._fit_open_recheck((nx, ny, w, h), seen=size)
+            return True
+
+        # 宽裕相：帧在当前 margin 装得下 ⇒ 朝锚点收一发（探针，见 docstring）。
+        if (mx, my) == (ax, ay):
+            self._fit_band = None         # 已在锚点又装得下 ⇒ 没有夹移要记账
+            return False
+        safe_print(f"[layer] configure {prev[0]}x{prev[1]}→{size[0]}x{size[1]} ⇒ 宽裕，"
+                   f"回收夹移 ({mx},{my})→({ax},{ay})（一发，待确认）")
+        if not self._layer_fit_move(ax, ay):
+            return False
+        self._fit_band = None
+        widget = getattr(self, "sprite_label", None)
+        if widget is not None:
+            # 信念跟着回收到屏幕坐标＝margin：与挂载那一刻同一个"无带"假设。
+            widget._proxy_rect = QRect(QPoint(ax, ay), QSize(w, h))
+        # 这里 `seen=None`：锚点上那份"等于请求"的旧读数不是夹移前的证据，而确认轮
+        # 需要有权对锚点上真正落下来的新 configure 再夹一发。
+        self._fit_open_recheck((ax, ay, w, h), seen=None)
+        return True
+
+    def _fit_open_recheck(self, rect, seen) -> None:
+        """把重查算出的那一发交给**挂载那一轮**确认：同一套预算、同一个出声出口。"""
+        self._fit_rect = rect
+        self._fit_seen = seen
+        self._fit_wait = _LAYER_FIT_WAIT_TICKS
+        # 重查落定不许再启一轮 fidus：#78 把它排在落定之后**一次**，两段各跑各的会互吃读数。
+        self._fit_fidus = None
+
     def _layer_fit_move(self, x: int, y: int) -> bool:
         """本段的摆位出口，只碰 `set_position`。
 
         不复用 `_fidus_place`：它顺手写 `_fidus_surface`，而 fidus 可能整场都没启动
         （默认关）。与其让一段写另一段的状态，不如各记各的账。
+
+        唯一的例外是 `_fit_margin`：那是"最后一次由本产品发出的 margin"这个**物理事实**，
+        而两个作者都可能是写它的人（#89 的重查要从它反解可用区）。各记各的账在这里等于
+        把同一个事实存两份、任其分叉，所以两处写、一处读。锚点另有其主，见
+        `_fidus_owns_placement`。
         """
         setter = getattr(getattr(self, "_layer_backend", None), "set_position", None)
         if not callable(setter):
@@ -920,21 +1054,41 @@ class PetRenderHostMixin:
         except Exception as exc:
             safe_print(f"[layer] ✗ 回摆 set_position 失败: {exc}")
             return False
+        self._note_margin_request(int(x), int(y))
         return True
 
-    def _layer_fit_proxy_rect(self, x: int, y: int, w: int, h: int,
-                              usable_h: int) -> None:
+    def _note_margin_request(self, x: int, y: int) -> None:
+        """记下"最后一次由本产品发出的 margin"——重查要从它反解可用区。
+
+        **不动锚点**：夹移后的位置是"被迫的"，锚点必须留在人把桌宠放下的那个请求上，
+        否则宽裕相会发现"当前 == 锚点"而什么都不回收，本件要修的正是这一格。
+        """
+        self._fit_margin = (int(x), int(y))
+
+    def _fidus_owns_placement(self, x: int, y: int) -> None:
+        """fidus 挪过之后，锚点改吃它那个位置。
+
+        锚点的含义是"人／测量认定桌宠该在哪"，而 fidus 那一发是按屏幕读数算的**主动**摆放，
+        比挂载请求更新。宽裕相若回收的是挂载那一刻，就会把 fidus 测出来的修正抹掉。
+        """
+        self._note_margin_request(x, y)
+        anchor = getattr(self, "_fit_anchor", None)
+        if anchor is not None:
+            self._fit_anchor = (int(x), int(y)) + anchor[2:]
+
+    def _layer_fit_proxy_rect(self, x: int, y: int, w: int, h: int) -> None:
         """把"我相信自己在屏幕上的哪块矩形"跟着夹移一起改——否则信念与实际分叉。
 
         margin 是**可用区内**的坐标，`_proxy_rect` 是屏幕坐标，差的就是保留带厚度。
-        `usable_h` 用调用方按模型反解出的那份（`configure 高 + 夹移前的 margin_y`），
-        不在这里重读回读通道：那一读可能已经等到夹移**之后**的新 configure，
-        与正在写的这个 margin 不是同一份事实。假设"带在顶上"——上面那两条模型本来就是
-        这个形状，不成立时那一发夹移会被超时预算否掉。
+        带厚取 `self._fit_band`——那是发这一发夹移时按**当时**的 configure 算出来并存下的
+        量（#89 起它是这段的手持事实，不再是从 `usable_h` 当场换算的中间值）；不在这里
+        重读回读通道：那一读可能已经等到夹移**之后**的新 configure，与正在写的这个 margin
+        不是同一份事实。假设"带在顶上"——上面那两条模型本来就是这个形状，不成立时那一发
+        夹移会被超时预算否掉。
         """
         widget = getattr(self, "sprite_label", None)
         if widget is not None:
-            widget._proxy_rect = QRect(QPoint(x, y + self._layer_band_thickness(usable_h)),
+            widget._proxy_rect = QRect(QPoint(x, y + (self._fit_band or 0)),
                                        QSize(w, h))
 
     def _layer_band_thickness(self, usable_h: int) -> int:
@@ -952,7 +1106,7 @@ class PetRenderHostMixin:
         except Exception:
             return 0
 
-    def _layer_report_head_clip(self, rect, usable_h: int) -> None:
+    def _layer_report_head_clip(self, rect) -> None:
         """夹移落定后单独问一次「不透明轮廓是否出屏」——出屏必须出声，**不改摆位**。
 
         那两条模型只优化"帧装进可用区"，于是它能自救成功（整块上抬）而把头顶推出屏幕上沿：
@@ -961,13 +1115,14 @@ class PetRenderHostMixin:
         `~/.Athena/projects/meapet/working/fractional-scale-head-clip.md` §2/§3）。这里只取
         第一条出口；"按轮廓算夹移"那条不做——轮廓与帧的差是本机这一只模型的属性。
 
-        只在真夹过移时判（`usable_h` 有值）：没夹 ⇒ configure 一开始就等于请求 ⇒ 帧整体在
+        只在真夹过移时判（`_fit_band` 是整数）：没夹 ⇒ configure 一开始就等于请求 ⇒ 帧整体在
         可用区内而轮廓是帧的子集，结构上不可能出屏，不为此多付一次离屏渲染。横向不判：夹移
         只往上／左挪（`min`），且本模块没有横向的带厚可读。
         """
         x, y, _w, _h = rect
-        if usable_h is None:
-            return                      # 没夹过移 ⇒ 帧整体在可用区内，不必为不可能的出屏付一次渲染
+        band = self._fit_band
+        if band is None:
+            return          # 没夹过移 ⇒ 帧整体在可用区内，不必为不可能的出屏付一次渲染
         frame = self._fidus_current_frame()
         if frame is None:
             return
@@ -980,8 +1135,7 @@ class PetRenderHostMixin:
             if rows.size == 0:
                 return
             by0, by1 = int(rows.min()), int(rows.max()) + 1   # 右开，与探针 opaque_bbox 同式
-            band = self._layer_band_thickness(usable_h)
-            screen_y = y + band                 # margin → 屏幕坐标，与 _layer_fit_proxy_rect 同式
+            screen_y = y + band                # margin → 屏幕坐标，与 _layer_fit_proxy_rect 同式
             head = -(screen_y + by0)
             if head <= 0:
                 return
@@ -990,7 +1144,7 @@ class PetRenderHostMixin:
             return
         safe_print(f"[layer] ⚠ 帧已装进可用区，但不透明轮廓出屏：头顶被屏上沿切掉 "
                    f"{head} 逻辑 px（信念屏幕 y={screen_y}，帧内轮廓行 {by0}..{by1}，"
-                   f"可用高 {usable_h}，带厚 {band}）")
+                   f"带厚 {band}）")
         self._show_bubble(
             "屏幕高度不够，桌宠的头会被屏上沿切掉一块\n"
             "（缩小画布或降低桌面缩放比例可避开）",
@@ -999,19 +1153,26 @@ class PetRenderHostMixin:
 
     def _layer_fit_finish(self, rect, got: str | None = None) -> None:
         """落定：`rect=None` 表示没救回来（出声，且**不**启动 fidus——量一个不在屏上的
-        surface 只会再补一条"没能量准位置"的误导气泡，真正的原因在尺寸上）。"""
+        surface 只会再补一条"没能量准位置"的误导气泡，真正的原因在尺寸上）。
+
+        `pending is None` 是 #89 的重查轮：它照旧判削头（带厚变了，出屏这一判就变了），
+        但**不再启一轮 fidus**——#78 把 fidus 排在落定之后一次，两段各跑各的会互吃读数。
+        """
         pending = getattr(self, "_fit_fidus", None)
         last = getattr(self, "_fit_rect", None)
-        usable_h = getattr(self, "_fit_usable_h", None)
         self._fit_fidus = None
         self._fit_rect = None
-        self._fit_usable_h = None
+        self._fit_watch = _LAYER_FIT_WATCH_TICKS   # 重查从落定那一拍起算一整周期
         if got is not None:
             self._layer_fit_report(last or pending, got)
-        if rect is None or pending is None:
+        if rect is None:
+            # 没救回来：`_fit_size` **留着**——超时那一拍读到的仍是当前事实，拿它当基准
+            # 才能让稳态重查认出"下一次 configure 变了"。撤成 None 会把紧接而来的那一变
+            # 当成"第一次读数"安静吞掉，而那恰好是本件要抓的那一格。
             return
-        self._layer_report_head_clip(rect, usable_h)
-        self._maybe_start_fidus_locate(*rect)
+        self._layer_report_head_clip(rect)
+        if pending is not None:
+            self._maybe_start_fidus_locate(*rect)
 
     def _layer_fit_report(self, rect, got: str) -> None:
         """放不下的那条出口：必须出声，并把桥接层的诊断一起端出来（§7.1 #11）。
@@ -1202,6 +1363,9 @@ class PetRenderHostMixin:
             return False
         _x, _y, w, h = self._fidus_surface
         self._fidus_surface = (int(x), int(y), w, h)
+        # 锚点跟着走（#89）：fidus 那一发是按屏幕读数做的**主动**摆放，它才是此后
+        # 宽裕相要回收的位置——回收挂载那一刻会把 fidus 测出来的修正抹掉。
+        self._fidus_owns_placement(int(x), int(y))
         return True
 
     def _push_layer_frame(self) -> None:
