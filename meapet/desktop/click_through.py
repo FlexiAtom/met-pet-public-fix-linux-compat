@@ -118,9 +118,9 @@ def platform_backend_name(platform_name: str | None = None) -> str:
     Explicit ``platform_name`` overrides auto-detect (useful in tests).
     Detection priority:
       1. win32        -> Windows
-      2. wayland      -> Wayland session (XDG_SESSION_TYPE=wayland)
-      3. xcb / x11    -> X11 session
-      4. none         -> everything else (Qt fallback only)
+      2. Qt 插件      -> QApplication.platformName()（有实例时它就是正主：wayland / xcb）
+      3. XDG_SESSION_TYPE -> 仅在没有 QApplication 时兜底（CLI / 单测）
+      4. x11 / none   -> 其余
     """
     if platform_name is not None:
         forced = str(platform_name).strip().lower()
@@ -135,13 +135,19 @@ def platform_backend_name(platform_name: str | None = None) -> str:
         # empty / unknown falls through to auto-detect
     if sys.platform == "win32":
         return "win32"
-    # Linux / BSD: honour XDG_SESSION_TYPE for explicit wayland choice
-    if os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland":
-        return "wayland"
+    # Qt 插件是**正主**：layer-shell 桥接层要求 Qt 进程本身跑在 wayland 插件上
+    # （同一道 gate 见 render_host.py:690）。XDG_SESSION_TYPE=wayland 而 Qt 用 xcb 时，
+    # 窗口其实挂在 XWayland 上——此时报 "wayland" 会让穿透请求打到一个桌宠并不存在的
+    # layer surface 上，故这里必须以插件为准，环境变量只在**取不到插件**（无 QApplication：
+    # CLI / 单测）时兜底。
     name = _qt_platform_name(None)
     if name == "wayland":
         return "wayland"
-    if name in ("xcb", "x11") or sys.platform.startswith("linux"):
+    if name in ("xcb", "x11"):
+        return "x11"
+    if os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland":
+        return "wayland"
+    if sys.platform.startswith("linux"):
         return "x11"
     return "none"
 
