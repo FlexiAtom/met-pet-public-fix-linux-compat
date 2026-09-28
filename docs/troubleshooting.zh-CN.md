@@ -56,7 +56,8 @@ GNOME/KDE 一类的传统桌面）下气泡照常贴着桌宠，本条不适用�
 
 1. 确认安装命令使用的是启动 MeaPet 的同一个 Python：
    `python -m pip --version`。
-2. 源码模式可重新运行启动脚本，或执行 `python -m pip install -r
+2. 源码模式按 README 对应平台那一节重装依赖：Windows 可双击 `启动桌宠.bat`
+   （它会复用或创建 `.venv` 并安装核心依赖），Linux 执行 `python -m pip install -r
    linux_requirements.txt`。
 3. 项目面向简体中文用户，依赖安装默认使用清华 TUNA 公共镜像。可通过
    `MEAPET_PIP_INDEX_URL=https://pypi.org/simple` 切换到 PyPI 官方源，也可填写

@@ -339,7 +339,6 @@ def test_installers_keep_china_friendly_default_without_proxy_mirrors():
     source_files = (
         ROOT / "meapet" / "dependencies.py",
         ROOT / "meapet" / "tools" / "gsv_infer.py",
-        ROOT / "start.sh",
         ROOT / "启动桌宠.bat",
     )
     forbidden = ("hf-mirror.com", "ghproxy.com")
@@ -348,10 +347,8 @@ def test_installers_keep_china_friendly_default_without_proxy_mirrors():
         assert not any(value in source for value in forbidden), path
 
     dependencies = source_files[0].read_text(encoding="utf-8")
-    linux_launcher = source_files[2].read_text(encoding="utf-8")
-    windows_launcher = source_files[3].read_text(encoding="utf-8")
+    windows_launcher = source_files[2].read_text(encoding="utf-8")
     assert dependencies.count("pypi.tuna.tsinghua.edu.cn") == 1
-    assert linux_launcher.count("pypi.tuna.tsinghua.edu.cn") == 1
     assert windows_launcher.count("pypi.tuna.tsinghua.edu.cn") == 1
     assert "https://pypi.org/simple" in windows_launcher
 
