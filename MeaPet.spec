@@ -48,9 +48,11 @@ else:
 fidus_excludes = [] if IS_LINUX else ["fidus"]
 if IS_LINUX:
     if importlib.util.find_spec("fidus") is None:
+        from meapet.bootstrap import fidus_install_hint
+
         raise SystemExit(
-            "本环境没有 fidus ⇒ 这个包不会有「切换点定位」这条能力"
-            "（Linux 打包前先把那只 wheel 装上）"
+            "本环境没有 fidus ⇒ 这个包不会有「切换点定位」这条能力\n"
+            "（Linux 打包前先把它装上）：\n" + fidus_install_hint()
         )
 else:
     print(
