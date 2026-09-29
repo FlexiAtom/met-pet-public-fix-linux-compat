@@ -33,7 +33,7 @@ import numpy as np
 
 import fidus
 
-ANCHOR = "v0.1.0-beta.1-58-ge4947aa"
+ANCHOR = "v0.1.0-beta.2"   # 2026-09-30 纯 CPU 重跑于 beta.2：三条判词逐位如旧（留档见 probe_h5 同注释）
 NAME = "confidence_ceiling"
 
 

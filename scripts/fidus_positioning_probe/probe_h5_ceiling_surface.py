@@ -59,11 +59,12 @@ import probe_h1_coexistence as H1  # noqa: E402
 import probe_h3_targetability as H3  # noqa: E402
 import probe_h4_ceiling_infer as H4  # noqa: E402
 
-ANCHOR = "v0.1.0-beta.1-58-ge4947aa"   # 本件重跑时的锚点；换轮必改并全量重跑（§12h-3）
-# ⟦2026-09-28 挂账⟧ 装机轮已是 -61：本件的 A/B（纯 CPU）已在 -61 上复跑过（/tmp/h5_dig_p61.log），
-# 但 C2/C3 要上屏 + 标定 ⇒ 属输出 mutation，未获授权，**本件整体尚未在 -61 上全量重跑**。
-# 因此**故意不改 ANCHOR**：改了就等于替 C2/C3 声明"已在新锚点复跑"，而那是假的。
-# D 段那条 "✗ 不是本件的件" 是**正确的响**，不是故障。
+ANCHOR = "v0.1.0-beta.2"   # 本件重跑时的锚点；换轮必改并全量重跑（§12h-3）
+# ⟦2026-09-30 收账⟧ 上一条挂账说的是 -61：当时 A/B 已复跑、C2/C3 未获授权 ⇒ 故意留旧锚点。
+# 现在装机轮是 beta.2 且**全量重跑已做完**（A/B/C 四段 + `--est 4`，C2/C3 走 `--amb`，
+# 日志留档 `~/.Athena/projects/meapet/reference/artifacts/rerun-beta2-2026-09-30/`）。
+# 读数与 -58 那轮的唯一差别：`halves` 这张模板在新判据下**被 0.98 门拒了**，
+# 不加 `--amb` 时 C2/C3 直接 refused ⇒ 本问"未答"。这是判据加严的正常后果，不是故障。
 GATE_RADII = (2, 4, 8, 16)          # fidus 注册期门的采样半径（其文档原文）
 BEYOND_RADII = (20, 24, 32, 48, 64, 96)  # 门**看不见**的那些 lag
 CEIL_FLOOR = 0.05                   # 与 fidus `fidus-estimate/src/lib.rs` 同值，只用于复算

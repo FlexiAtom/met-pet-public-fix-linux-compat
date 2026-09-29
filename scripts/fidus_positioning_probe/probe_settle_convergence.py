@@ -12,7 +12,9 @@
 * 尺子 B（被测）：`estimate` 串行读数，**每条之后立刻抓一屏** ⇒ fidus 在什么时刻读到什么、
   同一时刻屏幕实际在哪。
 
-判据（三行，各自独立，不合并）：
+判据（各自独立，不合并）：
+* `VERDICT-ANCHOR`：装机轮的 `fidus.__git_commit__` 是否等于 `ANCHOR`。不等 ⇒ 后面三行只说明
+  "这台机器上这只轮子如此"，不可归因于登记的那一轮件（同族 h4/h5/h6/hygiene 早有此行，本件 2026-09-30 补）。
 * `VERDICT-SCREEN`：真位移臂整段（含紧随 `set_position` 的第一枪）屏幕实测离期望中心的**最大**偏差。
   ≤3 px ⇒ 屏幕自始至终在目标位，屏幕侧没有过渡可言。
 * `VERDICT-LOCUS`：屏幕侧无过渡、而 fidus 首条仍偏 >10 px ⇒ 过渡在 **fidus 内部**（它的时域过程），
@@ -67,6 +69,10 @@ from PyQt5.QtWidgets import QApplication  # noqa: E402
 import fidus  # noqa: E402
 import probe_a10_geometry as A10  # noqa: E402  尺子 A：grim + 自带 NCC
 import probe_h1_coexistence as H1  # noqa: E402  复用同一拓扑：图案/门面/HostWindow
+
+# 本件此前**不钉锚点**——同族四把尺子（h4/h5/h6/hygiene）都钉。2026-09-30 做跨轮 A/B 时才暴露：
+# 同一份日志无法自证是哪只轮子跑的，只能靠文件名外部约定 ⇒ 补这一格。换轮未记账会在此响。
+ANCHOR = "v0.1.0-beta.2"
 
 DX, DY = 180, -120
 INPLACE_PX = 1.5    # 屏幕「到位」判据（NCC 峰值定位是整数像素，留 1.5 px 量化余量）
@@ -222,6 +228,10 @@ def main() -> int:
     cx0, cy0 = px + H1.PATTERN_W / 2, py + H1.PATTERN_H / 2
     fact("图案请求位", f"({px},{py}) 尺寸 {H1.PATTERN_W}x{H1.PATTERN_H}"
          f" ⇒ 期望中心 ({cx0:.0f},{cy0:.0f})")
+    anchor = getattr(fidus, "__git_commit__", None)
+    anchor_ok = anchor == ANCHOR
+    fact("fidus.__git_commit__", f"{anchor!r} 期望 {ANCHOR!r} ⇒ "
+         + ("命中" if anchor_ok else "✗ 换轮未记账：本日志的读数不可归因于登记的那一轮件"))
 
     host = H1.HostWindow()
     host.move(px, py)
@@ -423,6 +433,9 @@ def main() -> int:
 
     # ── 判定
     print("\n[VERDICT]")
+    print(f"VERDICT-ANCHOR : {anchor!r} vs 登记 {ANCHOR!r} ⇒ "
+          + ("同一轮件，读数可归因" if anchor_ok
+             else "✗ 换轮未记账：下面的『过渡在哪一侧』不可归因于登记的那一轮件"))
     if dropped:
         print(f"EXCLUDED         : {dropped} ⇒ 该臂有 estimate 抛异常，不参与判定")
     if not real:

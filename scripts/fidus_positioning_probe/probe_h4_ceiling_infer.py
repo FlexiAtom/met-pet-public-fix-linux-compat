@@ -53,7 +53,9 @@ MIN_CONFIDENCE_CEILING = 0.05  # 与 fidus-estimate 的 `const MIN_CONFIDENCE_CE
 # 按**符号**引不按行号引：换轮后行号会漂（本轮已从 164 漂到 168），行号引用看着精确、实际易烂。
 # 本件的预测**跟着引擎判据走**（见 `predict_cap`）⇒ 换轮不重跑，"conf ≠ 预测"这一半就失去意义。
 # 所以锚点要显式断言，不能靠人记住（§12h-3）。
-ANCHOR = "v0.1.0-beta.1-61-gf75e05b"
+ANCHOR = "v0.1.0-beta.2"   # 2026-09-30 全臂重跑于 beta.2：a10/blocks/noise 三格 conf 与预测逐位全等
+                           # （0.10667813569307327 / 0.057997610419988632 / 0.98493719100952148），
+                           # noise_blur 0.4480660855770111 < ceiling、stripe 仍被门拒 ⇒ 与 -61 逐位相同
 
 
 def fact(label, value) -> None:
@@ -221,12 +223,15 @@ def main() -> int:
              f"新预测={_fmt(p.get('cap_f32'))} "
              f"观察={[_fmt(c) for c in confs]} ⇒ {verdict} {r.get('note', '')[:60]}")
     scored = [r for r in rows if r.get("confs")]
+    gated = [r["key"] for r in rows if r.get("fatal") == "no-screen"]
     new_eq = [r["key"] for r in scored if r["eq"] and all(r["eq"])]
     old_eq = [r["key"] for r in scored
               if all(c == r["pred"].get("cap_fine") for c in r["confs"])]
     print(f"VERDICT-PRED   : 有 conf 读数的模板 {len(scored)} 张 ⇒ 新预测逐位全等 "
           f"{new_eq or '无'}；旧预测逐位全等 {old_eq or '无'}"
-          + ("　⇒ 两把尺子可分辨（旧的对得上旧格、新的对得上新格）" if new_eq and old_eq
+          + ("　⇒ ✗ 本组**没有一张**过存在性闸门 ⇒ 桌面状态问题（未上屏/被遮/被平铺器缩放），"
+             "与复刻链无关，别把上一行的『无』读成判据失败" if not scored and gated
+             else "　⇒ 两把尺子可分辨（旧的对得上旧格、新的对得上新格）" if new_eq and old_eq
              else "　⇒ 只有一把对得上，另一把已失真或本格未命中" if new_eq or old_eq
              else "　⇒ ✗ 两把都不如观察，复刻链漂移"))
     fact("判别力所在", "只有**预测 ceiling > 0.5** 的模板才真能证伪'conf 是固定标志值'：若那里也逐位相等，"

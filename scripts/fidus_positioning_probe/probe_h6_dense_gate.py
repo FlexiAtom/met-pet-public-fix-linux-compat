@@ -56,9 +56,9 @@ import fidus  # noqa: E402
 import probe_h3_targetability as H3  # noqa: E402
 import probe_h5_ceiling_surface as H5  # noqa: E402
 
-ANCHOR = "v0.1.0-beta.1-58-ge4947aa"
-WHEEL_SHA = "659999369d75fbd422d8f2f997f97856c25860d3fb5812ba0d2fcc92c270fa7c"
-SO_SHA = "8da095803002d6ce61389fe0331c62ea94d3867748dc5cce9970452af8f34a79"
+ANCHOR = "v0.1.0-beta.2"   # 2026-09-30 全族在 beta.2 上重跑过 ⇒ 锚点随之上移
+WHEEL_SHA = "0b55463b118829d11cd3599bd01c34a507a2cd9c3ff9a541afa3d93f64bf7abb"
+SO_SHA = "4d201cb38628f7e8a35ced9b5663b09cdff2f6ef6ba08be1e104793aa4c76216"
 FINE_RADII = (2, 4, 8, 16)        # fidus 保留未动的那四个细半径
 DENSE_BUDGET = 60_000_000         # 像素积预算（fidus 件 §2 原文数字）
 MAX_SELF_SIM = H3.MAX_SELF_SIMILARITY   # 0.98：默认策略的拒绝线
@@ -144,7 +144,7 @@ def arm_identity() -> dict:
     print("\n=== 0 · 交付面自证（锚点 / 内嵌 sha / 新签名 / 新文档面在件）===")
     so = Path(fidus.__file__).with_name("fidus.abi3.so")
     wheel = Path.home() / ".Athena/projects/meapet/reference/artifacts" / (
-        "fidus-0.1.0.dev0-cp310-abi3-manylinux_2_35_x86_64.whl")
+        "fidus-0.1.0b2-cp310-abi3-manylinux_2_35_x86_64.whl")
     anchor = getattr(fidus, "__git_commit__", None)
     fact("fidus.__git_commit__", f"{anchor!r} 期望 {ANCHOR!r} ⇒ "
          + ("命中" if anchor == ANCHOR else "✗ 不是本批的件"))
