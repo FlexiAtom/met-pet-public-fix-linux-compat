@@ -24,9 +24,12 @@
 * `VERDICT-ADJ`：把"要几条"变成可打印的数。**两栏**：只按「相邻互差 ≤2 px」（fidus 文档的原样判据）
   与再并上「离期望 ≤2 px」。二者不等即"假稳"——大位移后读数停在错处不动时互差恒为 0，只看互差会
   在第 2 条就报"稳"（2026-09-30 amp4 实测，故本件原先的单栏输出是一个会自己发绿的假阳性）。
-* `VERDICT-RECOVER`（`--recover`）：失控有两种形态，都以 conf 塌到 0 为前置——`外推`（末条 ≥2× 幅值，
-  一路发散）与`冻结`（末两条互差 ≤2 px 而离期望 >2 px，停在错处不动）。旧判据只有前者，而实测冻结态
-  的距离比是 0.9994 ⇒ 永远看不见要判的那个形态，出口结论出不来（理由与 GAIN 调不下来的原因见常量处）。
+* `VERDICT-RECOVER`（`--recover`）：失控判据是**一条**——末条 conf 塌到 0 而末条离期望 >2 px。
+  健康臂 conf 恒等于逐注册常数，进不了 conf 门，故不必再用距离倍数分"发散/衰减"。读数在做什么
+  （`冻结` / `慢速外推` / `逼近中`，可叠 `+发散`）只作形态标签打印，不参与判定。
+  这一条是两轮补出来的：先只有「≥2× 幅值」这个端点（看不见 amp4 实测的冻结态，其距离比 0.9994），
+  补上「互差 ≤2 px」这个端点后仍漏**端点之间**的慢速外推（互差 17 px、距离比 ~1.0 那种，
+  `fidus-self-window-positioning` §12e-4 形态② 实测过）⇒ 判据收到收敛性一条上（全程见常量处 ①②③）。
 
 分辨率限制（不掩饰）：`estimate` 实测 ≈0.6–1.1 s/条、每条返回后再花 ≈0.2–0.4 s 才抓到那一屏（两者
 本件都打出来）⇒ 短于一个 estimate 周期的过渡**看不见**；fidus 那次抓屏在 estimate 调用内部的哪一刻
@@ -85,14 +88,20 @@ INPLACE_PX = 1.5    # 屏幕「到位」判据（NCC 峰值定位是整数像素
 SCREEN_OK_PX = 3.0  # 尺子 A 认定「屏幕侧无过渡」的上限
 FIDUS_FIRST_PX = 10.0  # 尺子 B 首条算「明显偏」的下限
 # 失控（--recover 要判的东西）得先有可打印的定义，否则"挽回"无从谈起。
-# conf 塌到 0 是两种形态共有的前置条件；只看偏移会把正常的阻尼收敛（首条也偏上百 px）误判成失控。
-RUNAWAY_CONF = 0.001  # conf 上限：高于它就不算失控
-RUNAWAY_GAIN = 2.0    # 外推型：末条离期望 ≥ 该倍数的位移幅值，才算"发散"而非"衰减中"
-# 但 GAIN 这一半**结构性看不见第二种失控形态**。2026-09-30 amp4 实测：773 px 单跳后四条读数
-# 全同（互差 0.00、conf 0.0000），末条离期望 772.53 px 而幅值 773.00 px ⇒ 比值 0.99939，
-# 任何 ≥1.0 的 GAIN 都会漏；往下调到 <1.0 又会把正常阻尼收敛的末段判成失控。
-# 判别特征不是"离得多远"，而是"**停在远处不动**"：
-ADJ_TOL_PX = 2.0      # 「相邻互差 ≤ 它」= 读数不再动（本件所有互差阈值走这一个数，含冻结型判据）
+# 2026-09-30 两轮补判据后的最终形态：**主判据只有一条——进了 conf 门而末条又不在期望位**。
+# 距离倍数（GAIN）从主判据**降级成形态标签**，原因见下两段。
+RUNAWAY_CONF = 0.001  # conf 上限：高于它就不算失控（健康臂 conf 恒等于逐注册常数 ceiling，进不了这道门）
+# ① 只看 GAIN 会漏**冻结**态：amp4 实测 773 px 单跳后四条读数全同（互差 0.00、conf 0.0000），
+#    末条离期望 772.53 而幅值 773.00 ⇒ 比值 0.99939，GAIN 只要 ≥1.0 就必然漏。
+# ② 补了冻结之后仍漏**中间态**（|v| 小而非零的慢速外推）：本件 `runaway_mode` 原先的两个型都是
+#    **端点检查**——一个查距离比、一个查步长——而端点之间那段两头不靠：步长 >ADJ_TOL 不算冻结，
+#    距离比 <GAIN 不算外推 ⇒ 打印「未失控」。这不是假想情形：`fidus-self-window-positioning`
+#    §12e-4 明记 conf==0 有两形，其中「逐次外推漂移 `1223→1240`、`1679→1693→1710`，每步 ~17 px」
+#    就是中间态的实测；取 amp4 几何按 17 px/步走，4 条窗口内比值落在 [0.93, 1.07] ⇒ 两型都不命中。
+# ③ 端点检查之所以多余：conf==0 的坐标按 fidus 语义是**标注为信念、非测量**（coasting），
+#    它与"离得多远""跑得多快"无关。故判据收到一条上，形态只作标签供读日志，不再参与判定。
+RUNAWAY_GAIN = 2.0    # 形态标签「发散」的下界：末条离期望 ≥ 该倍数 × 位移幅值（不参与是否失控的判定）
+ADJ_TOL_PX = 2.0      # 三个用途共用这一个数：互差判稳 / 形态「冻结」的不动界 / 形态「慢速外推」的逼近容差
 SETTLED_PX = 2.0      # 「离期望 ≤ 它」= 读数到位。与 ADJ_TOL_PX 同值而**含义不同**，故分两个名字
 RECOVER_OK_PX = 5.0   # 重注册后首条离期望的上限（此时屏幕已稳，比 2 px 略宽留量化余量）
 NAN = float("nan")
@@ -185,30 +194,50 @@ def along_proj(rows, move_vec, center):
 
 
 def runaway_mode(arm) -> str:
-    """conf 塌到 `RUNAWAY_CONF` 以下后，再看读数自身是"跑"还是"停"。返回命中的型（'' = 不失控）。
+    """末条 conf 塌到 `RUNAWAY_CONF` 以下**且**末条不在期望位 ⇒ 失控。返回值只是**形态标签**，不参与判定。
 
-    * `外推`：末条离期望 ≥ `RUNAWAY_GAIN` × 幅值——朝错误方向一路发散。
-    * `冻结`：末两条互差 ≤ `ADJ_TOL_PX` **而**末条离期望 > `SETTLED_PX`——停在错处不动。
-      这一型是 2026-09-30 由 amp4 实测补上的：旧判据只有 `外推` 那一半，而冻结态的距离比是
-      0.99939（离期望 772.53 / 幅值 773.00），`RUNAWAY_GAIN` 只要 ≥1.0 就必然漏 ⇒ 判据看不见
-      自己唯一要判的形态，`--recover` 的出口结论永远出不来（理由与调不下来的原因见常量处）。
+    主判据一条就够：conf==0 的坐标按 fidus 语义是"标注为信念、非测量"，与它离得多远、跑得多快无关；
+    而健康臂的 conf 恒等于逐注册常数 `confidence_ceiling`（amp1/amp2 实测 `[0.1067]*4`），
+    **根本进不了这道门** ⇒ 不需要再用距离倍数去区分"发散"与"衰减中"。判据的两轮演变与
+    为什么端点检查不够，见常量处 ①②③。
+
+    形态标签（读数自身在做什么，供读日志与归因用）：
+    * `冻结`：末两条互差 ≤ `ADJ_TOL_PX`——停在错处不动（amp4 实测形，|v|≈0 的端点）。
+    * `慢速外推`：互差 > `ADJ_TOL_PX` 而离期望没缩小（或无从比较）——端点之间的**一般情形**。
+      这一格就是本函数原先漏掉的：互差 >2 不算冻结、距离比 <2 不算外推，两型两头不靠 ⇒ 打印「未失控」。
+    * `逼近中`：离期望在逐条缩小——coasting 恰好朝正确方向挪。**仍判失控**，因为它到没到位都不是测量。
+    * `形态不可判`：只有一条读数、或前一条抛异常 ⇒ 趋势无从比较。判定照走（主判据只看末条），
+      但**不凭空给它一个趋势标签**。
+    * `+发散`：末条离期望 ≥ `RUNAWAY_GAIN` × 幅值——可叠加在后三者之上，只说明"已经跑到两倍开外"。
 
     取**末条**而不是全列 max：位移后首条是锁定读数（conf == ceiling），conf 塌到 0 从第 2 条起
     ——按全列 max 判会把每一个真位移臂都判成"未失控"（run2 实测踩到，判据自身被否证一次）。
+
+    返回 `''` 的三种情形：末条 conf 未塌（健康）、末条正好在期望位（信念碰对了，无需挽回）、
+    末条抛异常（无距离可判；该臂已在逐臂行与 `dropped` 里明写"不参与判定"，不在这里充数）。
     """
     last = arm["rows"][-1]
     if not last["conf"] <= RUNAWAY_CONF:
         return ""
-    if last["d_f"] != last["d_f"]:                    # 该条抛异常 ⇒ 无距离，两型都不成立
+    if last["d_f"] != last["d_f"]:                    # 末条抛异常 ⇒ 无距离可判（处置见上一段）
         return ""
-    modes = []
-    if last["d_f"] >= RUNAWAY_GAIN * arm["move_px"]:
-        modes.append("外推")
+    if last["d_f"] <= SETTLED_PX:
+        return ""                                     # 信念恰好落在期望位：仍不可信，但不需要挽回
     adj = arm["adj"] or []                     # 同一把尺子：相邻两读数的平面距离，不是距离之差
+    devs = [row["d_f"] for row in arm["rows"]]
     step = adj[-1] if adj else NAN
-    if step == step and step <= ADJ_TOL_PX and last["d_f"] > SETTLED_PX:
-        modes.append("冻结")
-    return "+".join(modes)
+    prev_dev = devs[-2] if len(devs) >= 2 else NAN
+    if step == step and step <= ADJ_TOL_PX:
+        mode = "冻结"
+    elif step != step and prev_dev != prev_dev:
+        mode = "形态不可判"                # 只有一条读数、或前一条抛异常 ⇒ 无趋势可比（判定不受影响）
+    elif prev_dev != prev_dev or last["d_f"] >= prev_dev - ADJ_TOL_PX:
+        mode = "慢速外推"
+    else:
+        mode = "逼近中"
+    if last["d_f"] >= RUNAWAY_GAIN * arm["move_px"]:
+        mode += "+发散"
+    return mode
 
 
 def adj_settle(adj, tol=ADJ_TOL_PX):
@@ -450,10 +479,14 @@ def main() -> int:
         pre = [m for m in arms if m["real"]][-1]
         ctr = pre["center"]
         pre_mode = runaway_mode(pre)
+        pdev = [r["d_f"] for r in pre["rows"]]
+        ptrend = ("—" if len(pdev) < 2 or pdev[-2] != pdev[-2] else f"{pdev[-2]:.2f}→") + \
+                 ("—" if pdev[-1] != pdev[-1] else f"{pdev[-1]:.2f}")
         print(f"\n[恢复臂] 停在期望中心 ({ctr[0]:.0f},{ctr[1]:.0f})、不移动"
               f"｜上一臂 {pre['tag']} 末条离期望 {fnum(pre['last_dev'])} px"
               f"（其 conf 序列 {[round(r['conf'], 4) for r in pre['rows']]}）"
               f"｜末两条互差 {fnum(pre['adj'][-1] if pre['adj'] else None)} px"
+              f"｜离期望 {ptrend} px"
               f"⇒ 按判据 "
               + (f"**算**失控（{pre_mode} 型）" if pre_mode else "**不算**失控"))
         recs = []
@@ -565,13 +598,19 @@ def main() -> int:
         pre = rec["pre"]
         zc = sum(1 for r in pre["rows"] if r["conf"] <= RUNAWAY_CONF)
         padj = pre["adj"]
+        pdv = [r["d_f"] for r in pre["rows"]]
+        ptr = ("—" if len(pdv) < 2 or pdv[-2] != pdv[-2] else f"{pdv[-2]:.2f}→") + \
+              ("—" if pdv[-1] != pdv[-1] else f"{pdv[-1]:.2f}")
         print(f"VERDICT-RECOVER  : 上一臂 {pre['tag']}（幅值 {pre['move_px']:.0f} px，"
               f"conf ≤ {RUNAWAY_CONF:g} 的条数 {zc}/{len(pre['rows'])}，末条 "
               f"{fnum(pre['rows'][-1]['d_f'])} px、末条 conf {pre['rows'][-1]['conf']:.4f}、"
-              f"末两条互差 {fnum(padj[-1] if padj else None)} px）"
-              f"⇒ 按「末条 conf ≤ {RUNAWAY_CONF:g} 且（末条 ≥ {RUNAWAY_GAIN:g}× 幅值 = 外推"
-              f" ｜ 互差 ≤ {ADJ_TOL_PX:g} 而离期望 > {SETTLED_PX:g} px = 冻结）」判为 "
+              f"末两条互差 {fnum(padj[-1] if padj else None)} px、离期望 {ptr} px）"
+              f"⇒ 按「末条 conf ≤ {RUNAWAY_CONF:g} 且末条离期望 > {SETTLED_PX:g} px」判为 "
               + (f"**失控（{rec['mode']} 型）**" if rec["mode"] else "**未失控**"))
+        print(f"                   形态标签只描述读数在做什么，不参与判定："
+              f"互差 ≤{ADJ_TOL_PX:g} px = 冻结；否则离期望没缩小 ≥{ADJ_TOL_PX:g} px = 慢速外推、"
+              f"在缩小 = 逼近中、无趋势可比 = 形态不可判；离期望 ≥{RUNAWAY_GAIN:g}× 幅值再并记 +发散"
+              f"（旧判据取其中两个**端点**做判定，端点之间的慢速外推会打印「未失控」，2026-09-30 收口）")
         for sub in rec["arms"]:
             dp = [r["d_f"] for r in sub["rows"]]
             sp = [r["scr"]["d"] for r in sub["rows"] if r["scr"]["d"] is not None]
