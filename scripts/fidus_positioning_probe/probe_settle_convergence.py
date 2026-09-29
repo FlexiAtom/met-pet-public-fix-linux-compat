@@ -21,6 +21,12 @@
   不是"读到了还没搬完的屏幕"。
 * `VERDICT-CONSUME`：末条离期望 ≤2 px 且与倒数第二条互差 ≤2 px ⇒ "位移后多读几条、取末条"这一
   **时间基**消费规则成立；否则消费方必须按读数自身判稳（等多少条都不保证）。
+* `VERDICT-ADJ`：把"要几条"变成可打印的数。**两栏**：只按「相邻互差 ≤2 px」（fidus 文档的原样判据）
+  与再并上「离期望 ≤2 px」。二者不等即"假稳"——大位移后读数停在错处不动时互差恒为 0，只看互差会
+  在第 2 条就报"稳"（2026-09-30 amp4 实测，故本件原先的单栏输出是一个会自己发绿的假阳性）。
+* `VERDICT-RECOVER`（`--recover`）：失控有两种形态，都以 conf 塌到 0 为前置——`外推`（末条 ≥2× 幅值，
+  一路发散）与`冻结`（末两条互差 ≤2 px 而离期望 >2 px，停在错处不动）。旧判据只有前者，而实测冻结态
+  的距离比是 0.9994 ⇒ 永远看不见要判的那个形态，出口结论出不来（理由与 GAIN 调不下来的原因见常量处）。
 
 分辨率限制（不掩饰）：`estimate` 实测 ≈0.6–1.1 s/条、每条返回后再花 ≈0.2–0.4 s 才抓到那一屏（两者
 本件都打出来）⇒ 短于一个 estimate 周期的过渡**看不见**；fidus 那次抓屏在 estimate 调用内部的哪一刻
@@ -79,10 +85,15 @@ INPLACE_PX = 1.5    # 屏幕「到位」判据（NCC 峰值定位是整数像素
 SCREEN_OK_PX = 3.0  # 尺子 A 认定「屏幕侧无过渡」的上限
 FIDUS_FIRST_PX = 10.0  # 尺子 B 首条算「明显偏」的下限
 # 失控（--recover 要判的东西）得先有可打印的定义，否则"挽回"无从谈起。
-# 实测大位移下 conf 恰为 0.0000 且读数一路外推——两个条件缺一不可，
-# 只看偏移会把正常的阻尼收敛（首条也偏上百 px）误判成失控。
+# conf 塌到 0 是两种形态共有的前置条件；只看偏移会把正常的阻尼收敛（首条也偏上百 px）误判成失控。
 RUNAWAY_CONF = 0.001  # conf 上限：高于它就不算失控
-RUNAWAY_GAIN = 2.0    # 且末条离期望 ≥ 该倍数的位移幅值，才算"外推"而非"衰减中"
+RUNAWAY_GAIN = 2.0    # 外推型：末条离期望 ≥ 该倍数的位移幅值，才算"发散"而非"衰减中"
+# 但 GAIN 这一半**结构性看不见第二种失控形态**。2026-09-30 amp4 实测：773 px 单跳后四条读数
+# 全同（互差 0.00、conf 0.0000），末条离期望 772.53 px 而幅值 773.00 px ⇒ 比值 0.99939，
+# 任何 ≥1.0 的 GAIN 都会漏；往下调到 <1.0 又会把正常阻尼收敛的末段判成失控。
+# 判别特征不是"离得多远"，而是"**停在远处不动**"：
+ADJ_TOL_PX = 2.0      # 「相邻互差 ≤ 它」= 读数不再动（本件所有互差阈值走这一个数，含冻结型判据）
+SETTLED_PX = 2.0      # 「离期望 ≤ 它」= 读数到位。与 ADJ_TOL_PX 同值而**含义不同**，故分两个名字
 RECOVER_OK_PX = 5.0   # 重注册后首条离期望的上限（此时屏幕已稳，比 2 px 略宽留量化余量）
 NAN = float("nan")
 
@@ -154,7 +165,7 @@ def read_column(eng, pattern, center, n, t_origin, gscale, tag) -> list:
     return rows
 
 
-def settle_index(rows, tol=2.0):
+def settle_index(rows, tol=SETTLED_PX):
     """首条「离期望 ≤tol 且此后再不回退」的下标；没有则 None。"""
     for i, row in enumerate(rows):
         if row["d_f"] <= tol and all(v["d_f"] <= tol for v in rows[i:]):
@@ -173,19 +184,34 @@ def along_proj(rows, move_vec, center):
             for row in rows]
 
 
-def is_runaway(arm) -> bool:
-    """`RUNAWAY_CONF` × `RUNAWAY_GAIN` 两条同时成立才算失控（定义见常量处的理由）。
+def runaway_mode(arm) -> str:
+    """conf 塌到 `RUNAWAY_CONF` 以下后，再看读数自身是"跑"还是"停"。返回命中的型（'' = 不失控）。
+
+    * `外推`：末条离期望 ≥ `RUNAWAY_GAIN` × 幅值——朝错误方向一路发散。
+    * `冻结`：末两条互差 ≤ `ADJ_TOL_PX` **而**末条离期望 > `SETTLED_PX`——停在错处不动。
+      这一型是 2026-09-30 由 amp4 实测补上的：旧判据只有 `外推` 那一半，而冻结态的距离比是
+      0.99939（离期望 772.53 / 幅值 773.00），`RUNAWAY_GAIN` 只要 ≥1.0 就必然漏 ⇒ 判据看不见
+      自己唯一要判的形态，`--recover` 的出口结论永远出不来（理由与调不下来的原因见常量处）。
 
     取**末条**而不是全列 max：位移后首条是锁定读数（conf == ceiling），conf 塌到 0 从第 2 条起
     ——按全列 max 判会把每一个真位移臂都判成"未失控"（run2 实测踩到，判据自身被否证一次）。
     """
     last = arm["rows"][-1]
-    if not last["conf"] <= RUNAWAY_CONF:  # NaN-safe：抛异常的条 conf=-1，但 d_f 是 NaN，下面挡住
-        return False
-    return last["d_f"] == last["d_f"] and last["d_f"] >= RUNAWAY_GAIN * arm["move_px"]
+    if not last["conf"] <= RUNAWAY_CONF:
+        return ""
+    if last["d_f"] != last["d_f"]:                    # 该条抛异常 ⇒ 无距离，两型都不成立
+        return ""
+    modes = []
+    if last["d_f"] >= RUNAWAY_GAIN * arm["move_px"]:
+        modes.append("外推")
+    adj = arm["adj"] or []                     # 同一把尺子：相邻两读数的平面距离，不是距离之差
+    step = adj[-1] if adj else NAN
+    if step == step and step <= ADJ_TOL_PX and last["d_f"] > SETTLED_PX:
+        modes.append("冻结")
+    return "+".join(modes)
 
 
-def adj_settle(adj, tol=2.0):
+def adj_settle(adj, tol=ADJ_TOL_PX):
     """最早的第 j 对满足 `|Δ_j| ≤ tol` **且其后各对皆 ≤ tol** ⇒ 敢说"稳"至少要读到第几 *条*。
 
     fidus 文档的判据是"相邻两条互差不超过容差"，而该判据**是否够用取决于手里有几条**：
@@ -195,6 +221,22 @@ def adj_settle(adj, tol=2.0):
     good = [a == a for a in adj]
     for j, a in enumerate(adj):
         if good[j] and a <= tol and all(good[k] and adj[k] <= tol for k in range(j + 1, len(adj))):
+            return j + 2
+    return None
+
+
+def adj_settle_both(adj, devs, adj_tol=ADJ_TOL_PX, settle_px=SETTLED_PX):
+    """`adj_settle` 加上"读数得真的在期望位"那一半：第 j 对及其后**各对互差 ≤ adj_tol 且各条离期望 ≤ settle_px**。
+
+    与 `adj_settle` 的差就是这条判据漏掉的那一半：2026-09-30 amp4 冻结态互差 0.00，旧函数
+    第 2 条就报"稳"，而那四条离期望 772.53 px ⇒ 单靠互差判稳会把"停在错处"读成"稳定在目标"。
+    两者都满足才敢说稳——这条与 `--recover` 的 `冻结` 型是同一个事实的两面。
+    None = 这一列里从未"又稳又到位"。
+    """
+    ok = [a == a and a <= adj_tol for a in adj]
+    near = [v == v and v <= settle_px for v in devs]
+    for j in range(len(adj)):
+        if all(ok[k] and near[k] and near[k + 1] for k in range(j, len(adj))):
             return j + 2
     return None
 
@@ -217,7 +259,7 @@ def main() -> int:
                     help="set_position 后**先空等**几秒再取第一枪（首枪间隔）")
     ap.add_argument("--recover", action="store_true",
                     help="末尾加一臂：不移动，只**重注册**同一模板再读若干条 ⇒ 看"
-                         "大位移失控（conf 恒 0、读数一路外推）能否靠重注册撤销")
+                         "大位移失控（conf 恒 0、读数外推或冻结）能否靠重注册撤销")
     args = ap.parse_args()
 
     print("=== 位移后的两把尺子（grim+NCC 独立实测 vs fidus estimate）===")
@@ -345,6 +387,7 @@ def main() -> int:
             "adj": adj, "gap_med": med([rows[k]["t"] - rows[k - 1]["t"]
                                         for k in range(1, len(rows))]),
             "need_col": adj_settle(adj),
+            "need_col2": adj_settle_both(adj, [row["d_f"] for row in rows]),
         }
         arms.append(m)
         print(f"\n[{tag}] 请求 {frm} → ({tx},{ty})（移动 {m['move_px']:.0f} px）"
@@ -374,7 +417,9 @@ def main() -> int:
                  + f"（越过稳态位最多 {max(m['along']):+.1f} px）")
         fact("  相邻互差 Δ(px)", " ".join("—" if a != a else f"{a:.2f}" for a in m["adj"])
              + f"｜dt 中位 {m['gap_med']:.2f}s｜互差判据要读到 "
-             + ("本列内从未稳" if m["need_col"] is None else f"{m['need_col']} 条"))
+             + ("本列内从未稳" if m["need_col"] is None else f"{m['need_col']} 条")
+             + "｜互差且离期望≤" + f"{SETTLED_PX:g}" + "px 要读到 "
+             + ("本列内从未又稳又到位" if m["need_col2"] is None else f"{m['need_col2']} 条"))
 
     if not args.no_control:
         take("对照·原地set_position", px, py, (px, py), (cx0, cy0))
@@ -404,10 +449,13 @@ def main() -> int:
     elif args.recover:
         pre = [m for m in arms if m["real"]][-1]
         ctr = pre["center"]
+        pre_mode = runaway_mode(pre)
         print(f"\n[恢复臂] 停在期望中心 ({ctr[0]:.0f},{ctr[1]:.0f})、不移动"
               f"｜上一臂 {pre['tag']} 末条离期望 {fnum(pre['last_dev'])} px"
               f"（其 conf 序列 {[round(r['conf'], 4) for r in pre['rows']]}）"
-              f"⇒ 按判据 {'**算**失控' if is_runaway(pre) else '**不算**失控'}")
+              f"｜末两条互差 {fnum(pre['adj'][-1] if pre['adj'] else None)} px"
+              f"⇒ 按判据 "
+              + (f"**算**失控（{pre_mode} 型）" if pre_mode else "**不算**失控"))
         recs = []
         for cal in (False, True):
             label = "重注册+校准" if cal else "仅重注册"
@@ -425,7 +473,7 @@ def main() -> int:
                       f" {row['conf']:8.4f}   屏幕 {fnum(row['scr']['d'])}px"
                       f" 峰={fnum(row['scr']['peak'], '{:.4f}')}")
             recs.append({"label": label, "ms": reg_ms, "rows": rows})
-        rec = {"pre": pre, "runaway": is_runaway(pre), "arms": recs}
+        rec = {"pre": pre, "mode": pre_mode, "arms": recs}
 
     real = [m for m in arms if m["real"] and m["usable"]]
     ctrl = [m for m in arms if not m["real"]]
@@ -454,8 +502,9 @@ def main() -> int:
               + ("过渡在 **fidus 进程内**（其内部时域滤波，或其那次抓屏取到旧帧——本件分不开这两者，"
                  "但都排除合成器/屏幕）。" if locus_fidus else
                  "不满足「屏稳而 fidus 偏」⇒ 本件不支持 fidus 内部过渡这一归因。"))
-        ok_t = [m for m in real if m["last_dev"] <= 2.0 and m["last_step"] <= 2.0]
-        print(f"VERDICT-CONSUME  : 末条离期望 ≤2 px 且与倒数第二条互差 ≤2 px 的真位移臂 "
+        ok_t = [m for m in real if m["last_dev"] <= SETTLED_PX and m["last_step"] <= ADJ_TOL_PX]
+        print(f"VERDICT-CONSUME  : 末条离期望 ≤{SETTLED_PX:g} px 且与倒数第二条互差 ≤{ADJ_TOL_PX:g} px"
+              f" 的真位移臂 "
               f"{len(ok_t)}/{len(real)}"
               f"（逐臂末条 {[round(m['last_dev'], 2) for m in real]}、步长 "
               f"{[round(m['last_step'], 2) for m in real]}）⇒ "
@@ -470,19 +519,42 @@ def main() -> int:
             print(f"OBS-OVERSHOOT    : {hits}/{len(overs)} 条真位移臂在逼近中越过稳态位"
                   f"（沿运动方向最大越界 {mx:+.1f} px）⇒ 形态是**阻尼收敛**，不是单向逼近。")
         # ── VERDICT-ADJ：fidus 件 `meapet-settle-count-alignment` 的反证行——"6 条"是不是普适常数
-        need = [m["need_col"] for m in real]
+        need = [m["need_col"] for m in real]      # fidus 文档那条判据的原样：只看相邻互差
+        need2 = [m["need_col2"] for m in real]    # 加上「末条得真的在期望位」那一半
+        fake = [f"{m['tag']}（末条 {m['last_dev']:.2f} px）" for m in real
+                if m["need_col"] is not None and m["last_dev"] > SETTLED_PX]
         print("VERDICT-ADJ      : 幅值倍率 amp={:.2f} 首枪间隔 {:.1f}s 列数上限 {} ⇒ 各臂按"
-              "「相邻互差 ≤2 px」判稳**所需条数** {}".format(args.amp, args.gap, args.col, need))
-        print(f"                   逐臂（幅值 px / dt 中位 s / 所需条数）: " + "；".join(
+              "「相邻互差 ≤{:g} px」判稳**所需条数** {}；再并上「离期望 ≤{:g} px」后 "
+              "{}".format(args.amp, args.gap, args.col, ADJ_TOL_PX, need, SETTLED_PX, need2))
+        if fake:
+            print(f"                   ✗ 假稳 {len(fake)}/{len(real)} 臂：{fake} 按互差已判到「稳」"
+                  f"而末条离期望仍 >{SETTLED_PX:g} px ⇒「相邻互差」单用会把「停在错处不动」读成"
+                  "「稳定在目标」，判稳必须并上离期望条件")
+        print("                   逐臂（幅值 px / dt 中位 s / 仅互差条数 / 互差且到位条数）: " + "；".join(
             f"{m['move_px']:.0f}/{m['gap_med']:.2f}/"
-            + (">" + str(args.col) if m["need_col"] is None else str(m["need_col"]))
+            + (">" + str(args.col) if m["need_col"] is None else str(m["need_col"])) + "/"
+            + (">" + str(args.col) if m["need_col2"] is None else str(m["need_col2"]))
             for m in real))
-        uniq = {n for n in need}
-        print("                   ⇒ " + ("本组内各臂所需条数**相同** ⇒ 在该幅值该间隔下"
-                                         "条数看不出对幅值的依赖，须换 amp 重跑"
-                                         if len(uniq) == 1 else
-                                         "所需条数在组内就不齐 ⇒ 「读 6 条」是**有条件**的经验值，"
-                                         "契约里必须写成「幅值 × 首枪间隔」的函数或留余量"))
+        uniq = {n for n in need2}
+        if uniq == {None}:
+            steps = [round(m["last_step"], 2) for m in real]
+            devs = [round(m["last_dev"], 2) for m in real]
+            stuck = [i for i, m in enumerate(real) if m["last_step"] <= ADJ_TOL_PX
+                     and m["last_dev"] > SETTLED_PX]
+            why = ("读数**停在错处**（对上失控/假稳行看）" if len(stuck) == len(real) else
+                   "读数**仍在移动**（互差 >{:g} px）".format(ADJ_TOL_PX) if not stuck else
+                   f"{len(real) - len(stuck)} 臂仍在移动、{len(stuck)} 臂停在错处")
+            print(f"                   ⇒ 本组各臂在 {args.col} 条内**从未**「又稳又到位」⇒ 瓶颈不是条数："
+                  f"{why}（逐臂末两条互差 {steps}、末条离期望 {devs}）"
+                  + ("；加 --col 才能定位拐点" if len(stuck) < len(real) else ""))
+        else:
+            print("                   ⇒ " + ("本组内各臂所需条数**相同** ⇒ 在该幅值该间隔下"
+                                             "条数看不出对幅值的依赖，须换 amp 重跑"
+                                             if len(uniq) == 1 else
+                                             "所需条数在组内就不齐 ⇒ 「读 6 条」是**有条件**的经验值，"
+                                             "契约里必须写成「幅值 × 首枪间隔」的函数或留余量")
+                  + ("；本组的差异由**停在错处**的臂驱动（见上假稳行），不是同一收敛过程的快慢"
+                     if fake else ""))
         if ctrl:
             c_jump = med([m["jump"] for m in ctrl])
             print(f"OBS-CONTROL      : 原地 set_position 臂首条离期望 {c_jump:.2f} px、"
@@ -492,11 +564,14 @@ def main() -> int:
     if rec is not None:
         pre = rec["pre"]
         zc = sum(1 for r in pre["rows"] if r["conf"] <= RUNAWAY_CONF)
+        padj = pre["adj"]
         print(f"VERDICT-RECOVER  : 上一臂 {pre['tag']}（幅值 {pre['move_px']:.0f} px，"
               f"conf ≤ {RUNAWAY_CONF:g} 的条数 {zc}/{len(pre['rows'])}，末条 "
-              f"{fnum(pre['rows'][-1]['d_f'])} px、末条 conf {pre['rows'][-1]['conf']:.4f}）"
-              f"⇒ 按「末条 conf ≤ {RUNAWAY_CONF:g} 且末条 ≥ {RUNAWAY_GAIN:g}× 幅值」判为 "
-              + ("**失控**" if rec["runaway"] else "**未失控**"))
+              f"{fnum(pre['rows'][-1]['d_f'])} px、末条 conf {pre['rows'][-1]['conf']:.4f}、"
+              f"末两条互差 {fnum(padj[-1] if padj else None)} px）"
+              f"⇒ 按「末条 conf ≤ {RUNAWAY_CONF:g} 且（末条 ≥ {RUNAWAY_GAIN:g}× 幅值 = 外推"
+              f" ｜ 互差 ≤ {ADJ_TOL_PX:g} 而离期望 > {SETTLED_PX:g} px = 冻结）」判为 "
+              + (f"**失控（{rec['mode']} 型）**" if rec["mode"] else "**未失控**"))
         for sub in rec["arms"]:
             dp = [r["d_f"] for r in sub["rows"]]
             sp = [r["scr"]["d"] for r in sub["rows"] if r["scr"]["d"] is not None]
@@ -508,7 +583,7 @@ def main() -> int:
             if sp and max(sp) > SCREEN_OK_PX:
                 tail = (f"屏幕本身不在期望位（>{SCREEN_OK_PX:g} px）⇒ 归因不成立，"
                         "先修可见性/位姿再看 fidus")
-            elif not rec["runaway"]:
+            elif not rec["mode"]:
                 tail = "上一臂不算失控 ⇒ 本行只说明该动作**是否打断正常跟踪**，不支撑出口结论"
             elif not ok_at:
                 tail = (f"{len(dp)} 条**无一**回到 ≤ {RECOVER_OK_PX:g} px ⇒ 该动作**不能**撤销失控")
@@ -517,11 +592,11 @@ def main() -> int:
                         f"（代价 {sub['ms']:.1f} ms，须落在 tick 外）")
             print("      ⇒ " + tail)
         can = [s["label"] for s in rec["arms"]
-               if rec["runaway"] and any(r["d_f"] == r["d_f"] and r["d_f"] <= RECOVER_OK_PX
-                                         for r in s["rows"])
+               if rec["mode"] and any(r["d_f"] == r["d_f"] and r["d_f"] <= RECOVER_OK_PX
+                                      for r in s["rows"])
                and not any(r["scr"]["d"] is not None and r["scr"]["d"] > SCREEN_OK_PX
                            for r in s["rows"])]
-        if rec["runaway"]:
+        if rec["mode"]:
             best = min((s for s in rec["arms"] if s["label"] in can), key=lambda s: s["ms"])
             print("      ⇒ 出口判定："
                   + (f"{'、'.join(can)} 均可撤销失控 ⇒ 取**最便宜**的那个：{best['label']}"
