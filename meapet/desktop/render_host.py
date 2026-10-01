@@ -1238,6 +1238,15 @@ class PetRenderHostMixin:
             return
         frame = self._fidus_current_frame()
         if frame is None:
+            # 离屏帧拿不到：这一轮开不了。静默 return 是被禁的形态（出声闸）——
+            # 症状是"启用了 fidus 但什么也不发生"，人无从下手：不知道该查渲染面
+            # 还是查引擎。气泡说的是"画面拿不到"，不是"没量准"——后者会把人引去
+            # 等校准，而缺口在渲染面这一侧。
+            safe_print("[fidus] ✗ 拿不到当前离屏帧，定位不启动（离屏渲染不可用？）")
+            self._show_bubble(
+                "拿不到当前画面，定位不了位置",
+                bubble_duration_ms(self.config, "interaction"),
+            )
             return
         self._fidus_busy = True
         self._fidus_finished = False

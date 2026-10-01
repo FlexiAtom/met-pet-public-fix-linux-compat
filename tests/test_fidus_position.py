@@ -337,7 +337,11 @@ class TestConfigAndWiring(unittest.TestCase):
         self.assertFalse(getattr(host, "_fidus_busy", False))
 
     def test_present_engine_still_reaches_the_frame(self):
-        """反向门：`have_engine()` 为真时这条检查不该挡住正常路径。"""
+        """反向门：`have_engine()` 为真时这条检查不该挡住正常路径。
+
+        帧 mock 成 None ⇒ 出声闸（test_frame_none_is_loud_not_silent 的判据）在
+        这条路径上落地；本条只判 have_engine 没挡住取帧、也没把 round 开起来。
+        """
         from meapet.desktop.render_host import PetRenderHostMixin
 
         host = object.__new__(PetRenderHostMixin)
@@ -345,9 +349,33 @@ class TestConfigAndWiring(unittest.TestCase):
         seen = []
         host._fidus_current_frame = lambda: seen.append("frame") or None
         host._show_bubble = lambda text, *_a, **_k: seen.append(text)
-        with mock.patch.object(FP, "have_engine", return_value=True):
+        with mock.patch.object(FP, "have_engine", return_value=True), \
+                mock.patch("meapet.desktop.render_host.safe_print"):
             host._maybe_start_fidus_locate(0, 0, 64, 64)
-        self.assertEqual(seen, ["frame"])
+        self.assertEqual(seen[0], "frame")
+        self.assertFalse(getattr(host, "_fidus_busy", False))
+
+    def test_frame_none_is_loud_not_silent(self):
+        """出声闸：离屏帧拿不到 ⇒ 日志与气泡都要出声，不许静默 return。
+
+        那是「启用了 fidus 但什么也不发生」时人无从下手的症状；气泡说的是
+        「画面拿不到」（缺口在渲染面），不是「没量准」——后者会把人引去等校准。
+        """
+        from meapet.desktop.render_host import PetRenderHostMixin
+
+        host = object.__new__(PetRenderHostMixin)
+        host.config = {"fidus": {"enabled": True}}
+        seen = []
+        host._fidus_current_frame = lambda: seen.append("frame") or None
+        host._show_bubble = lambda text, *_a, **_k: seen.append(text)
+        with mock.patch.object(FP, "have_engine", return_value=True), \
+                mock.patch("meapet.desktop.render_host.safe_print") as log:
+            host._maybe_start_fidus_locate(0, 0, 64, 64)
+        self.assertIn("frame", seen)
+        self.assertEqual(
+            seen[seen.index("frame") + 1], "拿不到当前画面，定位不了位置")
+        self.assertIn("拿不到当前离屏帧", log.call_args[0][0])
+        self.assertFalse(getattr(host, "_fidus_busy", False))
 
 
 class TestEnginePresence(unittest.TestCase):
