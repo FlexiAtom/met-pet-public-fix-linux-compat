@@ -140,11 +140,20 @@ def test_spec_tolerates_missing_shim_off_linux(tmp_path):
 
 
 def test_spec_fails_loud_on_linux_when_fidus_absent(tmp_path):
-    """fidus 随包分发是 standing 裁决：Linux 上没装＝打出一个没有定位能力的包。"""
+    """fidus 随包分发是 standing 裁决：Linux 上没装＝打出一个没有定位能力的包。
+
+    拿仓库根当 SPECPATH 是错的：产物不入 VCS 也不在 CI 构建 ⇒ 仓库根没有 `.so` 时，spec
+    先在桥接层那道闸出口，而它在 fidus 检查的上游，断言就落到别人家的文案上。本地有产物，
+    所以本地看不见这件事。这里放一个同名空占位把上游那道闸打开——spec 对产物只问
+    `is_file()`，不读内容——本条才真的判到 fidus 那一道。
+    """
+    from meapet.desktop import wayland_layer
+
+    (tmp_path / wayland_layer.SHIM_NAME).write_bytes(b"")
     calls: list = []
     with mock.patch.object(sys, "platform", "linux"):
         with pytest.raises(SystemExit) as exc:
-            _run_spec(REPO_ROOT, calls, fidus_present=False)
+            _run_spec(tmp_path, calls, fidus_present=False)
     assert "fidus" in str(exc.value)
 
 
