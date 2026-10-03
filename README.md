@@ -43,7 +43,7 @@ python pet.py
 ```bash
 pip install -r linux_requirements.txt
 python setup_wizard.py
-QT_QPA_PLATFORM=xcb python pet.py
+python pet.py
 ```
 
 `live2d-py` 是可选依赖；不可用时会回退到 PNG。预编译包可从 [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py) 获取。
@@ -61,6 +61,17 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 ```
 
 输出：`dist/MeaPet/MeaPet.exe` 和 `dist/MeaPet/_internal/`。
+
+### Linux 二进制包（同一份 spec）
+
+Wayland 点击穿透依赖仓库根的 `liblayer_shell_shim.so`（ctypes 直读的裸 `.so`，PyInstaller 的依赖分析看不见它），所以打包前先构建它：
+
+```bash
+bash build_layer_shell.sh
+pyinstaller MeaPet.spec
+```
+
+缺这个产物时 Linux 上的打包会直接中止并提示上面第一条命令——带着缺件打出来的包没有穿透模式，而这件事只在真机上看得见。
 
 `mea-pet` wheel 只是用于开发和依赖分发的 Python 包组件，不包含完整桌面资源目录或独立启动器。请使用源码检出目录或 PyInstaller onedir 包运行完整桌宠。
 

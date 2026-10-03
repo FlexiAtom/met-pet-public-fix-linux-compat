@@ -1,4 +1,4 @@
-//! The FFI surface: the eleven `#[no_mangle] extern "C"` exports of
+//! The FFI surface: the twelve `#[no_mangle] extern "C"` exports of
 //! spec §7.1 (the I2 set-equality contract).
 //!
 //! Every body is exactly ONE `state::guarded(...)` call (I4: the only
@@ -241,6 +241,41 @@ pub extern "C" fn layer_last_error() -> *const c_char {
             last_error_ptr()
         },
         |_| last_error_ptr(),
+    )
+}
+
+/// §7.1 #12 — read back the logical size the compositor configured.
+/// Returns `1` when it wrote both outputs, `0` when there is nothing to report
+/// (no `configure` landed yet — silent, §6.3's shape — or the handle/phase was
+/// rejected, which leaves a sticky error naming this symbol, §7.2).
+/// Either output pointer may be NULL to ignore that axis; on `0` neither is
+/// touched, so a caller cannot mistake "unwritten" for "the compositor
+/// proposed 0" (I7: no invented value on a failure path).
+#[no_mangle]
+pub extern "C" fn layer_logical_size(
+    ctx: *mut c_void,
+    out_w: *mut c_int,
+    out_h: *mut c_int,
+) -> c_int {
+    let handle = ctx as usize as u64;
+    guarded(
+        "layer_logical_size",
+        |b| {
+            maybe_fault();
+            match b.logical_size(handle) {
+                None => 0,
+                Some((w, h)) => {
+                    if !out_w.is_null() {
+                        unsafe { ptr::write(out_w, w) };
+                    }
+                    if !out_h.is_null() {
+                        unsafe { ptr::write(out_h, h) };
+                    }
+                    1
+                }
+            }
+        },
+        |_| 0,
     )
 }
 
@@ -623,6 +658,60 @@ mod tests {
             let e = b.live_entry(value).unwrap();
             assert_eq!((e.ctx.req_w, e.ctx.req_h), (512, 256));
         }
+    }
+
+    /// §7.1 #12: before any `configure` lands there is nothing to report, and
+    /// the poll must not clobber the frame gate's message with its own.
+    #[test]
+    fn logical_size_reports_nothing_before_configure_and_stays_silent() {
+        let _g = lock();
+        let ctx = fresh_ready_handle();
+        let mut w: c_int = -12345;
+        let mut h: c_int = -12345;
+        assert_eq!(
+            layer_logical_size(ctx, &mut w, &mut h),
+            0,
+            "no configure yet ⇒ nothing to report"
+        );
+        assert_eq!((w, h), (-12345, -12345), "the 0 path must not write");
+        assert!(
+            sticky_text().is_empty(),
+            "an un-configured poll is a state, not a fault: it must leave \
+             the sticky slot alone (§6.3), or the host loses the reason the \
+             frame gate wrote"
+        );
+    }
+
+    /// The clamped proposal is the whole reason this export exists: it is the
+    /// only local read saying the usable area is smaller than the request.
+    #[test]
+    fn logical_size_reports_the_clamped_configure() {
+        let _g = lock();
+        let ctx = fresh_ready_handle();
+        let value = ctx as usize as u64;
+        let epoch = lock_bridge().epoch;
+        lock_bridge().apply_configure(epoch, value, 461, 445);
+        let mut w: c_int = 0;
+        let mut h: c_int = 0;
+        assert_eq!(layer_logical_size(ctx, &mut w, &mut h), 1);
+        assert_eq!((w, h), (461, 445));
+        // NULL outputs ignore that axis without failing the call.
+        assert_eq!(layer_logical_size(ctx, ptr::null_mut(), &mut h), 1);
+    }
+
+    #[test]
+    fn logical_size_rejects_a_bad_handle_by_name() {
+        let _g = lock();
+        let ctx = fresh_ready_handle();
+        layer_shell_cleanup();
+        let mut w: c_int = 0;
+        let mut h: c_int = 0;
+        assert_eq!(layer_logical_size(ctx, &mut w, &mut h), 0);
+        assert!(
+            sticky_text().contains("layer_logical_size"),
+            "rejections must name the symbol (§7.2): {:?}",
+            sticky_text()
+        );
     }
 
     #[test]

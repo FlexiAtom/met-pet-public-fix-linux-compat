@@ -4,7 +4,7 @@ wayland_layer.py —— Niri (wlroots) 点击穿透的 layer-shell 后端。
 原理：通过 liblayer_shell_shim.so 创建【裸】wl_surface（无 xdg_toplevel role），
      挂 layer-shell OVERLAY + 空 input region → pointer/touch 穿透。
 
-该 `.so` 现在是 **Rust cdylib**（`native/layer_shell`，接口真值见 `~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md` §7.1）。
+该 `.so` 现在是 **Rust cdylib**（`native/layer_shell`，接口真值见 `~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md` §7.1）。
 它**自己打开一条到 compositor 的 Wayland 连接**，并在内部跑一个自建的事件泵线程：
 桥接层不从 Qt 借 `wl_display`，Qt 与它之间只有"这块 QImage 贴到那个矩形"这一件事。
 失效模式（为什么必须自建泵，见 §6.4）：一条 Wayland 连接只能有一个读取者，若两处
@@ -19,20 +19,53 @@ wayland_layer.py —— Niri (wlroots) 点击穿透的 layer-shell 后端。
   4. layer_update_pixels(ctx, rgba, w, h)  —— 每帧推送像素（Phase 2）
   5. layer_destroy_context(ctx)            —— 销毁
 
-依赖：liblayer_shell_shim.so（在仓库根，由 `bash build_layer_shell.sh` 构建）
+依赖：liblayer_shell_shim.so —— 源码态在仓库根（`bash build_layer_shell.sh` 构建），
+     冻结态由 `MeaPet.spec` 打进打包目录。两条落点由 `shim_candidates()` 排成一张表。
 """
 
 import ctypes
+import ctypes.util
 from ctypes import (POINTER, c_char_p, c_int, c_uint32, c_ubyte, c_void_p)
-from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage
 
-# shim 位于项目根目录：meapet/desktop/wayland_layer.py -> 上三级
-_SHIM_PATH = str(
-    Path(__file__).resolve().parent.parent.parent / "liblayer_shell_shim.so"
-)
+SHIM_NAME = "liblayer_shell_shim.so"
+
+
+def shim_candidates() -> list:
+    """shim 的加载顺序：打包目录 → 仓库根 → 系统搜索（保序去重）。
+
+    打包目录这一条不能省：它是**被分发产物**的落点。只按"本文件上三级"找，冻结版
+    能不能加载取决于 PyInstaller 给 `__file__` 配的恰好是 `sys._MEIPASS`——那是它的
+    实现细节，不是这里的接口（`meapet.paths` 才是本仓库承认的路径真值）。
+    """
+    from meapet.paths import data_path, is_frozen, project_path
+
+    out = []
+    if is_frozen():
+        out.append(data_path(SHIM_NAME))
+    out.append(project_path(SHIM_NAME))
+    out.append(ctypes.util.find_library("layer_shell_shim") or SHIM_NAME)
+    return list(dict.fromkeys(out))
+
+
+def open_shim() -> ctypes.CDLL:
+    """按 `shim_candidates()` 依次尝试，全失败时把**试过的路径**一起报出来。
+
+    缺件是打包缺陷，不是运行时故障；报"哪个都没找到"才有条可分诊的线索。
+    """
+    tried = shim_candidates()
+    errs = []
+    for cand in tried:
+        try:
+            return ctypes.CDLL(cand)
+        except OSError as exc:
+            errs.append(f"  {cand} —— {type(exc).__name__}: {exc}")
+    raise RuntimeError(
+        f"加载不到 {SHIM_NAME}（冻结版缺这一件 = 打包没带上；源码态 = 先跑 "
+        f"bash build_layer_shell.sh）。已试路径：\n" + "\n".join(errs)
+    )
 
 # wl_shm 格式常量（协议 fourcc，权威定义是 wayland.xml 的 wl_shm format 枚举）。
 # 这张表**不是**"与某份 C 源保持一致"的副本：那正是两份真值靠约定对齐的老问题。
@@ -56,11 +89,12 @@ class WaylandLayerBackend:
         self._shim = None
         self._ctx = None
         self._pixel_format = 0  # 0 = 自动选择
+        self._err_fn = None     # §7.1 #11 的探测结果，_load() 里填
 
     # ---------- 懒加载 shim ----------
     def _load(self) -> ctypes.CDLL:
         if self._shim is None:
-            self._shim = ctypes.CDLL(_SHIM_PATH)
+            self._shim = open_shim()
 
             # init / cleanup
             self._shim.layer_shell_init.restype = c_int
@@ -90,6 +124,21 @@ class WaylandLayerBackend:
                 fn.restype = None
                 fn.argtypes = argtypes
                 self._optional.add(name)
+
+            # §7.1 #12：回读合成器**实际**配出的逻辑尺寸。无条件绑定（该行标"必需"）——
+            # 产物缺这一枚就是过期产物，`build_layer_shell.sh` 的 REQUIRED 门本来就不放行。
+            self._shim.layer_logical_size.restype = c_int
+            self._shim.layer_logical_size.argtypes = [
+                c_void_p,
+                POINTER(c_int),
+                POINTER(c_int),
+            ]
+
+            # §7.1 #11：诊断通道。按该行原文用 getattr 探测——它**不参与后端可用性判决**
+            # （I6），所以不能因为缺一个只读符号就把整个后端判死；探测不到时 last_error() 给 ""。
+            self._err_fn = getattr(self._shim, "layer_last_error", None)
+            if self._err_fn is not None:
+                self._err_fn.restype = c_char_p   # 指向固定 256 B 静态缓冲，永不 NULL
 
             # Phase 2: 像素上传
             self._shim.layer_update_pixels.restype = None
@@ -121,8 +170,15 @@ class WaylandLayerBackend:
 
     # ---------- 生命周期 ----------
     def enable(self, qwindow, width: int, height: int, pos_x: int, pos_y: int):
-        """创建 layer context，开启穿透。返回 ctx 句柄。"""
+        """创建 layer context，开启穿透。返回 ctx 句柄。幂等：重复调用不累积 ctx。"""
         shim = self._load()
+        # 幂等守卫：任何二次 enable() 先回收上一只 ctx，否则 `self._ctx = create()`
+        # 直接覆盖句柄 → 旧 ctx 连同它的 RING_DEPTH 个 memfd 和已 map 的 OVERLAY
+        # surface 一起变孤儿，门面自身再无引用可回收（旧缺陷；外部只靠 render_host
+        # 的单点 enable 挡住）。用 destroy_context() 精确送这一只退场，而非 disable()
+        # ——后者会连坐 layer_shell_cleanup 把健康后端一并拆掉。
+        if self._ctx:
+            self.destroy_context()
         if shim.layer_shell_init() != 0:
             raise RuntimeError("layer-shell init 失败（compositor 不支持？）")
 
@@ -147,6 +203,40 @@ class WaylandLayerBackend:
     def set_size(self, w: int, h: int):
         if self._ctx and "layer_set_size" in getattr(self, "_optional", ()):
             self._shim.layer_set_size(self._ctx, w, h)
+
+    def logical_size(self):
+        """§7.1 #12：合成器最近一次 `configure` **实际**配出的逻辑尺寸 `(w, h)`。
+
+        与 `enable(...)` 传进去的**请求**尺寸可以不同：带外部 `exclusive_zone` 的合成器
+        （本机 niri + 状态栏）会把可用区扣掉一块，`Top/Left` margin 因此可能被夹小，
+        配出来的高度就是夹后的值。桥接层的像素门控以配出的尺寸为唯一准绳（§6.3），
+        所以摆位想知道"这块 surface 到底落在哪块矩形"，只有这一条通道。
+
+        `None` = 读不到：还没有 `configure` 落地（瞬态，静默，§6.3），或句柄被拒
+        （那种会在 `last_error()` 里点名 `layer_logical_size`）。这里不区分两者，
+        也不兜底成请求尺寸——把"没读到"伪装成一个数是 I7 禁的那种形态。
+        """
+        if not self._ctx:
+            return None
+        # 传 c_int 实例（不是 byref）：argtypes 声明的是 POINTER(c_int)，ctypes
+        # 会把实例按引用递进去，被调方写回 `.value`。同一个形状也让假 shim 能写。
+        w, h = c_int(0), c_int(0)
+        if self._shim.layer_logical_size(self._ctx, w, h) != 1:
+            return None
+        return (w.value, h.value)
+
+    def last_error(self) -> str:
+        """§7.1 #11：最近一次"拒绝/报错"的原因，无错误时为 `""`。
+
+        只用于把桥接层的诊断说给人看，不参与任何判决（I6）。旧产物没有这个符号时
+        返回 `""`（探测不到 ≠ 没有错误，调用方不得据此判"一切正常"）。
+        """
+        if self._err_fn is None:
+            return ""
+        raw = self._err_fn()          # c_char_p → bytes，或 NULL → None
+        if not raw:
+            return ""
+        return raw.decode("utf-8", "replace")
 
     def disable(self):
         if self._ctx:
@@ -197,9 +287,8 @@ class WaylandLayerBackend:
             注意 ARGB8888 的枚举值本身就是 0，所以"强制 ARGB"与"自动"在这一层
             不可区分——要验证回退路径只能靠不支持 ABGR 的合成器，不是靠传这个值。
           * ABGR8888 —— 强制整体拷贝（内存布局 [R,G,B,A] 与 QImage RGBA8888 一致）。
-          * 其他任何值 —— **该帧不提交** + 粘性错误。错误文本在桥接层的
-            `layer_last_error()` 里（§7.1 #6/#11；注意本模块目前没有绑定那个符号，
-            要读它得自己 `ctypes` 一次——该缺口登记为挂起项 gap#1）。这是有意的：
+          * 其他任何值 —— **该帧不提交** + 粘性错误。错误文本用 `last_error()` 读
+            （§7.1 #6/#11）。这是有意的：
             调试通道要"响"，而不是悄悄替你选一个看起来对的格式（agents-rules §4）。
             旧 C 实现把任意 uint32 直接喂给 `wl_shm_pool_create_buffer`，代价是
             合成器发 fatal protocol error、**整条 Wayland 连接被断**（§4.7 第 11 行）。

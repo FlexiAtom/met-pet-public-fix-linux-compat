@@ -301,3 +301,123 @@ def test_windows_launcher_checks_the_complete_runtime_environment():
 
     assert "-m meapet.bootstrap --check all" in launcher
     assert "import PyQt5,PIL,requests,numpy,httpx,OpenGL,jieba" not in launcher
+
+
+def test_fidus_is_not_in_the_launcher_managed_environment():
+    """fidus 不进 `--check all` 那份表：那等于替一台装不出来的机器背书。
+
+    该表的语义是"Windows 启动器负责补齐的完整运行环境"，而 fidus 只有 Linux 产物、
+    走发布方声明的 Release 直链而非任何索引里的一个名字——`--check all` 在 Windows 上
+    按这张表装它，只会把打包门整个拦死。缺件的真实后果由"随包分发"那条 standing 裁决
+    管（落点在 spec），降级提示归 bootstrap，取件本身归 `meapet.fidus_channel`。
+    """
+    from meapet.bootstrap import all_runtime_dependencies
+
+    assert "fidus" not in _dependency_modules(all_runtime_dependencies())
+
+
+def test_enabled_fidus_switch_degrades_instead_of_blocking(tmp_path):
+    """开关开着而现场没有 fidus：启动日志点名这条能力，但桌宠照常起来。"""
+    from meapet import bootstrap
+
+    deps_on = _dependency_modules(
+        bootstrap.required_runtime_dependencies({"fidus": {"enabled": True}})
+    )
+    deps_off = _dependency_modules(
+        bootstrap.required_runtime_dependencies({"fidus": {"enabled": False}})
+    )
+    assert "fidus" in deps_on
+    assert "fidus" not in deps_off
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"fidus": {"enabled": true}}', encoding="utf-8")
+    err = StringIO()
+    ok = bootstrap.ensure_pet_dependencies(
+        tmp_path,
+        config_path=cfg,
+        stream=err,
+        find_spec=lambda name: None if name == "fidus" else object(),
+    )
+    assert ok is True
+    assert "fidus" in err.getvalue()
+    assert "切换点定位测量" in err.getvalue()
+
+
+def test_fidus_degradation_names_the_fetch_command(tmp_path):
+    """降级提示必须给出一条**真能执行**的取件命令。
+
+    改造前这里只说 `pip install -r linux_requirements.txt`，而 fidus 刻意不在那份
+    requirements 里 —— 等于把装机的人指向一条走不通的路。
+    """
+    from meapet import bootstrap
+
+    message = bootstrap.format_degraded_dependencies(
+        bootstrap.required_runtime_dependencies({"fidus": {"enabled": True}})
+    )
+    assert "--install-fidus" in message
+    assert "linux_requirements" not in message
+
+
+def test_other_degradations_do_not_carry_the_fidus_command():
+    """反证：那句取件命令只跟着 fidus 出现，不能粘在每条降级提示上。"""
+    from meapet import bootstrap
+
+    message = bootstrap.format_degraded_dependencies(
+        bootstrap.required_runtime_dependencies(
+            {"llm": {"backend": "hermes", "mode": "agent"}}
+        )
+    )
+    assert "--install-fidus" not in message
+
+
+def test_packaging_gate_uses_the_same_hint_as_the_startup_log():
+    """spec 与启动日志共用一句取件说明：两处各写一份，迟早有一份先过期。"""
+    from meapet import bootstrap
+
+    spec = (ROOT / "MeaPet.spec").read_text(encoding="utf-8")
+    assert "fidus_install_hint" in spec
+    assert "--install-fidus" in bootstrap.fidus_install_hint(executable=Path("/x/py"))
+
+
+def test_bootstrap_does_not_import_the_fetch_path_on_import():
+    """`meapet.bootstrap` 是 GUI 之前跑的，取件那一路（urllib/subprocess 之外的部分）
+    只在显式 `--install-fidus` 时才拉起来。"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import meapet.bootstrap, sys;"
+            "print('meapet.fidus_channel' in sys.modules)",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=str(ROOT),
+    )
+    assert result.stdout.strip() == "False"
+
+
+def test_install_fidus_flag_runs_the_three_step_pin_and_reports(capsys, monkeypatch):
+    from meapet import bootstrap, fidus_channel
+
+    calls: list[tuple[object, ...]] = []
+
+    def fake_install(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "fidus 0.1.0-beta.2 已就位"
+
+    monkeypatch.setattr(fidus_channel, "install_fidus", fake_install)
+    assert bootstrap.main(["--install-fidus"]) == 0
+    assert calls == [((), {})]
+    assert "已就位" in capsys.readouterr().out
+
+
+def test_install_fidus_flag_reports_failure_as_nonzero_exit(capsys, monkeypatch):
+    from meapet import bootstrap, fidus_channel
+
+    def boom(*args, **kwargs):
+        raise fidus_channel.FidusChannelError("边车声明与钉住的不符")
+
+    monkeypatch.setattr(fidus_channel, "install_fidus", boom)
+    assert bootstrap.main(["--install-fidus"]) == 1
+    assert "取件未完成" in capsys.readouterr().err

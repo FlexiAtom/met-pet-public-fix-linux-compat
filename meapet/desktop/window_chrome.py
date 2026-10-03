@@ -475,6 +475,27 @@ class PetWindowChromeMixin:
         display_menu.addMenu(size_menu)
         menu.addMenu(display_menu)
 
+        # 穿透是写侧（我们告诉系统怎么对待指针）、定位是读侧（我们想知道系统把我们
+        # 安置在哪），同属"surface 与合成器之间的那层合同"，故并为一个子菜单。
+        locate_menu = QMenu("定位与穿透", self)
+        locate_menu.setIcon(standard_icon("display"))
+        locate_menu.setObjectName("FidusLocateMenu")
+        apply_named_style(locate_menu, "MENU_STYLE")
+        locate_menu.setAccessibleName("定位与穿透")
+        fidus_action = QAction("启用fidus", self)
+        fidus_action.setCheckable(True)
+        fidus_action.setChecked(
+            bool((self.config.get("fidus") or {}).get("enabled", False))
+        )
+        fidus_action.setToolTip(
+            "切换穿透时用屏幕贴片匹配量出窗口真实位置（Wayland 下客户端查不到自己"
+            "在哪）。首次约需 2 秒校准并闪一下屏幕，之后每次切换仍需数秒测量，"
+            "测不准则退回原行为。"
+        )
+        fidus_action.triggered.connect(self._toggle_fidus_enabled)
+        locate_menu.addAction(fidus_action)
+        menu.addMenu(locate_menu)
+
         settings_menu = QMenu("设置与数据", self)
         settings_menu.setIcon(standard_icon("settings"))
         settings_menu.setObjectName("SettingsAndDataMenu")

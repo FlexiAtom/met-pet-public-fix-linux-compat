@@ -294,6 +294,33 @@ class UiRefactorTests(unittest.TestCase):
         self.assertEqual(dialog.result(), QMessageBox.Cancel)
         self.assertFalse(dialog.isVisible())
 
+    def test_message_dialog_check_text_is_an_opt_out_checkbox(self) -> None:
+        """`check_text` 那一格：状态读得到、不参与返回值（否则"点哪个"与"勾没勾"糊成一团）。"""
+        from meapet.message_dialog import MeaMessageDialog
+
+        plain = self._track(MeaMessageDialog(title="t", text="x"))
+        self.assertIsNone(plain.option)
+        self.assertFalse(plain.is_checked())
+
+        box = self._track(
+            MeaMessageDialog(
+                title="先把窗口切成浮动",
+                text="请按 Mod+V",
+                icon=QMessageBox.Question,
+                buttons=QMessageBox.Yes | QMessageBox.No,
+                default_button=QMessageBox.Yes,
+                check_text="不再提示",
+            )
+        )
+        self.assertEqual(box.option.text(), "不再提示")
+        self.assertEqual(box.option.objectName(), "MessageOption")
+        self.assertFalse(box.is_checked())
+        box.option.setChecked(True)
+        self.assertTrue(box.is_checked())
+        # 复选框得真在卡片里排上一行，不是挂在旁边看不见
+        self.assertIs(box.option.parent(), box.card)
+        self.assertGreater(box.height(), plain.height())
+
     def test_normal_system_font_is_used_for_body_and_display(self) -> None:
         from meapet.ui_theme import (
             BODY_FONT_NAME,
@@ -2052,6 +2079,9 @@ class UiRefactorTests(unittest.TestCase):
             def _toggle_voice_input(self):
                 pass
 
+            def _toggle_fidus_enabled(self):
+                pass
+
 
         return self._track(MenuHost())
 
@@ -2073,6 +2103,7 @@ class UiRefactorTests(unittest.TestCase):
                 "识图与观察",
                 "开启语音输入",
                 "显示与立绘",
+                "定位与穿透",
                 "设置与数据",
                 "关于",
                 "退出",
@@ -2085,7 +2116,7 @@ class UiRefactorTests(unittest.TestCase):
         }
         self.assertEqual(
             submenu_labels,
-            {"切换表情", "识图与观察", "显示与立绘", "设置与数据"},
+            {"切换表情", "识图与观察", "显示与立绘", "定位与穿透", "设置与数据"},
         )
 
     def test_context_menu_opens_as_movable_standalone_window(self) -> None:
@@ -2112,6 +2143,7 @@ class UiRefactorTests(unittest.TestCase):
                 "切换表情",
                 "识图与观察",
                 "显示与立绘",
+                "定位与穿透",
                 "设置与数据",
             ],
         )

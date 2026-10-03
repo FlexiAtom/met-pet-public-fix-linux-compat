@@ -635,6 +635,31 @@ impl Bridge {
         self.live_flush("layer_set_size");
     }
 
+    /// §7.1 #12 read-back: the logical size the COMPOSITOR actually
+    /// configured. The placement layer needs it because layer-shell margins
+    /// are measured inside the *usable* area — a foreign `exclusive_zone`
+    /// shrinks it — while `availableGeometry()` on Wayland is always the full
+    /// screen. Without the read-back the host cannot tell "our request was
+    /// accepted" from "it was clipped", and the `w != lw || h != lh` gate
+    /// above then drops *every* frame with nothing on screen to explain it.
+    ///
+    /// `None` distinguishes two shapes on purpose: a handle/phase rejection
+    /// leaves a sticky error naming this symbol (same as every other export),
+    /// while "no `configure` has landed yet" stays silent — it is a transient
+    /// state, §6.3's precedent, and overwriting the frame gate's message with
+    /// it would erase the one read that says why nothing is visible.
+    pub(crate) fn logical_size(&mut self, handle: u64) -> Option<(i32, i32)> {
+        if let Err(why) = self.guard_ctx(handle) {
+            self.set_sticky_error(&format!("layer_logical_size: {why}"));
+            return None;
+        }
+        let e = self.live_entry(handle)?;
+        if !e.ctx.configured {
+            return None;
+        }
+        Some((e.ctx.logical_w as i32, e.ctx.logical_h as i32))
+    }
+
     pub(crate) fn destroy_context(&mut self, handle: u64) {
         // Deliberately NOT `guard_ctx`: §4.7-12's rejection chain covers
         // operations that RENDER (update/clear/position/size/touch), while

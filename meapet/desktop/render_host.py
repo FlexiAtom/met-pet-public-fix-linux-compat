@@ -9,12 +9,13 @@ Live2D 保留完整模型画布用于渲染动作，但顶层桌宠窗口只暴�
 """
 import os
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from PyQt5.QtWidgets import QApplication, QDialog
-from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
-from PyQt5.QtGui import QPolygon, QRegion
+from PyQt5.QtCore import QEventLoop, QPoint, QRect, QSize, Qt, QTimer
+from PyQt5.QtGui import QImage, QPolygon, QRegion
 
 from meapet.config.store import (
     normalize_live2d_placement_anchor,
@@ -57,6 +58,33 @@ BUBBLE_TAIL_CORNER_INSET = 36
 LIVE2D_STARTUP_TIMEOUT_MS = 5000
 LIVE2D_PREVIEW_MAX_SOURCE_PIXELS = 8_000_000
 LIVE2D_PREVIEW_MAX_EDGE = 1600
+# fidus 定位的 GUI 侧节拍：16 ms 搬运跨线程请求，摆位后连等 12 拍（≈200 ms、
+# 覆盖 ~6 个 33 ms 推帧）让合成器真的收到新帧，才放行 fidus 线程的下一发读数。
+_FIDUS_POLL_MS = 16
+_FIDUS_SETTLE_TICKS = 12
+# 穿透挂载后"回读—夹移"闭环的预算（工作项 #78，接口见 §7.1 #12）。节拍就是
+# _layer_timer 的 33 ms，不新增定时器：configure 由桥接层的泵线程异步送达，
+# 实测 1 拍内落地，12 拍（≈400 ms）是给慢合成器的余量。
+# 夹移只发**一发**：那一发是按模型算出来的全部结论，模型不成立时第二发就是猜——不猜，出声。
+_LAYER_FIT_WAIT_TICKS = 12
+# 稳态重查的节流（工作项 #89 · 裁决 (b)）：回读轮落定之后，每这么多拍读一次
+# `logical_size()`，只跟"上一次读到的那一份"比，变了才重算那一发夹移。
+# 30 拍 ≈ 1 s：夹移的失效是 180 px 级的静默错位，一秒的滞后换得起；每拍一读则是
+# 把 #78 §8.1 那条"稳态零次"的成本口径按整个穿透期打折，那不打。
+_LAYER_FIT_WATCH_TICKS = 30
+# 「量完再挂」那一发的等待预算（人工裁决 2026-10-02：20 秒，宽）。口径是 H25 十四场的
+# 墙钟：`calibrate` 2820–4090 ms + 单发 `locate` 916–9377 ms ⇒ 最坏 13.5 s，留出 6.5 s；
+# **同一预算里装不下第二发**（22.8 s > 20 s），所以超时即按裁决 1 走「不切 + 出声」，
+# 不靠预算兜重试。
+_MOUNT_WAIT_MS = 20_000
+# 挂载请求按**不透明轮廓**而不是整画布发（丙，人工 2026-10-03「都做」）时给动画留的余量。
+# 轮廓是挂载那一帧量的，而 Live2D 的呼吸/摆手会把内容推出这个框：不留余量 ⇒ 动作一到
+# 框外就被 `_layer_conform_to_configure` 裁掉。16 px 是**未量过**的幅度 allowance，不是读数；
+# 真觉得切手了，加大这一格比改算法便宜。
+_LAYER_BBOX_PAD_PX = 16
+# 轮廓短到这条以下不当它是轮廓：多半是那一帧正空着（换模型、动作过零、渲染还没热）。
+# 宁可多要一块放不下的透明边（有声），也不要挂出一只看不见的小 surface。
+_LAYER_MIN_SURFACE_EDGE = 32
 # 一次分辨率变更会连发多个屏幕信号，合并后再校正位置。
 SCREEN_GUARD_DEBOUNCE_MS = 400
 # 桌宠宽高各至少露出这么多比例才算「还看得见」，否则拉回可用区域。
@@ -209,6 +237,15 @@ def calculate_live2d_anchor_preserving_position(
     return QPoint(window_origin) + local_point(before_canvas) - local_point(
         after_canvas
     )
+
+
+def _rect_from_center(cx: float, cy: float, w: int, h: int) -> tuple[int, int, int, int]:
+    """把「中心 + 尺寸」反解成挂载矩形 `(x, y, w, h)`。
+
+    两处共用这一条公式，不许分叉：预挂载拿 fidus 量出来的屏幕中心去 `enable(...)`，
+    与挂载后 `_fidus_service` 拿同一个读数去 `set_position(...)`，吃的都是这一个减法。
+    """
+    return (int(round(cx - w / 2.0)), int(round(cy - h / 2.0)), int(w), int(h))
 
 
 def calculate_bubble_anchor_rect(
@@ -706,14 +743,20 @@ class PetRenderHostMixin:
         self._layer_timer.setInterval(33)  # ~30fps
         self._layer_timer.timeout.connect(self._push_layer_frame)
 
-        # 常驻开关（永远可点，用来切模式）
-        self._layer_panel = LayerDebugPanel(self._set_layer_mode)
+        # 常驻开关（永远可点，用来切模式）。`penetrate=False` ⇒ 出场文案「关／切到 穿透」，
+        # 与"这里不再挂载"的事实同口径——它是切回交互态的唯一入口，说谎的出口比没有出口更糟。
+        self._layer_panel = LayerDebugPanel(self._set_layer_mode, penetrate=False)
         self._position_layer_panel()
         self._layer_panel.show()
 
-        self._set_layer_mode(True)             # ← 由它统一创建
-        # 本函数体此前被整段复制过一遍（原 699-711 行），于是 _set_layer_mode(True)
-        # 会调两次 backend.enable()。失效模式与兜底（agents-rules §1 三条）：
+        # ★ 启动**不**进穿透（人工裁决 2026-10-03「先把启动默认进入穿透改为非穿透」）。
+        # 旧码在此处 `_set_layer_mode(True)`，两处坏处：① 用户第一眼的桌宠就不可点、不可拖，
+        # 想互动得先去找那只贴边小面板；② 它是 fidus「量完再挂」的隐形入口——启动即抓帧、
+        # 即测量、量不出还可能弹模态，全都发生在用户什么都没做的时候。
+        # ⇒ `enable()` 的唯一入口现在是面板（`_toggle` → `_set_layer_mode(True)`）。
+        #
+        # 下面这笔"第二次 enable 会崩"的账整段留着：它约束的是**任何**路径上的 enable 次数，
+        # 不是给启动那一句作的辩护。
         #   * 会崩的条件 = 任何第二次 enable()：wayland_layer.py 的 enable() 直接
         #     覆盖 self._ctx 而不销毁旧 ctx，旧 ctx 连同它的 RING_DEPTH 个 memfd
         #     和一个已 map 的 OVERLAY surface 一起变成孤儿；两个 QTimer 也会各自
@@ -730,7 +773,7 @@ class PetRenderHostMixin:
         #     只有直接 layer_shell_cleanup() 才归零。桥接层行为符合 spec §4.7 第 12 行
         #     （destroy 只释放点名的注册表槽位）＋第 9 行（cleanup 连坐全部存活 ctx），
         #     所以这里修调用方，不改桥。
-        # 本函数只允许一次 enable：由上面这条 `_set_layer_mode(True)` 单点负责。
+        # 本函数一次 enable 都不发：挂载由面板那一个入口发起。
 
     def _position_layer_panel(self) -> None:
         """把开关窗口贴到屏幕左下角。"""
@@ -753,27 +796,23 @@ class PetRenderHostMixin:
             return
 
         if penetrate:
+            if getattr(self, "_pending_mount", None) is not None:
+                # 一次只允许一个待挂：面板连点不该叠两份测量——两发都在写同一组
+                # `_fidus_*` 标志，后起的会把前一只的读数吃掉。
+                safe_print("[layer] 量完再挂已在路上，本次不重复起工")
+                return
             # ① 必须在 hide() 之前取坐标（Wayland 下隐藏后位置即失效）
             x, y, w, h = self._layer_geometry()
-            x, y = max(0, x), max(0, y)
             self._layer_window_pos = (self.x(), self.y())
-
-            # ② 每次都新建（全新 OVERLAY surface）
-            try:
-                backend.enable(None, w, h, x, y)
-            except Exception as exc:
-                safe_print(f"[layer] 创建 layer context 失败: {exc}")
+            if self._fidus_enabled():
+                # ②「量完再挂」：测得出来才挂，测不出来**不切**（人工裁决 2026-10-02）。
+                self._start_premount_measure(x, y, w, h)
                 return
-
-            widget = getattr(self, "sprite_label", None)
-            if widget is not None:
-                widget._proxy_rect = QRect(QPoint(x, y), QSize(w, h))
-
-            self.hide()                        # ③ 最后才隐藏
-            self._layer_timer.start()
-            safe_print(f"[layer] → 穿透模式 surface={w}x{h} @({x},{y})")
+            self._do_layer_mount(max(0, x), max(0, y), w, h, measured=False)
         else:
+            self._cancel_premount_measure()
             self._layer_timer.stop()
+            self._layer_fit_cancel()
             widget = getattr(self, "sprite_label", None)
             if widget is not None:
                 widget._proxy_rect = None
@@ -788,12 +827,1235 @@ class PetRenderHostMixin:
             self.raise_()
             safe_print("[layer] → 交互模式（可拖动 / 右键菜单）")
 
+    def _layer_surface_region(self, w: int, h: int) -> tuple[int, int, int, int]:
+        """挂载该请求画布帧里的哪一块：`(ox, oy, ow, oh)` = 不透明轮廓（含动作余量）。
+
+        旧口径请求的是**整画布**（`_layer_geometry()` 给的就是 widget 尺寸），而画布四周那圈
+        透明像素用户从来没看见过 —— 它们照样进 margin/size 请求。人工 2026-10-03 那一条
+        `只配出 456x463（请求 512x512）@测量位 (910,305)` 里两轴逐位等于「输出 − margin」
+        （1366−910=456、768−305=463，本机 niri 就是"剩多少配多少"）⇒ 撑爆请求的正是那圈透明边，
+        而被切掉的却是可见内容。这是几何源头，不是门控。
+
+        取不到帧（PNG 模式没有 `render_offscreen`、渲染还没热）／整帧没有不透明像素／轮廓短于
+        `_LAYER_MIN_SURFACE_EDGE` ⇒ 回退整画布并**出声**：那是今天的行为，不是新猜的姿势。
+        """
+        frame = self._fidus_current_frame()
+        if frame is None:
+            safe_print("[layer] 量不到轮廓 ⇒ 按整画布挂（离屏渲染不可用？）")
+            return (0, 0, int(w), int(h))
+        try:
+            import numpy as np
+
+            from meapet.desktop.fidus_position import ALPHA_MIN
+
+            alpha = frame[..., 3] > ALPHA_MIN
+            cols = np.flatnonzero(alpha.any(axis=0))
+            rows = np.flatnonzero(alpha.any(axis=1))
+            if cols.size == 0 or rows.size == 0:
+                raise ValueError("整帧没有不透明像素")
+            ox = max(0, int(cols.min()) - _LAYER_BBOX_PAD_PX)
+            oy = max(0, int(rows.min()) - _LAYER_BBOX_PAD_PX)
+            ow = min(int(cols.max()) + 1 + _LAYER_BBOX_PAD_PX, int(w)) - ox
+            oh = min(int(rows.max()) + 1 + _LAYER_BBOX_PAD_PX, int(h)) - oy
+        except Exception as exc:
+            safe_print(f"[layer] ⚠ 轮廓这一判没跑成 ⇒ 按整画布挂: "
+                       f"{type(exc).__name__}: {exc}")
+            return (0, 0, int(w), int(h))
+        if ow < _LAYER_MIN_SURFACE_EDGE or oh < _LAYER_MIN_SURFACE_EDGE:
+            safe_print(f"[layer] ⚠ 轮廓只有 {ow}x{oh}（画布 {w}x{h}）⇒ 不认它是轮廓，按整画布挂")
+            return (0, 0, int(w), int(h))
+        if (ox, oy, ow, oh) == (0, 0, int(w), int(h)):
+            return (0, 0, int(w), int(h))       # 画布本来就全不透明 ⇒ 一字未改
+        safe_print(f"[layer] 挂载按轮廓请求 {ow}x{oh} @帧内({ox},{oy})"
+                   f" ← 画布 {w}x{h}（省掉透明边 {w - ow}x{h - oh}）")
+        return (ox, oy, ow, oh)
+
+    def _layer_canvas_rect(self, sx: int, sy: int, sw: int, sh: int) -> QRect:
+        """surface 矩形 → **画布**矩形。信念（`_proxy_rect`）吃的从来是画布，不是 surface。
+
+        `live2d_widget._update_look_target` 用的是 `proxy.topLeft()` 再配 widget **自身**的宽高
+        算视线中心，所以那个矩形必须是整画布在屏幕上的矩形；把 surface 矩形写进去，视线会朝
+        桌宠外面看。origin=(0,0)、canvas=surface 时（丙之前、以及丙的每一条回退支）本式逐位
+        退化成"原样"。
+        """
+        ox, oy = getattr(self, "_layer_frame_origin", (0, 0))
+        cw, ch = getattr(self, "_layer_canvas_size", None) or (sw, sh)
+        return QRect(QPoint(int(sx) - int(ox), int(sy) - int(oy)),
+                     QSize(int(cw), int(ch)))
+
+    def _layer_canvas_center(self, sx: int, sy: int, sw: int, sh: int) -> tuple[float, float]:
+        """surface 矩形 → 画布**中心**（fidus 的 `Fix.center` 与先验都是画布中心的口径）。
+
+        桥接层那个锚点是从帧几何定死的（`iter_candidates` 里 `anchor = 盒中心 − 帧中心`），
+        它跟 surface 切到哪一块无关 ⇒ 谁拿读数反解矩形，谁就得用画布尺寸反解。
+        """
+        rect = self._layer_canvas_rect(sx, sy, sw, sh)
+        return (rect.x() + rect.width() / 2.0, rect.y() + rect.height() / 2.0)
+
+    def _do_layer_mount(self, x: int, y: int, w: int, h: int, *, measured: bool) -> None:
+        """挂载那一段的单点：`enable` → 信念 → `hide` → 推帧 → 回读轮。
+
+        `measured=True` 表示这个矩形是 fidus 量出来的，此后回读轮**只报数不改位**
+        （裁决 2「测量赢」，见 `_layer_fit_service`），也不再起第二轮 fidus——20 s 预算
+        装不下第二发（H25 口径：一发最坏 13.5 s，两发 22.8 s）。
+
+        进来的 `(x,y,w,h)` 是**画布**矩形（信念或 `_rect_from_center` 的产物），发出去的是
+        **surface** 矩形（画布里的轮廓那一块，见 `_layer_surface_region`）。两者只在这里分叉一次：
+        信念仍写画布矩形（`_layer_canvas_rect` 的口径 ⇒ 丙之前是同一个对象），而回读轮、margin、
+        推帧的裁都跟着 surface 走。
+        """
+        backend = self._layer_backend
+        self._layer_frame_origin = (0, 0)   # 先复位：`enable` 抛了就挂着上一轮的偏移没挂东西
+        self._layer_canvas_size = None
+        ox, oy, ow, oh = self._layer_surface_region(w, h)
+        self._layer_frame_origin = (ox, oy)
+        self._layer_canvas_size = (int(w), int(h))
+        sx, sy = x + ox, y + oy
+        try:
+            backend.enable(None, ow, oh, sx, sy)  # 每次都新建（全新 OVERLAY surface）
+        except Exception as exc:
+            safe_print(f"[layer] 创建 layer context 失败: {exc}")
+            return
+
+        widget = getattr(self, "sprite_label", None)
+        if widget is not None:
+            widget._proxy_rect = QRect(QPoint(x, y), QSize(w, h))
+
+        self.hide()                                 # ③ 最后才隐藏
+        self._layer_timer.start()
+        canvas = f" ← 画布 {w}x{h}@({x},{y})" if (ox or oy) else ""
+        safe_print(f"[layer] → 穿透模式 surface={ow}x{oh} @({sx},{sy}){canvas}"
+                   f"{'（测量位）' if measured else ''}")
+        # ④ 先问合成器"这块矩形你到底配成了多大"，再决定要不要摆。
+        self._layer_fit_start(sx, sy, ow, oh, measured=measured)
+
+    # ------------------------------------------------- 回读 configure 尺寸并据此摆位
+    #
+    # 失效模式（本机 niri + 一条 180 px 状态栏实测，正证见
+    # `~/.Athena/projects/meapet/working/layer-configure-size-ignored.md`）：桥接层的
+    # 像素门控只放行"提交尺寸 == 逻辑尺寸"的帧（spec §6.3），而逻辑尺寸是**合成器
+    # configure 出来的事实**，不是我们请求的那个数。可用区被外部 exclusive_zone 扣掉
+    # 一块之后，margin 越界的挂载请求会被夹小（请求 614 高、配出 445）⇒ 从此每一帧都被
+    # 我们自己丢掉：人看不见，grim 也看不见，日志里一个字都没有。旧实现唯一的坐标来源
+    # 是 Qt 的 availableGeometry，而它在 Wayland 下对那条带完全无感（恒等于整屏），
+    # 所以"请求 614 高"这件事没有任何东西能反驳 —— 这一段就是那个反驳。
+    #
+    # 用的模型只有两条，都在 H16 探针上量过（N1b/N1h 两臂，残差 0 px）：
+    #   configure 高 = min(请求高, 可用高 − margin_y)   ⇒  可用高 = configure 高 + margin_y
+    #   真实落点    = 保留带厚度 + margin
+    # 两条合起来给出"往回挪到 margin′ = 可用高 − 请求高，请求尺寸就装得下"。
+    #
+    # 模型错了会怎样：第一份"没按请求配"的读数会立刻触发那一发夹移，之后 12 拍内
+    # 等不到等于请求的 configure ⇒ 走 _layer_fit_report 那条**出声**的出口（日志 + 气泡）。
+    # 夹移只发一发，因为那一发已经是模型的全部结论；再发第二发就是拿猜测冒充测量。
+    # 夹移后读到**夹移前**那个尺寸不算证据（configure 异步），所以旧读数只消耗预算、
+    # 不触发判决——预算用完才判失败。这一段的全部意义是不再静默，
+    # 所以出口本身静默是不允许的形态。
+    #
+    # 落定之后还有一段**稳态重查**（工作项 #89，人工裁决「带撤之后夹移无声错 b 即可」）：
+    # 上面那一轮只在挂载那一刻开一次，之后 exclusive-zone 带**改厚度或再出现**时，
+    # 那一发夹移吃的带厚就成了旧事实。修法是把手上那个量从"换算所得的 margin"改成
+    # "带厚"本身（`_fit_band`），并在每次 configure 变化时重算：紧张相（配得比请求小）
+    # 按新可用区往上/左夹一发，宽裕相（配得够大）把位置朝锚点收一发。两边都**只发一发，
+    # 然后交回上面那一轮确认**——回读、预算、出声出口全部复用，不另造一套判决。
+    # 锚点是"最后一次由本产品主动发出的请求"：夹移不搬动它（那是被迫的），`_fidus_place`
+    # 搬动它（那是量出来的），所以 fidus 挪过之后回收的是 fidus 的位置。
+    # fidus 正在跑时整段让路（见 `_layer_fit_watch`）。
+    #
+    # **有一相补不到，写在脸上**：夹移**已经落定**之后带整条撤走，configure 重发的
+    # **数值不变**（`min(请求高, 可用高 − margin)` 早已等于请求），而桥接层只缓存那个
+    # 数值、没有"configure 来过一发"的序号 ⇒ 宿主无从发现这一相，那 180 px 的无声错位
+    # 照旧。补它要动 Rust 桥（第 13 枚符号），超出本次授权面（render_host.py）；已登记
+    # `~/.Athena/projects/meapet/pending.md`，回归里也钉了一条同名用例
+    # （`test_band_removal_after_a_successful_clamp_is_INVISIBLE`）防后来人误以为已修。
+
+    def _layer_fit_start(self, x: int, y: int, w: int, h: int, *,
+                         measured: bool = False) -> None:
+        """挂载后开一轮"回读—夹移"；fidus 等它落定再启动。
+
+        `measured=True`（位置来自 fidus 的屏幕读数）改变这一轮的**判决**：只报数、不改位
+        （人工裁决 2026-10-02「测量赢」）。理由不是夹移算错，而是它按构造与测量无关——
+        `ny = lh + y − h` 展开后等于"可用高 − 请求高"，与 `y` 来自信念还是测量完全无关，
+        所以它一定会把量出来的那个位置搬走。顺带本轮不再排 fidus 校正（`_fit_fidus=None`）：
+        20 s 预算装不下第二发（H25 口径：一发最坏 13.5 s，两发 22.8 s）。
+        """
+        pending = (int(x), int(y), int(w), int(h))
+        self._fit_measured = bool(measured)
+        self._fit_fidus = None if measured else pending
+        # 锚点＝本轮请求。此后**只有 `_fidus_place` 搬它**（夹移是被迫的，不配改锚），
+        # 宽裕相要回收的就是它。见 `_fidus_owns_placement`。
+        self._fit_anchor = pending
+        self._fit_margin = (int(x), int(y))
+        self._fit_band = None       # 带厚：None＝这一相没证据说有带；夹过移才有整数值
+        self._fit_size = None       # 最近一次读到的 configure（稳态重查的基准）
+        self._layer_conform_reported = False   # 新一轮挂载，"第一次真裁"又是一条新闻
+        self._fit_watch = _LAYER_FIT_WATCH_TICKS
+        backend = getattr(self, "_layer_backend", None)
+        if backend is None or not callable(getattr(backend, "logical_size", None)):
+            # 没有回读通道（旧产物／假后端）＝这段无从判断，直接放行 fidus。
+            # 顺带**不设锚**：稳态重查吃的就是这条通道，没有它就没有那一相（今天的行为）。
+            self._fit_rect = None
+            self._fit_anchor = None
+            self._layer_fit_finish(pending)
+            return
+        self._fit_rect = pending
+        self._fit_seen = None      # 只在 _fit_rect 非空时被读到，见 _layer_fit_service
+        self._fit_wait = _LAYER_FIT_WAIT_TICKS
+
+    def _layer_fit_cancel(self) -> None:
+        """离开穿透模式：本轮回读作废，别把挂起的 fidus 启动留到下一次挂载。"""
+        self._fit_rect = None
+        self._fit_fidus = None
+        self._fit_seen = None
+        self._fit_band = None
+        self._fit_measured = False
+        self._fit_anchor = None
+        self._fit_margin = None
+        self._fit_size = None
+        self._layer_frame_origin = (0, 0)   # 没挂 ⇒ 帧内没有"surface 子块"这回事
+        self._layer_conform_reported = False
+
+    def _layer_fit_service(self) -> bool:
+        """每拍一次（骑在 `_layer_timer` 上，不新增定时器）。
+
+        返回 True = 这一拍还在等回读／刚发出夹移请求，**别推帧**——推了也必被门控丢掉，
+        白付一次 Live2D 离屏渲染。
+        """
+        rect = getattr(self, "_fit_rect", None)
+        if rect is None:
+            return self._layer_fit_watch()
+        x, y, w, h = rect
+        backend = self._layer_backend
+        try:
+            size = backend.logical_size()
+        except Exception as exc:
+            # 门面自己都不该抛；抛了就等于回读通道坏了 ⇒ 出声，别换成静默。
+            self._layer_fit_finish(None, f"回读异常 {type(exc).__name__}: {exc}")
+            return False
+        if size is not None:
+            size = (int(size[0]), int(size[1]))
+            self._fit_size = size      # 稳态重查的基准：落定那一读就是它该认的第一份事实
+            if size == (w, h):
+                self._layer_fit_finish((x, y, w, h))
+                return False
+            if self._fit_seen is None:
+                lw, lh = size
+                if getattr(self, "_fit_measured", False):
+                    # 位置是量出来的 ⇒ 不发夹移（裁决「测量赢」），只报数。
+                    self._layer_fit_finish((x, y, w, h))
+                    self._layer_report_measured_hold((x, y, w, h), size)
+                    return False
+                # 第一份"没按请求配"的读数 ⇒ 立刻发那一发按模型算出来的夹移。
+                nx, ny = min(x, lw + x - w), min(y, lh + y - h)
+                if (nx, ny) == (x, y):
+                    # 尺寸对不上、按模型却已无处可挪 ⇒ 模型不适用（带不在顶／左，或该
+                    # 合成器另有夹法）。不猜第二种解法，出声。
+                    self._layer_fit_finish(None, f"合成器配出 {lw}x{lh}（请求 {w}x{h}），"
+                                                 f"且按模型无处可挪")
+                    return False
+                safe_print(f"[layer] 合成器配出 {lw}x{lh}（请求 {w}x{h}）⇒ 可用区 "
+                           f"{lw + x}x{lh + y}，回摆 ({x},{y})→({nx},{ny})")
+                if not self._layer_fit_move(nx, ny):
+                    self._layer_fit_finish(None, f"回摆 ({nx},{ny}) 请求发不出去")
+                    return False
+                self._fit_seen = size
+                self._fit_rect = (nx, ny, w, h)
+                self._fit_band = self._layer_band_thickness(lh + y)
+                self._layer_fit_proxy_rect(nx, ny, w, h)
+                self._fit_wait = _LAYER_FIT_WAIT_TICKS
+                return True
+        # 走到这里 = 本拍没有可行动的新证据（没读数，或已回摆在等那份新的 configure）
+        self._fit_wait -= 1
+        if self._fit_wait > 0:
+            return True
+        seen = self._fit_seen
+        if seen is None:
+            self._layer_fit_finish(None, f"请求 {w}x{h} 从未被 configure"
+                                         f"（等了 {_LAYER_FIT_WAIT_TICKS} 拍）")
+        else:
+            now = ("仍没有任何 configure" if size is None
+                   else f"读到 {size[0]}x{size[1]}")
+            self._layer_fit_finish(None, f"按 {seen[0]}x{seen[1]} 回摆到 ({x},{y}) 后，"
+                                         f"configure 仍未等于请求 {w}x{h}（{now}）")
+        return False
+
+    def _layer_fit_watch(self) -> bool:
+        """稳态重查（#89）：带撤走／改厚度之后重算那一发夹移，别让它在无声里错 180 px。
+
+        入口是 **configure 变化本身**：每 `_LAYER_FIT_WATCH_TICKS` 拍读一次桥接层缓存的
+        最近一份 configure，只跟上一次读到的那份比。没有变化就没有新事实，也就不该有动作。
+        这不是请求-应答式的往返（那才是 #78 禁止的每帧跨 FFI 回读），成本是一秒一次
+        一个 `c_int` 写回——把 #78 §8.1 那条"稳态零次"进一步打折成"稳态一秒一次"，按打折记。
+
+        两相：
+          紧张相（配出的尺寸比请求小）⇒ 可用区缩了 ⇒ `U = 配高 + 当前 margin`，
+            按模型往上/左夹一发。`min` 保证只会缩，所以永远不会把 fidus 挪走的方向扳回来。
+          宽裕相（配出的尺寸够大）⇒ 帧在当前 margin 装得下 ⇒ 把位置朝锚点收一发。
+            锚点此刻装不装得下**不可证明**（configure 等于请求只给 `U ≥ margin + 请求高`
+            这个下界），所以那一发是**探针**：收过去之后交回 `_layer_fit_service` 确认，
+            确认不了它会按新读数自己再夹回来——那条自愈路径是挂载那一轮现成的。
+
+        两相都只发一发，且发完就把这一拍当作"在等回读"拦掉推帧（推了也必被尺寸门控丢掉）。
+
+        fidus 正在跑（`_fidus_busy`）时整段让路：它和我都在写 `set_position`，而它的闭环
+        吃的是"我请求 X、屏上是 Y"这个对应关系，中途插一发就把对方的读数打乱了。
+        这一拍不重查，下一个周期再看——带不会在一秒内来回变。
+        """
+        anchor = getattr(self, "_fit_anchor", None)
+        if anchor is None:
+            return False
+        if getattr(self, "_fidus_busy", False):
+            return False
+        self._fit_watch -= 1
+        if self._fit_watch > 0:
+            return False
+        self._fit_watch = _LAYER_FIT_WATCH_TICKS
+        backend = self._layer_backend
+        try:
+            size = backend.logical_size()
+        except Exception as exc:
+            # 稳态这一读坏了：一个只出声一次就再刷一遍的循环会淹掉日志，所以这里只报
+            # 本周期，也**不撤锚**——撤锚等于把"这一段不再管事"当成结论，而实情是"这次没读到"。
+            safe_print(f"[layer] ⚠ 稳态重查回读异常，本周期跳过: "
+                       f"{type(exc).__name__}: {exc}")
+            return False
+        if size is None:
+            return False
+        size = (int(size[0]), int(size[1]))
+        prev, self._fit_size = self._fit_size, size
+        if prev is None or prev == size:
+            return False                  # 还没有基准，或这一份不是"新事实"
+        ax, ay, w, h = anchor
+        mx, my = getattr(self, "_fit_margin", None) or (ax, ay)
+
+        if size[0] < w or size[1] < h:
+            # 紧张相：从**当前** margin 反解可用区（模型只在被夹这一支给出等式）。
+            nw, nh = size
+            if getattr(self, "_fit_measured", False):
+                safe_print(f"[layer] configure {prev[0]}x{prev[1]}→{nw}x{nh} ⇒ 可用区缩了，"
+                           f"但位置是量出来的 ⇒ 不回摆（裁决「测量赢」），margin=({mx},{my}) 保留")
+                return False
+            nx, ny = min(ax, nw + mx - w), min(ay, nh + my - h)
+            if (nx, ny) == (mx, my):
+                safe_print(f"[layer] configure {prev[0]}x{prev[1]}→{nw}x{nh}，"
+                           f"按模型已在无处可挪（margin=({mx},{my})）⇒ 不动")
+                return False
+            band = self._layer_band_thickness(nh + my)
+            safe_print(f"[layer] configure {prev[0]}x{prev[1]}→{nw}x{nh} ⇒ 可用高 "
+                       f"{nh + my}（带厚 {band}），重摆 ({mx},{my})→({nx},{ny})")
+            if not self._layer_fit_move(nx, ny):
+                return False
+            self._fit_band = band
+            self._layer_fit_proxy_rect(nx, ny, w, h)
+            # 这一份读数就是触发因，不是"夹移之前的旧证据" ⇒ _fit_seen 直接占上，
+            # 确认轮里不再据它发第二发。
+            self._fit_open_recheck((nx, ny, w, h), seen=size)
+            return True
+
+        # 宽裕相：帧在当前 margin 装得下 ⇒ 朝锚点收一发（探针，见 docstring）。
+        if (mx, my) == (ax, ay):
+            self._fit_band = None         # 已在锚点又装得下 ⇒ 没有夹移要记账
+            return False
+        safe_print(f"[layer] configure {prev[0]}x{prev[1]}→{size[0]}x{size[1]} ⇒ 宽裕，"
+                   f"回收夹移 ({mx},{my})→({ax},{ay})（一发，待确认）")
+        if not self._layer_fit_move(ax, ay):
+            return False
+        self._fit_band = None
+        self._layer_fit_proxy_rect(ax, ay, w, h)
+        # 这里 `seen=None`：锚点上那份"等于请求"的旧读数不是夹移前的证据，而确认轮
+        # 需要有权对锚点上真正落下来的新 configure 再夹一发。
+        self._fit_open_recheck((ax, ay, w, h), seen=None)
+        return True
+
+    def _fit_open_recheck(self, rect, seen) -> None:
+        """把重查算出的那一发交给**挂载那一轮**确认：同一套预算、同一个出声出口。"""
+        self._fit_rect = rect
+        self._fit_seen = seen
+        self._fit_wait = _LAYER_FIT_WAIT_TICKS
+        # 重查落定不许再启一轮 fidus：#78 把它排在落定之后**一次**，两段各跑各的会互吃读数。
+        self._fit_fidus = None
+
+    def _layer_fit_move(self, x: int, y: int) -> bool:
+        """本段的摆位出口，只碰 `set_position`。
+
+        不复用 `_fidus_place`：它顺手写 `_fidus_surface`，而 fidus 可能整场都没启动
+        （默认关）。与其让一段写另一段的状态，不如各记各的账。
+
+        唯一的例外是 `_fit_margin`：那是"最后一次由本产品发出的 margin"这个**物理事实**，
+        而两个作者都可能是写它的人（#89 的重查要从它反解可用区）。各记各的账在这里等于
+        把同一个事实存两份、任其分叉，所以两处写、一处读。锚点另有其主，见
+        `_fidus_owns_placement`。
+        """
+        setter = getattr(getattr(self, "_layer_backend", None), "set_position", None)
+        if not callable(setter):
+            return False
+        try:
+            setter(int(x), int(y))
+        except Exception as exc:
+            safe_print(f"[layer] ✗ 回摆 set_position 失败: {exc}")
+            return False
+        self._note_margin_request(int(x), int(y))
+        return True
+
+    def _note_margin_request(self, x: int, y: int) -> None:
+        """记下"最后一次由本产品发出的 margin"——重查要从它反解可用区。
+
+        **不动锚点**：夹移后的位置是"被迫的"，锚点必须留在人把桌宠放下的那个请求上，
+        否则宽裕相会发现"当前 == 锚点"而什么都不回收，本件要修的正是这一格。
+        """
+        self._fit_margin = (int(x), int(y))
+
+    def _fidus_owns_placement(self, x: int, y: int) -> None:
+        """fidus 挪过之后，锚点改吃它那个位置。
+
+        锚点的含义是"人／测量认定桌宠该在哪"，而 fidus 那一发是按屏幕读数算的**主动**摆放，
+        比挂载请求更新。宽裕相若回收的是挂载那一刻，就会把 fidus 测出来的修正抹掉。
+        """
+        self._note_margin_request(x, y)
+        anchor = getattr(self, "_fit_anchor", None)
+        if anchor is not None:
+            self._fit_anchor = (int(x), int(y)) + anchor[2:]
+
+    def _layer_fit_proxy_rect(self, x: int, y: int, w: int, h: int) -> None:
+        """把"我相信自己在屏幕上的哪块矩形"跟着夹移一起改——否则信念与实际分叉。
+
+        margin 是**可用区内**的坐标，`_proxy_rect` 是屏幕坐标，差的就是保留带厚度。
+        带厚取 `self._fit_band`——那是发这一发夹移时按**当时**的 configure 算出来并存下的
+        量（#89 起它是这段的手持事实，不再是从 `usable_h` 当场换算的中间值）；不在这里
+        重读回读通道：那一读可能已经等到夹移**之后**的新 configure，与正在写的这个 margin
+        不是同一份事实。假设"带在顶上"——上面那两条模型本来就是这个形状，不成立时那一发
+        夹移会被超时预算否掉。宽裕相回收那一发时 `_fit_band` 刚被撤成 None ⇒ 同一个"无带"假设。
+
+        进来的 `(x,y,w,h)` 是 **surface** 矩形（丙之后它比画布小一圈），写出去的是**画布**矩形：
+        信念的口径由 `_layer_canvas_rect` 单点决定，不许在这里各写各的。
+        """
+        widget = getattr(self, "sprite_label", None)
+        if widget is None:
+            return
+        rect = self._layer_canvas_rect(x, y, w, h)
+        rect.translate(0, self._fit_band or 0)
+        widget._proxy_rect = rect
+
+    def _layer_band_thickness(self, usable_h: int) -> int:
+        """保留带厚度 = 屏幕高 − 可用高，本模块里唯一一处读屏幕尺寸的地方。
+
+        整屏高取 Qt 的 `geometry()`——Wayland 下它报逻辑整屏（本机实测 1366x768），
+        而 `availableGeometry()` 对外部带完全无感，那正是旧摆位偏 180 px 的来源。
+        读不到屏幕就给 0：宁可不估，也不拿一个编出来的带厚去挪信念矩形。
+        """
+        try:
+            screen = QApplication.primaryScreen()
+            if screen is None:
+                return 0
+            return max(0, screen.geometry().height() - int(usable_h))
+        except Exception:
+            return 0
+
+    def _layer_report_head_clip(self, rect, band: int | None = None) -> None:
+        """夹移落定后单独问一次「不透明轮廓是否出屏」——出屏必须出声，**不改摆位**。
+
+        那两条模型只优化"帧装进可用区"，于是它能自救成功（整块上抬）而把头顶推出屏幕上沿：
+        本机 scale=1.5 实测 configure 461x512（请求 461x614）⇒ 夹移到 -102，轮廓行 41..570
+        的顶端因此落在屏幕行 -61，61 px 的头没了而这一段自认正常（正证与三条出口见
+        `~/.Athena/projects/meapet/working/fractional-scale-head-clip.md` §2/§3）。这里只取
+        第一条出口；"按轮廓算夹移"那条不做——轮廓与帧的差是本机这一只模型的属性。
+
+        默认只在真夹过移时判（`_fit_band` 是整数）：没夹 ⇒ configure 一开始就等于请求 ⇒ 帧整体在
+        可用区内而轮廓是帧的子集，结构上不可能出屏，不为此多付一次离屏渲染。`band` 由调用方
+        显式给时按给的数判——测量位挂载就是这一格：它没夹过移，但那个 margin 是屏幕上读出来的，
+        完全可能本身就把头顶顶到屏外。横向不判：夹移只往上／左挪（`min`），且本模块没有横向的
+        带厚可读。
+        """
+        x, y, _w, _h = rect
+        band = self._fit_band if band is None else band
+        if band is None:
+            return          # 没夹过移 ⇒ 帧整体在可用区内，不必为不可能的出屏付一次渲染
+        frame = self._fidus_current_frame()
+        if frame is None:
+            return
+        try:
+            import numpy as np
+
+            from meapet.desktop.fidus_position import ALPHA_MIN
+
+            rows = np.flatnonzero((frame[..., 3] > ALPHA_MIN).any(axis=1))
+            if rows.size == 0:
+                return
+            by0, by1 = int(rows.min()), int(rows.max()) + 1   # 右开，与探针 opaque_bbox 同式
+            # `rect` 是 surface 矩形：它的 margin 已经含了轮廓上界 oy，而 by0 是从**整帧**行数出来的，
+            # 不减就把同一行计两次（丙之前 oy 恒 0，这一减逐位退化成原式）。减完得到画布顶的屏幕 y，
+            # 与 `_layer_fit_proxy_rect` 里信念那个 y 同口径。
+            _ox, oy = getattr(self, "_layer_frame_origin", (0, 0))
+            screen_y = y - int(oy) + band
+            head = -(screen_y + by0)
+            if head <= 0:
+                return
+        except Exception as exc:
+            safe_print(f"[layer] ⚠ 轮廓出屏这一判没跑成: {type(exc).__name__}: {exc}")
+            return
+        safe_print(f"[layer] ⚠ 不透明轮廓出屏：头顶被屏上沿切掉 "
+                   f"{head} 逻辑 px（信念屏幕 y={screen_y}，帧内轮廓行 {by0}..{by1}，"
+                   f"带厚 {band}）")
+        self._show_bubble(
+            "屏幕高度不够，桌宠的头会被屏上沿切掉一块\n"
+            "（缩小画布或降低桌面缩放比例可避开）",
+            bubble_duration_ms(self.config, "interaction"),
+        )
+
+    def _layer_report_measured_hold(self, rect, size) -> None:
+        """测量位与"合成器给不出请求尺寸"并存时的出口：出声报数，**不改位**（裁决「测量赢」）。
+
+        不复用 `_layer_fit_report`：那句写的是"摆位失败"，而这里摆位是成功的——位置按量出来的
+        保留，坏的是尺寸。带厚从这一读反解（`可用高 = 配高 + margin`，模型只在被夹这一支给出
+        等式）后交给削头那一判：它此前只在真夹过移时跑，而测量位没夹过移
+        也可能把头顶顶到屏外。
+
+        措辞走 `_layer_size_outcome`（唯一一处），不在这里另写一份：人工 2026-10-03 那一条
+        `只配出 456x463（请求 512x512）` 里，旧句子说的"会保持空白"已经不是后果了——
+        `_layer_conform_to_configure` 按 configure 裁着推 ⇒ 后果是**切掉一块**。
+        """
+        x, y, w, h = rect
+        lw, lh = size
+        safe_print(f"[layer] ⚠ 合成器只配出 {lw}x{lh}（请求 {w}x{h}）⇒ 按测量位 ({x},{y}) 保留，"
+                   f"不回摆（裁决「测量赢」）")
+        self._show_bubble(self._layer_size_outcome(rect),
+                          bubble_duration_ms(self.config, "interaction"))
+        self._layer_report_head_clip(rect, self._layer_band_thickness(lh + y))
+
+    def _layer_size_outcome(self, rect) -> str:
+        """「尺寸配不出来」这一后果的**唯一一处**措辞，按有没有读到 configure 分三支。
+
+        读到过且配得比请求小 ⇒ `_layer_conform_to_configure` 按那份事实裁着推，人看见的是
+        **切掉一块**；从没读到过 ⇒ 提交尺寸无从对齐，门控照丢 ⇒ 才是**整片空白**；配得比请求
+        大 ⇒ 不在算过的模型里（`configure = min(请求, 剩余)` 只会往小夹），照原样提交并报数。
+        这三支不许合成一句：把"空白"留在裁着显示那一支，就是拿一个不存在的症状引人去查。
+        测量位那一出口（`_layer_report_measured_hold`）与信念位那几支出口（`_layer_fit_report`）
+        共用这里，免得两处措辞分叉。
+        """
+        _x, _y, w, h = rect
+        fit = getattr(self, "_fit_size", None)
+        if not fit:
+            return ("屏幕放不下这个尺寸的桌宠，穿透画面会保持空白\n"
+                    "（缩小画布或收起状态栏再试）")
+        fw, fh = int(fit[0]), int(fit[1])
+        cut_w, cut_h = max(0, w - fw), max(0, h - fh)
+        if cut_w > 0 or cut_h > 0:
+            edges = "／".join(part for part in (
+                f"右侧 {cut_w} px" if cut_w > 0 else "",
+                f"下方 {cut_h} px" if cut_h > 0 else "") if part)
+            return (f"屏幕放不下这个尺寸的桌宠：{edges}会被切掉\n"
+                    f"（画面按合成器配出的 {fw}x{fh} 切着显示，缩小画布可少切一点）")
+        return (f"合成器配出 {fw}x{fh}，比请求的 {w}x{h} 还大\n"
+                "（这不在算过的模型里，按原位保留，不做第二种解法）")
+
+    def _layer_fit_finish(self, rect, got: str | None = None) -> None:
+        """落定：`rect=None` 表示没救回来（出声，且**不**启动 fidus——量一个不在屏上的
+        surface 只会再补一条"没能量准位置"的误导气泡，真正的原因在尺寸上）。
+
+        `pending is None` 是 #89 的重查轮：它照旧判削头（带厚变了，出屏这一判就变了），
+        但**不再启一轮 fidus**——#78 把 fidus 排在落定之后一次，两段各跑各的会互吃读数。
+        """
+        pending = getattr(self, "_fit_fidus", None)
+        last = getattr(self, "_fit_rect", None)
+        self._fit_fidus = None
+        self._fit_rect = None
+        self._fit_watch = _LAYER_FIT_WATCH_TICKS   # 重查从落定那一拍起算一整周期
+        if got is not None:
+            self._layer_fit_report(last or pending, got)
+        if rect is None:
+            # 没救回来：`_fit_size` **留着**——超时那一拍读到的仍是当前事实，拿它当基准
+            # 才能让稳态重查认出"下一次 configure 变了"。撤成 None 会把紧接而来的那一变
+            # 当成"第一次读数"安静吞掉，而那恰好是本件要抓的那一格。
+            return
+        self._layer_report_head_clip(rect)
+        if pending is not None:
+            self._maybe_start_fidus_locate(*rect)
+
+    def _layer_fit_report(self, rect, got: str) -> None:
+        """放不下的那条出口：必须出声，并把桥接层的诊断一起端出来（§7.1 #11）。
+
+        诊断只作为**附注**读：粘性错误按 spec 不参与任何判决（I6），这里也只是把它
+        原样印给人看，不据它分支。旧产物没有 `last_error` 时就没有这一行，不编造。
+        """
+        x, y, w, h = rect
+        backend = getattr(self, "_layer_backend", None)
+        why = ""
+        if backend is not None and callable(getattr(backend, "last_error", None)):
+            text = backend.last_error()
+            if text:
+                why = f"｜桥接层诊断：{text}"
+        safe_print(f"[layer] ✗ 摆位失败：请求 {w}x{h} @({x},{y})，{got}{why}")
+        self._show_bubble(self._layer_size_outcome((x, y, w, h)),
+                          bubble_duration_ms(self.config, "interaction"))
+
+
+    # ------------------------------------------------------------ fidus 定位
+    #
+    # 顺序（2026-10-02 改判，见 `pool/layer-belief-first-mount-decision-error.md`）：
+    # **量完再挂**。旧那段写在代码脸上的"必要偏差"——「surface 没挂上去就没有可量的东西，
+    # 所以先按信念挂载 → 测 → 用测量值再摆一次」——的前提被 H23/H24/H25 推翻了：fidus 搜索的
+    # 是**它自己抓的那一张屏**，我们的离屏帧只当模板源，而交互态下桌宠本来就是屏上的像素。
+    # 于是"先挂"换来的不是可测性，只是**一次用户看得见的跳位**，而那次跳位的落点按构造就不是
+    # 量出来的那个（决策失误登记的主罪）。现在：
+    #   * `penetrate=True` 且 fidus 开着 ⇒ 先测（不喂先验、H 手、2 px 闭环），
+    #     测出来才 `_do_layer_mount(..., measured=True)`；测不出来 ⇒ **不切**、留在交互态、出声；
+    #   * fidus 没开 ⇒ 挂载照旧按信念，回读夹移照旧（`measured=False` 那一支一字未改语义）；
+    #   * 挂载**之后**那一次 fidus 校正（`_maybe_start_fidus_locate`）现在只在 `measured=False`
+    #     的挂载之后被排入，而那条路只在 fidus 关闭时才走 ⇒ 闸门第一句就返回。**这条路实际
+    #     已不可达**，但码与回归都留着：`locate()` 的 post-mount 语义（B 语义、探针位移由
+    #     紧接着那次摆位吃掉）是 H13/H15 的资产，删它不等于删一个死分支，而是删一份实测凭证。
+    #
+    # 引擎在 fidus 自己的线程上（见 fidus_position.request_locate 的线程亲和说明），
+    # 因此这里所有跨线程接触都走"标志 + 引用"，由 _fidus_service 在 GUI 线程上落地：
+    # Qt 对象与 layer 门面都只在 GUI 线程碰。一轮测量另带一个**轮次号**（`_fidus_round`）：
+    # 超时/取消之后那一发可能还在 fidus 线程上跑，凭号丢弃它迟到的读数与迟到的位移请求，
+    # 否则下一次的挂载位置会来自上一次的测量。
+
+    def _fidus_enabled(self) -> bool:
+        return bool((self.config.get("fidus") or {}).get("enabled", False))
+
+    def _toggle_fidus_enabled(self) -> None:
+        cfg = self.config.setdefault("fidus", {})
+        cfg["enabled"] = not bool(cfg.get("enabled", False))
+        self._save_config()
+        self._show_bubble(
+            "已启用 fidus 定位：下次切换穿透时先量位置再挂（第一次约需 2 秒校准）"
+            if cfg["enabled"] else "已停用 fidus 定位，切换穿透回到只用请求坐标",
+            bubble_duration_ms(self.config, "interaction"),
+        )
+
+    def _begin_fidus_round(self, x: int, y: int, w: int, h: int, *,
+                           premount: bool) -> int:
+        """开一轮测量：复位全部跨线程标志，回这一发的轮次号。
+
+        `_fidus_surface` 在这一轮里是"位移的基准"，两种用法不同源：post-mount 它是
+        当前 surface 的 margin 矩形，pre-mount 它只是那个**已知在撒谎**的信念矩形——
+        预挂载的位移不走它，走 `_content_probe_shift`（H 手挪的是子控件，不是 surface）。
+        """
+        self._fidus_busy = True
+        self._fidus_premount = premount
+        self._fidus_finished = False
+        self._fidus_result = None
+        self._fidus_move_req = None
+        self._fidus_move_ack = None
+        self._fidus_settle = 0
+        self._fidus_surface = (int(x), int(y), int(w), int(h))
+        self._fidus_mount = (int(x), int(y), int(w), int(h))
+        self._fidus_round = getattr(self, "_fidus_round", 0) + 1
+        if getattr(self, "_fidus_timer", None) is None:
+            self._fidus_timer = QTimer(self)
+            self._fidus_timer.setInterval(_FIDUS_POLL_MS)
+            self._fidus_timer.timeout.connect(self._fidus_service)
+        self._fidus_timer.start()
+        return self._fidus_round
+
+    def _premount_refuse(self, why: str, bubble: str) -> None:
+        """「量不出可信读数 ⇒ 不切」（人工裁决 2026-10-02）。
+
+        静默不切与旧的静默挂载是同一种失效：人会点第二下、第三下，然后怀疑鼠标。
+        报的原因要指向真正的缺口——"没带引擎"与"画面拿不到"与"没量准"是三件事，
+        混成一句会把人引去等一次根本不会到来的校准。
+        """
+        safe_print(f"[layer] ✗ 没切穿透：{why}")
+        self._show_bubble(bubble, bubble_duration_ms(self.config, "interaction"))
+
+    def _content_probe_room(self) -> tuple[int, int, int, int]:
+        """子控件在顶层窗口内的**四向空档**——H 手那一发摆得摆不下就看它。
+
+        返回 `(右, 下, 左, 上)`，**逐位对应 `FP.PREMOUNT_MOVES` 的顺序**。人工裁决
+        2026-10-02：「超出屏幕的抓不到，但是桌宠大概率在屏幕上，所以四角都要试」——
+        平铺下窗口按合成器预设出现，画布往哪一角溢出没有一定，只看右/下会把另外
+        两角的可用位移判成零。摆不下仍要响亮退回：把贴片切掉一半去跑闭环，
+        量到的是"半个盒"的读数，绿不算。
+        """
+        widget = getattr(self, "sprite_label", None)
+        if widget is None:
+            return (0, 0, 0, 0)
+        return (int(self.width() - (widget.x() + widget.width())),
+                int(self.height() - (widget.y() + widget.height())),
+                int(widget.x()), int(widget.y()))
+
+    def _content_probe_shift(self, dx: float, dy: float) -> bool:
+        """H 手：把 Live2D 子控件在顶层窗口里平移，**顶层窗口几何一码不动**。
+
+        这只手是判据的载体，不是装饰：`pet.move()` 摆顶层窗口在 Wayland 下屏上 0 px
+        （平铺与浮动都 0，H24 四场四发），`niri move-floating-window` 有效但产品没有那只手。
+        而子控件自移经 H25 十一场实证——离屏帧逐字节恒等（`帧恒等=True`）、屏上真实位移
+        (+48.00,+0.00) 全中 ⇒ 喂给引擎的输入没变、变的只有屏上 ⇒ 闭环是**外接见证**，
+        不是"我把挪过的帧喂给它，它当然跟得上"那种自循环。
+        """
+        widget = getattr(self, "sprite_label", None)
+        if widget is None:
+            return False
+        base = getattr(self, "_content_probe_base", None)
+        if base is None:
+            base = self._content_probe_base = (int(widget.x()), int(widget.y()))
+        widget.move(base[0], base[1])       # 从原位出发才谈得上"已知位移"（幂等）
+        shift_x, shift_y = int(round(dx)), int(round(dy))
+        room = self._content_probe_room()   # 已回原位 ⇒ 这四数是相对原位的余量
+        need = (max(0, shift_x), max(0, shift_y), max(0, -shift_x), max(0, -shift_y))
+        # **只判真要位移的那几向**。`window_mask` 开着时画布比视口宽、往左溢出，
+        # `_content_probe_room()` 的「左」因此恒为负（真机 2026-10-03：-123）——那是
+        # 内容被裁的位置，不是这一向的缺口。拿 `need=0` 去比 `room=-123`，`0 > -123`
+        # 为真，向右那一发被一个它根本不需要的位置否掉 ⇒ 四向全死、恒不通过。
+        if any(n > r for n, r in zip(need, room) if n > 0):
+            safe_print(f"[fidus] ✗ 四向空档 (右{room[0]},下{room[1]},左{room[2]},上{room[3]})"
+                       f" 摆不出 ({shift_x},{shift_y}) ⇒ 换下一向")
+            return False
+        widget.move(base[0] + shift_x, base[1] + shift_y)
+        return True
+
+    def _restore_content_probe(self) -> None:
+        """把探针位移吃掉（甲的实现约束 1）。
+
+        `Fix.center` 取的是**位移之前**那一发 `a`（`fidus_position.py` 里 `locate` 的返回值
+        由 `a` 算出），而子控件停在 +48 px。挂载吃的是 `a − anchor` 那个矩形，若就着挪过的
+        子控件去挂，`_layer_geometry()` 读的 `widget.mapTo` 偏移还带着那 48 px ⇒ 同一个偏移
+        既进挂载矩形又进下一次信念，两件事一起偏。post-mount 那一路不需要这一发：它靠紧接着
+        的那次 `set_position` 把位移吃掉（`locate` 的 B 语义），两种用法别混。
+        """
+        base = getattr(self, "_content_probe_base", None)
+        if base is None:
+            return
+        self._content_probe_base = None
+        widget = getattr(self, "sprite_label", None)
+        if widget is not None:
+            widget.move(base[0], base[1])
+
+    _PROBE_PUMP_TIMEOUT_MS = 500      # 等尺寸落地的上限：20 s 预算的 2.5%，只在 resize 之后跑
+    _PROBE_PUMP_STEP_MS = 16
+    _PROBE_ROOM_MARGIN_PX = 2         # 长尺寸时多要的两 px，见 `_request_probe_window`
+
+    def _probe_slack_px(self) -> int:
+        """探针要吃掉的四边余量 = `PREMOUNT_MOVES` 里最远那一发的绝对值（本机 48）。
+
+        不另立常量：余量与位移必须**同源**，否则改了 `MOVE_PX` 会留下一个"窗口放得下、
+        探针摆不出"或反过来的静默错配。
+        """
+        from meapet.desktop import fidus_position as FP
+
+        return max(int(round(max(abs(dx), abs(dy)))) for dx, dy in FP.PREMOUNT_MOVES)
+
+    def _pump_window_size(self, want: tuple[int, int]) -> tuple[int, int]:
+        """GUI 线程上有界等尺寸落地，回**实得**的 (宽, 高)。
+
+        四向空档是判据的**输入**，不是事后信息：拿请求值当真值，等于把"平铺会吃尺寸请求"
+        重新变回一次信念——而 H23 给这类信念量出的偏差是 (−227,+342) px。所以这里等的是
+        `self.width()` 追上请求；等不到就照实报数，由四向空档那道闸据此拒掉这一发。
+
+        泵事件时**排除用户输入**：这半秒里面板收到一次点击，`_pending_mount`/`_fidus_busy`
+        都还没置（它们在起工时才置），重入会把 `_probe_saved` 覆写成放大过的那一份，
+        复原就只剩"缩到放大尺寸"——透明边从此留在交互态。
+        """
+        import time
+
+        from PyQt5.QtCore import QElapsedTimer
+
+        clock = QElapsedTimer()
+        clock.start()
+        while (self.width(), self.height()) != want:
+            if QApplication.instance() is None:
+                break                     # 假 host 的回归跑在这里：没有事件循环可泵
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+            if clock.elapsed() >= self._PROBE_PUMP_TIMEOUT_MS:
+                break
+            time.sleep(self._PROBE_PUMP_STEP_MS / 1000.0)
+        return (int(self.width()), int(self.height()))
+
+    def _request_probe_window(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        """量之前把顶层窗口**重新请求一次**，并只往右下长出探针缺的那一段——画布一动不动。
+
+        治人工 2026-10-03 点出的两个毛病：
+
+        ①「没有再次请求一个正确大小的 Qt 窗口」——平铺下 niri 按预设摆窗、客户端的尺寸请求
+        被吃（`finished/layer-configure-size-ignored.md` 那一路的交互态对应物：实测平铺出
+        659×736 而产品要 461×614）。所以先把产品自己那份 viewport 几何重发一遍；切成浮动之后
+        这一次才拿得到正确大小。
+        ②「四向空档恒为否」——常态下**窗口就是画布**（`window_mask` 关：`widget_x=0` 且
+        `window_width == widget_width`）或画布的**裁剪**（`window_mask` 开：`widget_x=-crop_left < 0`
+        且 `widget_width > window_width`）。把这两式代进 `_content_probe_room()`，右/下两数 ≤ 0
+        ⇒ H 手连一发都摆不出。所以缺多少长多少，长出来的那一段在裁剪区外：既没东西可画
+        （`WA_TranslucentBackground`，`app.py:258`）也不收点击，mask 因此一码不动。
+
+        **为什么只往右下长，而不是「把桌宠摆中间、四边都留 slack」**（改判 ② 的字面读法）：
+        把画布摆到窗口中间要 `widget.move(+slack,+slack)`，抵消它要 `self.move(-slack,-slack)`；
+        后一发是 C 手，**Wayland 屏上 0 px**（H24 四场四发证死），且 `self.x()/self.y()` 在
+        niri 下本来就不是事实（`_layer_geometry` 的 docstring 自己就这么写着）。所以抵消不掉，
+        桌宠会在测量一开始就真跳 (+slack,+slack)，而 `Fix.center` 取的是**位移之前**那一帧
+        ⇒ 跳完的读数拿去挂，surface 整体偏一份 slack。左/上两向因此常态摆不出，由 `locate`
+        逐向跳过并各写一行（人工 ③「看哪个能用再采信哪个」），不靠假位移去凑。
+
+        回 `(请求的 (宽,高), 实得的 (宽,高))`：差得多说明尺寸请求被吃了；**是否拒这一下**
+        由 `_content_probe_room()` 四向**全**空那一支判，两个数原样写进日志，不靠这里的一句话。
+        """
+        widget = getattr(self, "sprite_label", None)
+        if widget is None:
+            return ((0, 0), (0, 0))
+        if getattr(self, "_use_live2d", False):
+            try:
+                self._apply_live2d_viewport_geometry(self._size_factor)
+            except Exception as exc:
+                safe_print(f"[fidus] 重发 viewport 几何失败（照当前几何放大）: {exc}")
+        slack = self._probe_slack_px() + self._PROBE_ROOM_MARGIN_PX
+        # 多要那两个 px 不是余量洁癖：`window_mask` 开着时左/上恒为负，可用方向**只有右/下**，
+        # 而这两数按上面那式**正好等于** `slack`——合成器少给 1 px（缩放档下尺寸按物理像素
+        # 取整）就把仅有的两发同时判回"摆不出"，症状与刚才那条 bug 逐字相同（恒不通过）。
+        ow, oh = int(self.width()), int(self.height())
+        self._probe_saved = (ow, oh)
+        want = (max(ow, int(widget.x()) + int(widget.width()) + slack),
+                max(oh, int(widget.y()) + int(widget.height()) + slack))
+        if want != (ow, oh):
+            self.resize(*want)
+        got = self._pump_window_size(want)
+        return (want, got)
+
+    def _restore_probe_window(self) -> None:
+        """把窗口缩回常态尺寸，没放大过就是空转。
+
+        收尾处处无脑调它：量准了要挂、量不准要拒、超时、切回交互态——留在一个放大过的
+        窗口里，等于把「透明边也算热区」这件事偷偷留给用户（`#83/#88` 那条帧=热区的结论
+        就是这么被撑大的）。
+
+        这里**只**还尺寸：画布的偏移全程没碰，窗口也没挪（C 手在 Wayland 是 0 px，见
+        `_request_probe_window`），mask 因此也跟着不动——长出去那一段是 `WA_TranslucentBackground`
+        （`app.py:258`）下的透明像素，画不出东西；它收不收点击本机没测，但这一发只在测量那几秒里
+        存在，收尾（挂／拒／超时／切回）一律把尺寸还回去，不留过夜。
+        （旧写法在这里 `clearMask()` 之后调 `_apply_hit_region()` 想把它请回来，而 `MeaPet`
+        上那个名字解析到 `app.py:602` 的点击穿透版，压根不改 mask：清了没还。）
+        """
+        saved = getattr(self, "_probe_saved", None)
+        if saved is None:
+            return
+        self._probe_saved = None
+        ow, oh = saved
+        if (int(self.width()), int(self.height())) != (ow, oh):
+            self.resize(ow, oh)
+        if QApplication.instance() is not None:
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+
+    def _confirm_float_first(self) -> bool:
+        """量之前先要一次「窗口切成浮动了吗」的人工确认（裁决 2026-10-02「先让用户 Mod + V」）。
+
+        平铺下 niri 按预设摆窗，**客户端请求的尺寸会被吃掉**（人工现测 2026-10-02；
+        产品侧也从不回应 configure——`meapet/` 里没有任何顶层窗口尺寸变化的覆写）。于是
+        交互态里 `_content_probe_room()` 读到的四向空档与桌宠在屏上的真实边界脱钩，
+        探针位移摆不出可信的一发。把窗口转浮动是合成器那只手（`niri msg action
+        toggle-window-floating`），产品这一侧够不到 ⇒ 只能请人按。勾「不再提示」写回
+        `fidus.ask_float`，此后直接量（人自己负责窗口已经是浮动的）。
+        """
+        cfg = self.config.setdefault("fidus", {})
+        if not cfg.get("ask_float", True):
+            return True
+        from PyQt5.QtWidgets import QMessageBox
+        from meapet.message_dialog import MeaMessageDialog
+
+        dialog = MeaMessageDialog(
+            self,
+            title="先把窗口切成浮动",
+            text=(
+                "平铺的窗口会按合成器预设出现，请求的大小拿不到——\n"
+                "这样量出来的位置不可信。\n\n"
+                "请先按 Mod+V 把这个窗口切成浮动，再点「继续」开始测量。"
+            ),
+            icon=QMessageBox.Question,
+            buttons=int(QMessageBox.Yes | QMessageBox.No),
+            default_button=int(QMessageBox.Yes),
+            check_text="不再提示",
+        )
+        if dialog.exec_() != int(QMessageBox.Yes):
+            return False
+        if dialog.is_checked():
+            cfg["ask_float"] = False
+            self._save_config()
+        return True
+
+    def _start_premount_measure(self, x: int, y: int, w: int, h: int) -> None:
+        """「量完再挂」那一发：不喂先验、H 手、2 px 闭环、**四向逐个试**（裁决 2026-10-02 点甲 + 四角裁决）。
+
+        判据的强度不在这里另立：`FP.PREMOUNT_TOL_PX` / `FP.PREMOUNT_MIN_EDGE` /
+        `FP.PREMOUNT_MOVES` 的出处写在 `fidus_position.py` 那三条常量上（H25 四格 +
+        H14 撒谎档 + 「看哪个能用再采信哪个」）。
+
+        四向把最坏成本从"一发"抬到"至多四发定住"：单发 `locate` 实测 0.9–9.4 s，四发**可能**
+        越过 `_MOUNT_WAIT_MS=20_000`。这里**不偷偷放宽预算**（人工点定的 20 秒是宽口径），
+        超时按裁决 1 收尾——不切 + 出声。命中即采信 ⇒ 正常场只需一向，成本与单向同阶。
+        """
+        from meapet.desktop import fidus_position as FP  # 延迟导入：关着就不付这份账
+
+        if getattr(self, "_fidus_busy", False):
+            self._premount_refuse("上一次定位仍在进行",
+                                  "上一次定位还没跑完，这次没切穿透")
+            return
+        if not FP.have_engine():
+            self._premount_refuse("这个环境没有 fidus（随包分发未落地？）",
+                                  "这个版本没带定位引擎，量不了位置，没切穿透")
+            return
+        frame = self._fidus_current_frame()
+        if frame is None:
+            self._premount_refuse("拿不到当前离屏帧（离屏渲染不可用？）",
+                                  "拿不到当前画面，量不了位置，没切穿透")
+            return
+        if not self._confirm_float_first():
+            self._premount_refuse("人没确认窗口已切成浮动（平铺下量不准）",
+                                  "要先按 Mod+V 把窗口切成浮动才量得准，没切穿透")
+            return
+        # 先把窗口放大成「画布 + 四边各 slack」再读空档：常态下窗口**就是**画布（或它的裁剪），
+        # `_content_probe_room()` 四数恒 ≤0，不放大就没有任何一发摆得出去
+        # （人工 2026-10-03「没有再次请求一个正确大小的 Qt 窗口」「四向空档恒为否」）。
+        want, got = self._request_probe_window()
+        room = self._content_probe_room()
+        # 重发 viewport 几何（`_request_probe_window` 里那一发）可能把画布算大算小，而 fidus
+        # 量的是**此刻屏上**那份内容 ⇒ 挂载矩形跟着实际几何走。留在按下去的那一数上，挂出来的
+        # surface 就和量出来的中心差一份画布尺寸差。（只有尺寸会从这里漂：画布的偏移我们
+        # 全程没碰，窗口也没挪——`self.move()` 在这条路上一次都不该出现。）
+        now = self._layer_geometry()
+        if now != (int(x), int(y), int(w), int(h)):
+            safe_print(f"[fidus] 重发几何把画布改了：按下去 {(x, y, w, h)} → 现在 {now}"
+                       " ⇒ 这一发按现在的挂")
+            x, y, w, h = now
+        step = int(round(FP.MOVE_PX))
+        if all(r < step for r in room):
+            # 四向**全**空才拒。常态左/上是 0（画布贴窗口左上角）不是缺口：摆不出的方向由
+            # `locate` 逐向跳过并各写一行（人工 ③「看哪个能用再采信哪个」），这道闸没有理由
+            # 替它判死。真判死的是"一发都没有"——那正是尺寸请求被吃、窗口又不大的样子。
+            self._restore_probe_window()    # 拒了就不许留下一个放大过、mask 被清的窗口
+            self._premount_refuse(
+                f"窗口尺寸请求 {want[0]}×{want[1]} 实得 {got[0]}×{got[1]}，四向空档"
+                f" (右{room[0]},下{room[1]},左{room[2]},上{room[3]}) 摆不出探针 {step} px"
+                "（尺寸请求又被吃 ⇒ 窗口多半还平铺着）",
+                "窗口拿不到放得下定位探针的尺寸，量不了位置，没切穿透"
+                "（先按 Mod+V 把窗口切成浮动再试）")
+            return
+        safe_print(f"[fidus] 探针窗口 请求 {want[0]}×{want[1]} 实得 {got[0]}×{got[1]}"
+                   f" ⇒ 四向空档 (右{room[0]},下{room[1]},左{room[2]},上{room[3]})")
+
+        token = self._begin_fidus_round(x, y, w, h, premount=True)
+        self._pending_mount = (int(x), int(y), int(w), int(h))
+        self._content_probe_base = None
+        if getattr(self, "_mount_timer", None) is None:
+            self._mount_timer = QTimer(self)
+            self._mount_timer.setSingleShot(True)
+            self._mount_timer.setInterval(_MOUNT_WAIT_MS)
+            self._mount_timer.timeout.connect(self._fidus_mount_timeout)
+        self._mount_timer.start()
+        self._show_bubble("正在定位…（第一次约 2 秒，桌宠会滑动几下）",
+                          bubble_duration_ms(self.config, "interaction"))
+        FP.request_locate(
+            frame, None,                       # ← 不喂先验：信念已知在撒谎（H23 偏 342 px）
+            move=lambda dx, dy: self._fidus_request_move(dx, dy, token),
+            on_done=lambda fix: self._fidus_on_result(fix, token),
+            log=lambda k, v: safe_print(f"[fidus] {k}: {v}"),
+            tol_px=FP.PREMOUNT_TOL_PX,
+            min_edge=FP.PREMOUNT_MIN_EDGE,
+            moves=FP.PREMOUNT_MOVES,
+        )
+
+    def _fidus_mount_timeout(self) -> None:
+        """20 s 到：按裁决 1 收尾。预算内**只许一发**，不拿超时兜重试。"""
+        if getattr(self, "_pending_mount", None) is None:
+            return
+        # 作业可能还在 fidus 线程上跑：先作号，再收尾 ⇒ 它迟到的读数与迟到的位移请求
+        # 都落不到下一次挂载上（否则下一次的位来自上一次）。
+        self._fidus_round = getattr(self, "_fidus_round", 0) + 1
+        self._finish_premount_measure(None, f"{_MOUNT_WAIT_MS // 1000} 秒内没等到读数")
+
+    def _cancel_premount_measure(self) -> None:
+        """测量在飞时切回交互态：作废这一发，**不留半个 surface**、不把 `_layer_timer` 起起来。"""
+        if getattr(self, "_pending_mount", None) is None:
+            return
+        self._fidus_round = getattr(self, "_fidus_round", 0) + 1
+        self._pending_mount = None
+        for name in ("_mount_timer", "_fidus_timer"):
+            timer = getattr(self, name, None)
+            if timer is not None:
+                timer.stop()
+        self._fidus_busy = False
+        self._fidus_premount = False
+        self._fidus_finished = False
+        self._fidus_result = None
+        self._fidus_move_req = None
+        ack, self._fidus_move_ack = self._fidus_move_ack, None
+        if ack is not None:
+            ack.set()                    # 放行在飞的那一发，别让它白等 3 秒
+        self._fidus_settle = 0
+        self._restore_content_probe()
+        self._restore_probe_window()     # 放大过就得缩回去：透明边留在交互态是白送的热区
+        safe_print("[layer] 交互模式请求到场：取消在飞的量完再挂")
+
+    def _finish_premount_measure(self, fix, why: str | None = None) -> None:
+        """预挂载那一发的收尾：先 `restore()`，量出来才挂，量不出来**不切**。"""
+        timer = getattr(self, "_mount_timer", None)
+        if timer is not None:
+            timer.stop()
+        timer = getattr(self, "_fidus_timer", None)
+        if timer is not None:
+            timer.stop()
+        pending = getattr(self, "_pending_mount", None)
+        self._pending_mount = None
+        self._fidus_busy = False
+        self._fidus_premount = False
+        self._restore_content_probe()
+        # 窗口也得缩回常态**在挂载之前**：`_pending_mount` 那份矩形是放大之前就取好的画布屏幕
+        # 矩形，而 `_request_probe_window` 全程没动画布的屏幕位置，所以两者本来就一致；
+        # 但 mask 与热区只有在缩回来之后才是用户认得的那个形状（没放大过则是空转）。
+        self._restore_probe_window()
+        if pending is None:
+            return                      # 已被取消（切回交互态），结果无处安放
+        if fix is None:
+            self._premount_refuse(why or "位移闭环没过／没有可信读数（每条 log 都在上面）",
+                                  "没量准位置，没切穿透（桌宠还看得见、还点得动）")
+            return
+        _x, _y, w, h = pending
+        rect = _rect_from_center(fix.center[0], fix.center[1], w, h)
+        safe_print(f"[fidus] 测量位 ({rect[0]},{rect[1]}) {w}x{h} ← 中心 "
+                   f"({fix.center[0]:.2f},{fix.center[1]:.2f}) 贴片 {fix.edge}² "
+                   f"conf={fix.conf:.4f} ceiling={fix.ceiling:.4f}")
+        self._do_layer_mount(*rect, measured=True)
+
+    def _maybe_start_fidus_locate(self, x: int, y: int, w: int, h: int) -> None:
+        if not self._fidus_enabled():
+            return
+        if getattr(self, "_fidus_busy", False):
+            safe_print("[fidus] 上一次定位仍在进行，本次只用请求坐标")
+            return
+        from meapet.desktop import fidus_position as FP  # 延迟导入：关着就不付这份账
+
+        if not FP.have_engine():
+            # 引擎压根不在场：这一轮开不了，也不该开（校准要 2 秒还会闪屏，换不来读数）。
+            # 气泡说的是"没带"，不是"没量准"——后者会把人引去查屏幕，而缺口在打包面。
+            safe_print("[fidus] ✗ 这个环境没有 fidus，定位不启动（随包分发未落地？）")
+            self._show_bubble(
+                "这个版本没带定位引擎，量不了位置",
+                bubble_duration_ms(self.config, "interaction"),
+            )
+            return
+        frame = self._fidus_current_frame()
+        if frame is None:
+            # 离屏帧拿不到：这一轮开不了。静默 return 是被禁的形态（出声闸）——
+            # 症状是"启用了 fidus 但什么也不发生"，人无从下手：不知道该查渲染面
+            # 还是查引擎。气泡说的是"画面拿不到"，不是"没量准"——后者会把人引去
+            # 等校准，而缺口在渲染面这一侧。
+            safe_print("[fidus] ✗ 拿不到当前离屏帧，定位不启动（离屏渲染不可用？）")
+            self._show_bubble(
+                "拿不到当前画面，定位不了位置",
+                bubble_duration_ms(self.config, "interaction"),
+            )
+            return
+        token = self._begin_fidus_round(x, y, w, h, premount=False)
+        self._show_bubble(
+            "正在定位…（第一次约 2 秒，窗口会闪一下）",
+            bubble_duration_ms(self.config, "interaction"),
+        )
+        # 先验吃**画布**中心：桥接层那个锚点定死在帧中心（`iter_candidates`），而帧就是整画布，
+        # 与 surface 切到哪一块无关。`origin=(0,0)` 时这一式逐位等于 `x + w/2, y + h/2`。
+        FP.request_locate(
+            frame, self._layer_canvas_center(x, y, w, h),
+            move=lambda dx, dy: self._fidus_request_move(dx, dy, token),
+            on_done=lambda fix: self._fidus_on_result(fix, token),
+            log=lambda k, v: safe_print(f"[fidus] {k}: {v}"),
+        )
+
+    def _fidus_current_frame(self):
+        """取当前离屏帧的 RGBA numpy 视图（副本）—— fidus 的模板与它同源。"""
+        widget = getattr(self, "sprite_label", None)
+        renderer = getattr(widget, "render_offscreen", None)
+        if not callable(renderer):
+            return None
+        try:
+            import numpy as np
+
+            img = renderer()
+            if img is None or img.isNull():
+                return None
+            if img.format() != QImage.Format_RGBA8888:
+                img = img.convertToFormat(QImage.Format_RGBA8888)
+            w, h = img.width(), img.height()
+            buf = img.constBits()
+            buf.setsize(w * h * 4)
+            # 显式 copy：constBits() 只是 Qt 内存的窗口，img 一析构视图就悬垂
+            return np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
+        except Exception as exc:
+            safe_print(f"[fidus] 取帧失败: {exc}")
+            return None
+
+    def _fidus_request_move(self, dx: float, dy: float, token: int | None = None) -> bool:
+        """在 fidus 线程上被调用：把位移请求交给 GUI 线程，等它落位并提交帧。
+
+        回**这一发到底摆出去了没有**（四向判据的输入，人工裁决 2026-10-02「看哪个能用
+        再采信哪个」）：摆不出的方向不该重注册、不该占 `_settle` 的账，直接换下一向。
+        GUI 线程把成败写进结果盒再 `ev.set()`，所以 `ev.wait()` 返回后读它是安全的；
+        超时或那一发已作废 ⇒ 盒里还是 `None`，按"没摆出去"处理。
+
+        轮次号一起带过去：超时或取消之后这一发可能已经作废，迟到的位移请求不能再落到
+        GUI 线程上——那摆的是**下一次**测量前的子控件，或下一次的 surface。
+        """
+        ev = threading.Event()
+        result: list = [None]
+        self._fidus_move_req = (dx, dy, ev, token, result)
+        ev.wait(timeout=3.0)
+        return bool(result[0])
+
+    def _fidus_on_result(self, fix, token: int | None = None) -> None:
+        """在 fidus 线程上被调用：只交一个引用，套用到 GUI 线程里做。"""
+        current = getattr(self, "_fidus_round", 0)
+        if token is not None and token != current:
+            safe_print(f"[fidus] 第 {token} 轮的迟到读数撞上第 {current} 轮 ⇒ 丢弃")
+            return
+        self._fidus_result = fix
+        self._fidus_finished = True
+
+    def _fidus_service(self) -> None:
+        """GUI 线程上的唯一接触点：搬运移请求、等合成器收帧、套用测量结果。"""
+        if self._fidus_settle > 0:
+            self._fidus_settle -= 1
+            if self._fidus_settle == 0 and self._fidus_move_ack is not None:
+                ev, self._fidus_move_ack = self._fidus_move_ack, None
+                ev.set()
+            return
+        req = self._fidus_move_req
+        if req is not None:
+            self._fidus_move_req = None
+            dx, dy, ev, token, result = req
+            if token is not None and token != getattr(self, "_fidus_round", 0):
+                ev.set()   # 作废那一发的探针位移不摆，但也不让 fidus 线程干等 3 秒
+                return
+            if getattr(self, "_fidus_premount", False):
+                # 预挂载：顶层窗口还没挂上，能挪的只有窗口内的子控件（H 手）。
+                # 摆不出就当场回 False ⇒ `locate` 换下一向，不重注册、不占定住的账。
+                result[0] = self._content_probe_shift(dx, dy)
+                if result[0]:
+                    self._fidus_move_ack = ev
+                    self._fidus_settle = _FIDUS_SETTLE_TICKS
+                else:
+                    ev.set()
+                return
+            cx, cy, _w, _h = self._fidus_surface
+            result[0] = self._fidus_place(cx + int(round(dx)), cy + int(round(dy)))
+            if result[0]:
+                self._fidus_move_ack = ev
+                self._fidus_settle = _FIDUS_SETTLE_TICKS
+            else:
+                ev.set()  # 摆不动也放行：下一发读数对不上，闭环自会判失败
+            return
+        if not self._fidus_finished:
+            return
+        fix = self._fidus_result
+        self._fidus_finished = False
+        self._fidus_result = None
+        self._fidus_timer.stop()
+        self._fidus_busy = False
+        if getattr(self, "_fidus_premount", False):
+            # 预挂载的收尾整个交给 `_finish_premount_measure`：这里不能报"沿用原来的位置"
+            # ——没切穿透时桌宠本来就在原位，那句会把人引去找一次不存在的移动。
+            self._finish_premount_measure(fix)
+            return
+        if fix is None:
+            # `locate` 的读数取自探针位移**之前**，它自己不回摆：位移之后的每条退回出口
+            # （重注册失败／定不住／闭环超容差）都会把桌宠留在偏 `MOVE_PX` 处，而气泡正
+            # 要说"沿用原来的位置"。所以这句话得有动作撑着——把挂载位再请求一次。
+            # 没动过时这一发幂等，但也不必发：先比一次位置（H15 A2 实测候选全拒时 0 摆位）。
+            mx, my, mw, mh = self._fidus_mount
+            if self._fidus_surface[:2] != (mx, my) and self._fidus_place(mx, my):
+                widget = getattr(self, "sprite_label", None)
+                if widget is not None:
+                    widget._proxy_rect = self._layer_canvas_rect(mx, my, mw, mh)
+            self._show_bubble("没能量准位置，沿用原来的位置",
+                              bubble_duration_ms(self.config, "interaction"))
+            return
+        sx, sy, sw, sh = self._fidus_surface
+        # `fix.center` 是**画布**中心的屏幕坐标（锚点按整帧定死，与 surface 切走的那圈透明边无关），
+        # 所以反解要用画布尺寸；而 `set_position` 吃的是 surface 的 margin，要把帧内原点加回去。
+        # `origin=(0,0)`、画布=surface 时这两步逐位退化成"用 w,h 反解、直接拿去摆"。
+        ox, oy = getattr(self, "_layer_frame_origin", (0, 0))
+        cw, ch = getattr(self, "_layer_canvas_size", None) or (sw, sh)
+        cx, cy, _nw, _nh = _rect_from_center(fix.center[0], fix.center[1], cw, ch)
+        nx, ny = cx + int(ox), cy + int(oy)
+        if not self._fidus_place(nx, ny):
+            return
+        widget = getattr(self, "sprite_label", None)
+        if widget is not None:
+            # §5.1：_proxy_rect 与摆位请求吃同一个测量值，两件事不许分叉
+            widget._proxy_rect = self._layer_canvas_rect(nx, ny, sw, sh)
+        safe_print(f"[fidus] 校正 ({sx},{sy})→({nx},{ny}) 贴片 {fix.edge}² "
+                   f"conf={fix.conf:.4f} ceiling={fix.ceiling:.4f}")
+        self._show_bubble("已按屏幕真值校正位置",
+                          bubble_duration_ms(self.config, "interaction"))
+
+    def _fidus_place(self, x: int, y: int) -> bool:
+        backend = getattr(self, "_layer_backend", None)
+        setter = getattr(backend, "set_position", None)
+        if not callable(setter):
+            safe_print("[fidus] 后端不支持 set_position，定位作废")
+            return False
+        try:
+            setter(int(x), int(y))
+        except Exception as exc:
+            safe_print(f"[fidus] set_position 失败: {exc}")
+            return False
+        _x, _y, w, h = self._fidus_surface
+        self._fidus_surface = (int(x), int(y), w, h)
+        # 锚点跟着走（#89）：fidus 那一发是按屏幕读数做的**主动**摆放，它才是此后
+        # 宽裕相要回收的位置——回收挂载那一刻会把 fidus 测出来的修正抹掉。
+        self._fidus_owns_placement(int(x), int(y))
+        return True
+
+    def _layer_conform_to_configure(self, img):
+        """把**提交尺寸**对齐到合成器 configure 出来的事实（门控只放行两者相等的帧）。
+
+        桥接层的像素门控（`native/layer_shell/src/state.rs:477`）比的是"这一帧提交的尺寸"
+        与"逻辑尺寸＝configure 的事实"。挂载请求被合成器夹小过 ⇒ 两者不等 ⇒ **每一帧**被我
+        自己丢掉，而丢掉的样子是整片空白，不是"缺一角"（人工 2026-10-03 那一条
+        `只配出 456x463（请求 512x512）` 就是这个态）。裁决「测量赢 ⇒ 允许切头/切脚」要的
+        就是"位置不动、按能放下的大小切"这一只手，此前只有前半句落地了，所以那一条只出声
+        不显形。
+
+        吃 `_fit_size` —— 回读轮已经缓存的那一份事实，**不新增跨 FFI 回读**（#78 稳态口径）。
+        没读到过 configure（`None`／旧产物没有回读通道）⇒ 原样提交，行为逐位不变。
+        """
+        fit = getattr(self, "_fit_size", None)
+        if not fit:
+            return img
+        w, h = int(fit[0]), int(fit[1])
+        iw, ih = img.width(), img.height()
+        ox, oy = getattr(self, "_layer_frame_origin", (0, 0))
+        if (iw, ih) == (w, h) and (ox, oy) == (0, 0):
+            return img                      # 常态：一次都不拷
+        if w <= 0 or h <= 0:
+            return img
+        if w > iw or h > ih:
+            # 合成器配的比帧还大。模型 `configure = min(请求, 剩余空间)` 只会往小夹，不会
+            # 往大给 ⇒ 走到这里说明模型不适用，**不猜**第二种解法（补边要每帧起一次 QPainter，
+            # 而那是在给一个没见过的态付固定成本）。原样提交：门控照丢，但报一次数。
+            self._layer_conform_report(f"configure {w}x{h} 比帧 {iw}x{ih} 大 ⇒ 不裁不补（模型不适用）")
+            return img
+        # 原点夹回帧内：`_layer_frame_origin` 是挂载那一帧的轮廓左/上界，而帧尺寸可能在
+        # 穿透期被改（换 size_factor）。夹回去保证 `copy` 取到的窗口整块在帧内——
+        # QImage.copy 会静默裁掉越界部分，那交出去的尺寸又不等于 configure，白丢一帧。
+        ox = max(0, min(int(ox), iw - w))
+        oy = max(0, min(int(oy), ih - h))
+        self._layer_conform_report(
+            f"提交尺寸按 configure 对齐 {iw}x{ih}→{w}x{h}（帧内原点 ({ox},{oy})，"
+            f"切掉右 {iw - ox - w}×下 {ih - oy - h}）")
+        return img.copy(QRect(ox, oy, w, h))
+
+    def _layer_conform_report(self, text: str) -> None:
+        """对齐尺寸这件事只在**第一次**真要动刀时出声一次。
+
+        它每帧都会成立（configure 不等于请求是个持续状态），连起来说会把日志淹掉；
+        而"从没说过"又会让下一次排查的人以为没在裁。每轮挂载各重置一次。
+        """
+        if getattr(self, "_layer_conform_reported", False):
+            return
+        self._layer_conform_reported = True
+        safe_print(f"[layer] ⚠ {text}")
 
     def _push_layer_frame(self) -> None:
         """把 Live2D 离屏渲染结果推送到 layer surface。"""
         backend = getattr(self, "_layer_backend", None)
         if backend is None:
             return
+        if self._layer_fit_service():
+            return          # 本拍在等回读／刚发出夹移，推了也必被尺寸门控丢掉
         widget = getattr(self, "sprite_label", None)
         renderer = getattr(widget, "render_offscreen", None)
         if not callable(renderer):
@@ -805,7 +2067,7 @@ class PetRenderHostMixin:
                 if self._layer_fail <= 3:
                     print(f"[layer] ✗ 第 {self._layer_fail} 次拿到空帧", flush=True)
                 return
-            backend.update_pixels(img)
+            backend.update_pixels(self._layer_conform_to_configure(img))
         except Exception as exc:
             print(f"[layer] ✗ 推帧异常: {type(exc).__name__}: {exc}", flush=True)
 

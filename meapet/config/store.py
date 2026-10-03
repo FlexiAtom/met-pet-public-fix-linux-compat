@@ -1143,6 +1143,18 @@ def normalize_config(config: dict) -> dict:
     voice.setdefault("auto_send", False)
     cfg["voice_input"] = voice
 
+    # fidus 定位规范化（默认关闭：代价可见——秒级校准 + 屏幕闪现）
+    fidus = (
+        copy.deepcopy(cfg.get("fidus"))
+        if isinstance(cfg.get("fidus"), dict)
+        else {}
+    )
+    fidus.setdefault("enabled", False)
+    # 测量前请先按 Mod+V 转浮动：平铺下窗口按合成器预设出现，尺寸请求会被吃
+    # （人工现测 2026-10-02），交互态量出来的四向空档因此不可信。默认问，勾「不再提示」后不问。
+    fidus.setdefault("ask_float", True)
+    cfg["fidus"] = fidus
+
     # ---------- audio 音量规范化（0-100%） ----------
     audio = cfg.get("audio") if isinstance(cfg.get("audio"), dict) else {}
     audio.setdefault("sfx_volume_percent", 80)

@@ -2,6 +2,7 @@
 
 穿透模式下桌宠由 layer surface 呈现且完全不可交互（点击穿透到下层），
 只能通过这个开关切回交互模式来拖动或唤出右键菜单。
+启动**不**进穿透（人工裁决 2026-10-03）⇒ 初始态由 `penetrate` 参数给，面板文案跟着它走。
 """
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
@@ -10,11 +11,13 @@ from PyQt5.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 class LayerDebugPanel(QWidget):
     """可拖动的常驻开关窗口。"""
 
-    def __init__(self, on_toggle=None):
+    def __init__(self, on_toggle=None, penetrate=False):
         super().__init__()
         self._on_toggle = on_toggle
         self._drag_offset = None
-        self._penetrate = True
+        # 初始态由调用方给——启动不挂载 ⇒ 面板默认从「交互」起。写死 `True` 会让
+        # 标签与现实相反（人看到的是「点击穿透：开」，而桌宠此时就能点、能拖）。
+        self._penetrate = bool(penetrate)
 
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -27,12 +30,14 @@ class LayerDebugPanel(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        self._label = QLabel("点击穿透：开")
+        # 两处文案跟着 `self._penetrate`（与 `_toggle` 里同一对字符串）：写死"开/切到 交互"
+        # 等于面板一出场就在说谎，而它是切回交互态的唯一入口。
+        self._label = QLabel(f"点击穿透：{'开' if self._penetrate else '关'}")
         self._label.setAlignment(Qt.AlignCenter)
         self._label.setStyleSheet(
             "color:#fff; background:#333; border-radius:4px; padding:4px;"
         )
-        self._btn = QPushButton("切到 交互")
+        self._btn = QPushButton("切到 交互" if self._penetrate else "切到 穿透")
         self._btn.clicked.connect(self._toggle)
 
         layout.addWidget(self._label)

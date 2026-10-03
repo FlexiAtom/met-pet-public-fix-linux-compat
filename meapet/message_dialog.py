@@ -11,6 +11,7 @@ from PyQt5.QtCore import QEvent, QPoint, QRect, Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -144,6 +145,33 @@ def rebuild_message_dialog_style() -> str:
             selection-background-color: {rgba(PALETTE['primary'], 190)};
             selection-color: {PALETTE['on_primary']};
         }}
+        QCheckBox#MessageOption {{
+            background: transparent;
+            color: {PALETTE['text_secondary']};
+            border: 2px solid transparent;
+            border-radius: 8px;
+            padding: 0px 4px;
+            spacing: 10px;
+            font-family: {FONT_FAMILY};
+            font-size: 14px;
+        }}
+        QCheckBox#MessageOption:focus {{
+            border: 2px solid {PALETTE['focus']};
+        }}
+        QCheckBox#MessageOption::indicator {{
+            width: 20px;
+            height: 20px;
+            border: 2px solid {PALETTE['border_strong']};
+            border-radius: 6px;
+            background: {rgba(PALETTE['surface'], 90)};
+        }}
+        QCheckBox#MessageOption::indicator:hover {{
+            border-color: {PALETTE['focus']};
+        }}
+        QCheckBox#MessageOption::indicator:checked {{
+            background: {_theme.GRADIENT_PRIMARY};
+            border-color: {PALETTE['primary']};
+        }}
         QScrollBar:vertical {{
             background: transparent;
             width: 8px;
@@ -263,7 +291,12 @@ _ICON_PRESENTATION = {
 
 
 class MeaMessageDialog(QDialog):
-    """无原生标题栏、返回 QMessageBox 标准按钮值的主题消息框。"""
+    """无原生标题栏、返回 QMessageBox 标准按钮值的主题消息框。
+
+    `check_text` 会在正文与按钮之间挂一个复选框，读它用 `is_checked()`——它**不参与**
+    返回值，因为 `done(int)` 只有一个整数通道，把勾选压进按钮值会让"点了哪个"与
+    "勾没勾"两件事在调用方那里糊成一团。
+    """
 
     def __init__(
         self,
@@ -274,6 +307,7 @@ class MeaMessageDialog(QDialog):
         icon=None,
         buttons=None,
         default_button=None,
+        check_text: str | None = None,
     ) -> None:
         super().__init__(parent)
         ensure_application_fonts()
@@ -379,6 +413,14 @@ class MeaMessageDialog(QDialog):
         body.setAccessibleName("消息正文")
         body.setAccessibleDescription("可使用鼠标选择并复制")
         card_layout.addWidget(body)
+
+        self.option = None
+        if check_text:
+            self.option = QCheckBox(str(check_text), card)
+            self.option.setObjectName("MessageOption")
+            self.option.setAccessibleName(str(check_text))
+            self.option.setCursor(Qt.PointingHandCursor)
+            card_layout.addWidget(self.option)
 
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 2, 0, 0)
@@ -508,6 +550,10 @@ class MeaMessageDialog(QDialog):
     def button(self, standard_button) -> QPushButton | None:
         """兼容 ``QMessageBox.button()``，便于调用方和测试读取按钮。"""
         return self._buttons.get(int(standard_button))
+
+    def is_checked(self) -> bool:
+        """``check_text`` 那个复选框的状态；没建它则为 False（调用方无需分两判）。"""
+        return bool(self.option is not None and self.option.isChecked())
 
     def _reference_area(self) -> QRect | None:
         parent = self.parentWidget()

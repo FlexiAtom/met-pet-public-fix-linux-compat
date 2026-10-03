@@ -60,6 +60,20 @@ class PlatformBackendNameTests(unittest.TestCase):
         with mock.patch("meapet.desktop.click_through.sys.platform", "win32"):
             self.assertEqual(platform_backend_name(None), "win32")
 
+    def test_qt_plugin_beats_session_env(self) -> None:
+        """丙 承重格：Qt 跑在 xcb 上（窗口挂 XWayland）时，不得因为
+        ``XDG_SESSION_TYPE=wayland`` 就报 wayland——那会让 layer-shell 穿透请求
+        打到一个桌宠并不存在的 surface 上（旧行为实测：Qt 插件=xcb 而本函数=wayland）。"""
+        with mock.patch("meapet.desktop.click_through._qt_platform_name", return_value="xcb"), \
+                mock.patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}):
+            self.assertEqual(platform_backend_name(None), "x11")
+
+    def test_env_fallback_when_no_qt_app(self) -> None:
+        """没有 QApplication（CLI / 单测）时才允许用会话环境变量兜底。"""
+        with mock.patch("meapet.desktop.click_through._qt_platform_name", return_value=""), \
+                mock.patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}):
+            self.assertEqual(platform_backend_name(None), "wayland")
+
 
 class Win32ClickThroughTests(unittest.TestCase):
     def test_enable_and_disable_restore_exstyle(self) -> None:
@@ -101,7 +115,7 @@ class Win32ClickThroughTests(unittest.TestCase):
     def test_wayland_inactive(self) -> None:
         # Invariant under test is "no Wayland session => inactive", so the
         # session variables have to be absent from the environment.  The Rust
-        # shim opens its OWN connection (~/.Athena/projects/meapet/working/rust-layer-shell-bridge.md §4.7-1), so on a dev box
+        # shim opens its OWN connection (~/.Athena/projects/meapet/finished/rust-layer-shell-bridge.md §4.7-1), so on a dev box
         # with a live compositor Path 0 really maps a layer-shell surface here
         # and leaks an undisabled ctx.  The old C++ shim took the display from
         # Qt (`nativeResourceForWindow`, `layer_shell_shim.cpp:19-21`), which

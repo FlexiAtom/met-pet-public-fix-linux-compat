@@ -98,6 +98,16 @@ _OPTIONAL_SOURCE_DEPENDENCIES = (
     RuntimeDependency("live2d", "live2d-py", "Live2D 模型渲染"),
 )
 
+# fidus 故意**不在**上面那份表里。该表的语义是"启动器负责把完整源码运行环境补齐"
+# （`all_runtime_dependencies` ⇒ `--check all` ⇒ 缺了就 exit 1），而 fidus 只在 Linux
+# 上有产物，走的是发行方声明的 Release 直链（见 `meapet/fidus_channel.py`），不是任何
+# 索引里的一个名字——写进那张表等于让 Windows 启动器去装一只平台上不存在的轮子。
+# 它的正确位置仍然是**按配置报降级**：开关开着而现场没有，启动日志说得出"这项功能已
+# 降级"，而不是等用户点下去才发现。渠道解决"从哪取"，不解决"取不到时怎么办"。
+_FIDUS_DEPENDENCIES = (
+    RuntimeDependency("fidus", "fidus", "切换点定位测量"),
+)
+
 
 def _is_frozen() -> bool:
     """不导入 meapet.paths 也能判断冻结态，避免早期导入失败。"""
@@ -196,6 +206,9 @@ def required_runtime_dependencies(
         and bool(control.get("enabled", False))
     ):
         dependencies.extend(_CONTROL_DEPENDENCIES)
+    fidus = config.get("fidus")
+    if isinstance(fidus, Mapping) and bool(fidus.get("enabled", False)):
+        dependencies.extend(_FIDUS_DEPENDENCIES)
     return _deduplicate(dependencies)
 
 
@@ -341,6 +354,21 @@ def degraded_dependencies() -> tuple[RuntimeDependency, ...]:
     return _DEGRADED
 
 
+def fidus_install_hint(*, executable: Path | None = None) -> str:
+    """「启用 fidus」缺件时该跑的那一句。
+
+    启动日志、降级提示与 ``MeaPet.spec`` 的打包门共用它，免得三处各写一份口径——
+    这条渠道的三步钉法只要有一处漏写，装机的人就会以为 `pip install -r` 能解决它，
+    而 fidus 刻意不在那份 requirements 里。
+    """
+    exe = Path(sys.executable if executable is None else executable)
+    return (
+        "这一项不在 requirements 里，按发布方声明的 Release 直链自取"
+        "（钉完整 URL → 同目录 `.sha256` 边车校验 → 读 `fidus.__git_commit__`）：\n"
+        f'  "{exe.as_posix()}" -m meapet.bootstrap --install-fidus'
+    )
+
+
 def format_degraded_dependencies(
     degraded: Sequence[RuntimeDependency],
 ) -> str:
@@ -350,6 +378,8 @@ def format_degraded_dependencies(
         f"  - {dependency.requirement}（{dependency.purpose}）"
         for dependency in degraded
     )
+    if any(dependency.module == "fidus" for dependency in degraded):
+        lines.extend(("", fidus_install_hint()))
     return "\n".join(lines)
 
 
@@ -413,11 +443,25 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         default=Path(__file__).resolve().parents[1],
     )
     parser.add_argument("--config", type=Path)
+    parser.add_argument(
+        "--install-fidus",
+        action="store_true",
+        help="按钉死的 Release 直链取件、校验并装上 fidus（源码态、Linux 产物）",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.install_fidus:
+        from meapet import fidus_channel
+
+        try:
+            print(fidus_channel.install_fidus())
+        except fidus_channel.FidusChannelError as exc:
+            print(f"[MeaPet] fidus 取件未完成：{exc}", file=sys.stderr)
+            return 1
+        return 0
     root = args.project_root.resolve()
     if args.check == "all":
         dependencies = all_runtime_dependencies()
