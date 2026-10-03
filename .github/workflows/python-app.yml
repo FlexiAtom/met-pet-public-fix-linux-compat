@@ -71,8 +71,11 @@ jobs:
         python -m pip install --upgrade pip
         # Install core + linux extras (pins exact PyQt5 / Pillow versions for Linux)
         # pytest/ruff are not runtime deps; install them explicitly for CI.
+        # numpy is a runtime dep of the fidus bridge (fidus_position.py imports it at
+        # module level), but it is declared in linux_requirements.txt, not pyproject —
+        # CI installs from pyproject, so it has to come in here. Same range as line 9.
         pip install -e ".[linux]"
-        pip install ruff pytest
+        pip install ruff pytest "numpy>=1.21,<2.0"
 
     - name: Lint with ruff
       run: |
