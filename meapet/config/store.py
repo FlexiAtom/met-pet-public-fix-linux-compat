@@ -1150,6 +1150,9 @@ def normalize_config(config: dict) -> dict:
         else {}
     )
     fidus.setdefault("enabled", False)
+    # 测量前请先按 Mod+V 转浮动：平铺下窗口按合成器预设出现，尺寸请求会被吃
+    # （人工现测 2026-10-02），交互态量出来的四向空档因此不可信。默认问，勾「不再提示」后不问。
+    fidus.setdefault("ask_float", True)
     cfg["fidus"] = fidus
 
     # ---------- audio 音量规范化（0-100%） ----------

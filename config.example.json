@@ -161,6 +161,7 @@
     "auto_send": false
   },
   "fidus": {
-    "enabled": false
+    "enabled": false,
+    "ask_float": true
   }
 }
