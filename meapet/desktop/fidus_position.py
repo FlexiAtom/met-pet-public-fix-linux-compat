@@ -5,19 +5,32 @@ Wayland 客户端查不到自己的全局坐标（`_layer_geometry()` 的 docstr
 是两件事。fidus 是屏幕贴片匹配引擎，用来测后者。本模块只做**测量与证伪**，
 不碰 Qt、不碰线程、不做决策：调用方给帧与信念，本模块回一个 `Fix` 或 `None`。
 
-判据一律照 `~/.Athena/projects/meapet/working/fidus-switch-positioning.md` §5：
+判据一律照 `~/.Athena/projects/meapet/working/fidus-switch-positioning.md` §5，
+预挂载那一路另照 `pool/layer-belief-first-mount-decision-error.md` §H23–§H25（人工裁决 2026-10-02 点甲）：
 * **喂先验**：`register_target(..., initial_center=...)`，且必须是**中心**（换算见 `_anchor_of`）。
   漏喂即整台机器落回无先验那条路，其可用模板边长上限在 1080p 上只剩 79 px。
+  但**信念不可信时不喂才是对的**：H23 四场 niri 平铺下信念偏 (−227,+342) px，喂它 2/4 锁到错处
+  （离独立真值 12–14 px）、2/4 连读数都不产出，不喂 4/4 锁对（最坏 0.27 px）。
+  所以 `believed_center=None` 是**整条链都不喂**（选型、定窗、闭环重注册三处全 None）——
+  H25 臂 D 那 8 个错锁样本正是在这条路上量出来的，喂半截等于换一个没量过的判据。
 * **位移闭环**：读数可信与否只认"自己摆一个已知位移、比对两次读数差"。
-  `conf == confidence_ceiling` 在**正确锁定**上恒成立（实测 9/9 逐位相等），
-  所以满值置信不背书正确，不能作为替代判据。
+  `conf == confidence_ceiling` 在**正确锁定**上恒成立（实测 9/9 逐位相等，H25 复证：它照样为
+  一个 368 px 的错锁背书），所以满值置信不背书正确，不能作为替代判据。
   闭环两端一律走**冷获取**（注册后读到定住）：H13 实测**更新路径**（搬走目标后继续读）
   会收敛到与贴片相关的固定偏置（本轮 96² 爬到 +11 px 仍未停），而冷读是 0.01–0.03 px。
-* **失败即整段退回**：本模块任何一步不成立都返回 `None`，由调用方沿用合成数 ——
-  拒绝切换会把用户关在自己的桌宠外面。
+* **容差是判据的一半**：`tol_px` 是**入参**不是常量。H25 臂 B 那两发错锁的残差 3.06–10.52 px，
+  产品默认 `TOL_PX=24` 档**放行**（`locate` 照样回 Fix，落点偏 10.7 px），2 px 档**拦住**。
+  预挂载按裁决走 2.0；post-mount 那一路沿用旧默认，不在本件里改。
+* **失败即回 `None`，怎么处理属于调用方**：旧那句"拒绝切换会把用户关在自己的桌宠外面"所依据的
+  前提（信念可用、所以挂载永远立刻发生）已被 H23/H24 推翻。人工裁决 2026-10-02：预挂载量不出
+  可信读数 ⇒ **不切**、留在交互态、出声；挂载之后那一次失败才回到合成数。
 
-已知适用域（不是本模块能修的）：坐标空间是 layer-shell **可用区的逻辑坐标**，
-`scale != 1.0` 与 ≥1920 的真机两侧我方都无硬件，见该件 §7。
+已知适用域（不是本模块能修的）：**读数空间是屏幕坐标**——fidus 匹配的是抓帧，
+不是 layer-shell **可用区的逻辑坐标**。两者差一个保留带厚：H16 **N1h** 实测同一帧按
+`margin + 带厚` 出现在屏上（请求 (854,−41) ⇒ 落点 (854,139)，带 180 px，尺子−请求 (+0.00,+0.00)），
+所以挂载侧若把这里的读数直接当 margin 用，带在场时会整体偏低 `band` px（本机正常态 band=0 ⇒ 逐位相等；
+`render_host.py` `_layer_band_thickness` 那一条换算才是两空间唯一已证的桥）。账见
+`pending.md`「量完再挂（甲）落地后遗留的三格」①。另有 `scale != 1.0` 与 ≥1920 两侧无硬件，见该件 §7。
 """
 from __future__ import annotations
 
@@ -41,6 +54,17 @@ CANDIDATES_PER_SIZE = 3   # 每档取离不透明质心最近的 K 盒送去注�
 ALPHA_MIN = 8             # 与探针同源的"算不透明"阈值
 MOVE_PX = 48              # 闭环探针位移；容差取它的一半 ⇒ 抓到假峰(读数不动)必被拦
 TOL_PX = MOVE_PX // 2
+# 预挂载（「量完再挂」）那一发的两个参数，人工裁决 2026-10-02 点甲。数值与出处：
+# H25 四格（`pool/layer-belief-first-mount-decision-error.md`）—— 锁对 23 发在 2.0 px 档全过
+# ⇒ 误伤 0；锁错 10 发全不过 ⇒ 漏网 0。沿用 `TOL_PX=24` 会放行 H25 臂 B 实测的 3.06–10.52 px 错锁。
+PREMOUNT_TOL_PX = 2.0     # 与 `STABLE_PX` 同值但不同义：一个是"闭环对得上位移"，一个是"读数定住"
+PREMOUNT_MIN_EDGE = 96    # 不喂先验时 `max(capture)+edge > 1999.5` 会压档：1080p 上只剩 ≤79 px，
+                          # 正落进 H14 已证的"小档安静撒谎且照样过闭环"区 ⇒ 够不到下限就响亮退回，
+                          # 绝不悄悄降到 64²（H25 本机 T 臂 11/11 锁对只说明这台机器没触发它）。
+# 预挂载探针位移的**四个方向**（人工裁决 2026-10-02：「应进行四向的探针位移，看哪个能用再采信哪个」）。
+# 顺序即优先级，命中即停 ⇒ 最坏才是四发。为什么要四向：贴片被窗口 clip 或被屏边切时那一只读数不可信
+# （超出屏幕的抓不到），而四个轴向里总有一向大概率还在屏内——H14 已经证明被切的贴片会**安静地**锁错。
+PREMOUNT_MOVES = ((MOVE_PX, 0.0), (0.0, MOVE_PX), (-MOVE_PX, 0.0), (0.0, -MOVE_PX))
 ACQUIRE_READS = 8         # 一次获取最多连读几发；最坏那一档实测在信念偏 440 px 时第 6 发才锁
                           # （H11 合成臂、`-58`）⇒ 8 是给它留的余量，不是拍脑袋
 STABLE_PX = 2.0           # 相邻两发差这么小就叫"定住"（H13 C 相：锁定后逐发逐位等）
@@ -54,14 +78,20 @@ class Candidate:
     edge: int
     anchor: tuple[float, float]
 
-    def belief_for(self, center: tuple[float, float]) -> tuple[float, float]:
-        """把"surface 中心的信念"换算成"贴片中心的信念"——`initial_center` 要的是后者。"""
+    def belief_for(self, center: Optional[tuple[float, float]]) -> Optional[tuple[float, float]]:
+        """把"surface 中心的信念"换算成"贴片中心的信念"——`initial_center` 要的是后者。
+
+        `center=None` ⇒ 回 `None`：预挂载那一路的信念已知在撒谎（H23 偏 (−227,+342) px），
+        不喂就是三处都不喂，不是换算出一个凭空的数。
+        """
+        if center is None:
+            return None
         return (center[0] + self.anchor[0], center[1] + self.anchor[1])
 
 
 @dataclass(frozen=True)
 class Fix:
-    """测量结果：surface 中心（layer 逻辑坐标，探针位移**之前**那一帧的位置）。"""
+    """测量结果：surface 中心（**屏幕坐标**，见模块 docstring 的适用域；探针位移**之前**那一帧的位置）。"""
 
     center: tuple[float, float]
     conf: float
@@ -139,8 +169,13 @@ class FidusEngine:
             raise EngineError(f"calibrate_once: {type(exc).__name__}") from exc
         self.calibrated_ms = (time.perf_counter() - t0) * 1e3
 
-    def register(self, box: np.ndarray, initial_center: tuple[float, float]) -> float:
-        """注册并回 `confidence_ceiling`；被拒则抛 `EngineError`。"""
+    def register(self, box: np.ndarray,
+                 initial_center: Optional[tuple[float, float]]) -> float:
+        """注册并回 `confidence_ceiling`；被拒则抛 `EngineError`。
+
+        `initial_center=None` 是**受支持**的入口（fidus 的第二格：整帧首搜），不是缺省占位——
+        代价由 `PREMOUNT_MIN_EDGE` 那道闸管，见模块 docstring。
+        """
         eng = self._ensure()
         try:
             eng.register_target(box, False, initial_center=initial_center)
@@ -211,9 +246,10 @@ def iter_candidates(frame: np.ndarray,
 
 
 def select_template(engine: FidusEngine, frame: np.ndarray,
-                    center: tuple[float, float],
+                    center: Optional[tuple[float, float]],
                     sizes: Sequence[int] = SIZES,
-                    log: Callable[[str, str], None] = lambda _k, _v: None
+                    log: Callable[[str, str], None] = lambda _k, _v: None,
+                    min_edge: Optional[int] = None
                     ) -> Optional[tuple[Candidate, float]]:
     """**先按尺寸降档，同档内取 ceiling 最大**的那只：ceiling 只在同一尺寸里可比。
 
@@ -228,11 +264,18 @@ def select_template(engine: FidusEngine, frame: np.ndarray,
       大贴片只会**失败**；本功能的红线是"绝不跳到错位置"，所以宁可付大贴片的秒数。
     另按 §5 口径 3：ceiling 是注册期一次定值的状态量、运行期 `conf` 恒等于它 ⇒ 它不是健康度，
     只能用于选型；健康与否仍只认 `locate()` 里的位移闭环。
+
+    `center=None` ⇒ 三处注册一律不喂先验（预挂载那一路，见模块 docstring）。
+    `min_edge` 是**降档下界**：阶梯按边长降序，走到下界以下就**停**而不是接着试 ——
+    接着试等于把 H14 那一条"小档安静撒谎且照样过闭环"亲手请回来。
     """
     best: Optional[tuple[Candidate, float]] = None
     best_edge: Optional[int] = None
     tried = 0
     for cand in iter_candidates(frame, sizes):
+        if min_edge is not None and cand.edge < min_edge:
+            log("档限", f"{cand.edge}² < 下限 {min_edge}² ⇒ 不再降档（小档会安静撒谎，H14）")
+            break                     # 阶梯降序 ⇒ 后面只会更小
         if best is not None and cand.edge != best_edge:
             break                     # 更大档已经有能注册的盒 ⇒ 小档不配再来比
         tried += 1
@@ -284,29 +327,50 @@ def _settle(engine: FidusEngine, label: str,
 
 
 def locate(engine: FidusEngine, frame: np.ndarray,
-           believed_center: tuple[float, float], *,
-           move: Callable[[float, float], None],
+           believed_center: Optional[tuple[float, float]], *,
+           move: Callable[[float, float], bool],
            sizes: Sequence[int] = SIZES,
            move_px: float = MOVE_PX,
            tol_px: float = TOL_PX,
+           min_edge: Optional[int] = None,
+           moves: Optional[Sequence[tuple[float, float]]] = None,
            log: Callable[[str, str], None] = lambda _k, _v: None
            ) -> Optional[Fix]:
-    """测出 surface 的真实中心；不可信就回 `None`（调用方整段退回合成数）。
+    """测出 surface 的真实中心；不可信就回 `None`（怎么处理属于调用方，见模块 docstring）。
 
-    `move(dx, dy)` 由调用方提供：把 surface 摆到"当前位置 + 该增量"，**并在合成器
-    提交之后**才返回（探针里靠 Qt 事件泵等这一手）。闭环要的就是它。
+    `move(dx, dy)` 由调用方提供：把**被测的那块像素**摆到"当前位置 + 该增量"，**并在提交之后**
+    才返回（探针里靠 Qt 事件泵等这一手），**回布尔说摆没摆成**——宿主摆不出来的方向（窗口内
+    那个方向没余量）不该记在闭环账上，重跑一次 `_settle` 只是白付预算。闭环要的就是它。
+    这一只手必须满足两条才被采纳为判据：
+    * 它得是**产品自己伸得到的**——H24 量死两只：`pet.move()` 摆顶层窗口在 Wayland 下屏上 0 px
+      （平铺与浮动态都 0 px，四场四发），`niri move-floating-window` 有效但那是合成器的动作；
+    * 它得**外接可证**——预挂载用的是 H 手（`widget.move()`，Live2D 子控件在窗口内平移）：
+      顶层窗口几何不动、离屏帧逐字节恒等，屏上真实位移 (+48.00,+0.00) 十一场全中。
 
-    协议是**两次冷获取**（H13 的 D 相：18/18 通过、离独立真值最坏 0.03 px）：
-    注册→读到定住 `a`→摆 +`move_px`→**用 `a` 自己当先验重注册**→读到定住 `b`→
-    验 `b − a ≈ 请求位移`。第二次的先验取引擎自己的稳态读数而不是我方信念，
-    于是那一次冷读的先验几乎必真（偏差只剩"合成器有没有照请求摆"这一件事，
-    而那正是闭环要测的）。
+    协议是**一次冷获取 + 逐向闭环**（H13 的 D 相：18/18 通过、离独立真值最坏 0.03 px）：
+    注册→读到定住 `a`→摆一次位移→重注册→读到定住 `b`→验 `b − a ≈ 请求位移`。
+    `moves=None` 只走 `(+move_px, 0)` 这一发，即 post-mount 的原语义；给了 `moves` 就逐向试，
+    **命中即采信、其余方向不再跑**。第二次的先验**取决于 `believed_center`**：
+    * 有信念 ⇒ 取 `a + move_px`（引擎自己的稳态读数，不是我方的陈旧信念），于是那一次冷读的先验
+      几乎必真（偏差只剩"合成器有没有照请求摆"这一件事，而那正是闭环要测的）。
+    * `believed_center=None` ⇒ **三处都不喂**（选型、定窗、闭环重注册）。这是预挂载那一路：
+      信念已知在撒谎（H23 偏 (−227,+342) px），而 H25 臂 D 的那 8 个 368 px 错锁样本**正是在
+      这条路上量出来的**——喂半截等于换一个没量过的判据。代价是 `max(capture)+edge > 1999.5`
+      那道算术闸开始压档，所以要配 `min_edge`。
 
-    返回的 `Fix.center` 取自 `a`——**探针位移之前**那一刻的中心，而 surface 停在位移之后；
-    调用方紧接着就要用这个数去摆位，那一次摆位会把探针位移一起吃掉（§5.1 的 B 语义）。
+    `min_edge` 只在不喂先验时有意义（见 `PREMOUNT_MIN_EDGE`）；`tol_px` 是判据强度本身，
+    24 px 档对本机实测的 3–10.5 px 错锁不设防。
+
+    返回的 `Fix.center` 取自 `a`——**探针位移之前**那一刻的中心。调用方拿它做什么，决定探针位移
+    要不要先吃掉：挂载之后那一路紧接着就摆位，那一次摆位把位移一起吃掉（§5.1 的 B 语义）；
+    预挂载那一路子控件被挪过 48 px 而 `a` 是挪**之前**的读数 ⇒ **必须先 `restore()` 再挂**，
+    否则 `a − anchor` 配的是"未挪时该挂在哪"，而 `_layer_geometry()` 吃的 `widget.mapTo` 偏移
+    还带着那 48 px（`render_host.py:662`），下一次信念跟着一起偏。
+    逐向试的时候这一条更重要：换下一向**不需要**先摆回原位，宿主的 `_content_probe_shift`
+    每次都从 `_content_probe_base` 起（幂等），所以四发之间的落点互不叠加。
     """
     engine.calibrate()
-    picked = select_template(engine, frame, believed_center, sizes, log)
+    picked = select_template(engine, frame, believed_center, sizes, log, min_edge)
     if picked is None:
         return None
     cand, ceiling = picked
@@ -316,24 +380,34 @@ def locate(engine: FidusEngine, frame: np.ndarray,
         return None
     log("获取读数", f"贴片中心 ({a[0]:.2f},{a[1]:.2f}) conf={a[2]} ceiling={ceiling}")
 
-    move(move_px, 0.0)
-    try:
-        engine.register(cand.box, (a[0] + move_px, a[1]))
-    except EngineError as exc:
-        log("闭环重注册", f"{exc} ⇒ 退回")
-        return None
-    b = _settle(engine, "闭环", log)
-    if b is None:
-        return None
-    dx, dy = b[0] - a[0], b[1] - a[1]
-    if abs(dx - move_px) > tol_px or abs(dy) > tol_px:
-        log("位移闭环", f"读数差 ({dx:.2f},{dy:.2f}) vs 请求 ({move_px:.0f},0)"
-                        f" 超容差 {tol_px} ⇒ 读数不可信，退回")
-        return None
+    tried = 0
+    for (req_dx, req_dy) in (((move_px, 0.0),) if moves is None else moves):
+        tried += 1
+        if not move(req_dx, req_dy):
+            log("探针位移", f"({req_dx:.0f},{req_dy:.0f}) 摆不出 ⇒ 换下一向，不重注册")
+            continue
+        # 不喂先验那一路：闭环重注册也不喂（`believed_center is None` ⇒ 整条链一个都不喂）。
+        loop_prior = None if believed_center is None else (a[0] + req_dx, a[1] + req_dy)
+        try:
+            engine.register(cand.box, loop_prior)
+        except EngineError as exc:
+            log("闭环重注册", f"{exc} ⇒ 换下一向")
+            continue
+        b = _settle(engine, "闭环", log)
+        if b is None:
+            continue
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        if abs(dx - req_dx) > tol_px or abs(dy - req_dy) > tol_px:
+            log("位移闭环", f"读数差 ({dx:.2f},{dy:.2f}) vs 请求 ({req_dx:.0f},{req_dy:.0f})"
+                            f" 超容差 {tol_px} ⇒ 换下一向")
+            continue
+        log("位移闭环", f"({req_dx:.0f},{req_dy:.0f}) 对上 ⇒ 采信这一向")
+        # 读数盯的是贴片中心；锚点把它换算回 surface 中心。取位移**之前**那一发。
+        return Fix(center=(a[0] - cand.anchor[0], a[1] - cand.anchor[1]),
+                   conf=a[2], edge=cand.edge, ceiling=ceiling)
 
-    # 读数盯的是贴片中心；锚点把它换算回 surface 中心。取位移**之前**那一发。
-    return Fix(center=(a[0] - cand.anchor[0], a[1] - cand.anchor[1]),
-               conf=a[2], edge=cand.edge, ceiling=ceiling)
+    log("位移闭环", f"{tried} 个方向都没过 ⇒ 读数不可信，退回")
+    return None
 
 
 # ─────────────────────────────────────────────  线程亲和的执行器
@@ -355,12 +429,12 @@ def _worker_loop() -> None:
         job = _JOBS.get()
         if job is None:  # 只有测试收尾会投这个
             return
-        frame, believed_center, move, on_done, log = job
+        frame, believed_center, move, on_done, log, opts = job
         fix: Optional[Fix] = None
         try:
             if _ENGINE is None:
                 _ENGINE = FidusEngine()
-            fix = locate(_ENGINE, frame, believed_center, move=move, log=log)
+            fix = locate(_ENGINE, frame, believed_center, move=move, log=log, **opts)
         except BaseException as exc:  # noqa: BLE001 - 引擎异常不吃跨线程 Panic
             log("定位作业", f"{type(exc).__name__}: {exc} ⇒ 退回")
             fix = None
@@ -371,13 +445,22 @@ def _worker_loop() -> None:
 
 
 def request_locate(frame: np.ndarray,
-                   believed_center: tuple[float, float], *,
-                   move: Callable[[float, float], None],
+                   believed_center: Optional[tuple[float, float]], *,
+                   move: Callable[[float, float], bool],
                    on_done: Callable[[Optional[Fix]], None],
-                   log: Callable[[str, str], None] = lambda _k, _v: None) -> None:
+                   log: Callable[[str, str], None] = lambda _k, _v: None,
+                   sizes: Sequence[int] = SIZES,
+                   move_px: float = MOVE_PX,
+                   tol_px: float = TOL_PX,
+                   min_edge: Optional[int] = None,
+                   moves: Optional[Sequence[tuple[float, float]]] = None) -> None:
     """异步发起一次测量：立刻返回，结果（或 `None`）经 `on_done` 回到调用方。
 
     `on_done` 在 fidus 线程上被调用 —— 接收方自己 marshal 回 GUI 线程。
+
+    `believed_center=None`、`tol_px/min_edge` 与 `moves` 必须能**过队列**：判据的强度全在这几个
+    参数上，而它们一旦在 `_worker_loop` 里硬编码成默认值，调用方写的 2.0 就变成日志里的一句空话
+    （`locate` 仍按 24 px 判决 ⇒ 预挂载看着像走了甲、实际走的是旧容差；四向同理退成一向）。
     """
     global _THREAD
     with _LOCK:
@@ -385,7 +468,9 @@ def request_locate(frame: np.ndarray,
             _THREAD = threading.Thread(target=_worker_loop, daemon=True,
                                        name="meapet-fidus")
             _THREAD.start()
-    _JOBS.put((frame, believed_center, move, on_done, log))
+    _JOBS.put((frame, believed_center, move, on_done, log,
+               {"sizes": sizes, "move_px": move_px, "tol_px": tol_px,
+                "min_edge": min_edge, "moves": moves}))
 
 
 def shutdown() -> None:
