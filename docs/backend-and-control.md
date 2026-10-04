@@ -293,6 +293,9 @@ GPT-SoVITS 的固定参考音频按规范化语言查找：
 
 每种语言最多使用一条固定参考音频。路径不会通过 Agent 前端状态或 MCP `get_state` 暴露。
 
+VITS 引擎有子进程与进程内两条推理路，选哪条、以及模型/配置/说话人怎么取值，见
+[`docs/tts-vits-routing.zh-CN.md`](tts-vits-routing.zh-CN.md)。
+
 ## 7. 视觉路由与授权
 
 ### 7.1 模式

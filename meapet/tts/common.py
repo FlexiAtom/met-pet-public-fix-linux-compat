@@ -48,6 +48,187 @@ def resolve_external_python(path: str | None) -> str:
     return raw
 
 
+# ═══════════════════════════════════════════
+# VITS 选路与旋钮口径（唯一来源）
+# ═══════════════════════════════════════════
+#
+# VITS 有两条推理路：外部解释器子进程（vits_infer.py）与进程内 torch
+# （vits_runtime.py）。两条路的取值口径必须完全一致，否则会出现"健康检查
+# 验 A、一条路合成 B"这类检查绿而合成炸的组合。
+#
+# 下面三个常量是模型位置的唯一来源：service 的健康检查、speak 前置检查、
+# 引擎的默认值、子进程 argv 的默认值都取自这里。
+
+DEFAULT_VITS_MODEL_NAME = "G_latest.pth"
+DEFAULT_VITS_CONFIG_NAME = "finetune_speaker.json"
+DEFAULT_VITS_SPEAKER = "Mea"
+
+
+def vits_model_path() -> str:
+    """内置 VITS 模型权重路径。"""
+    from meapet.paths import project_path
+
+    return project_path("vits_models", DEFAULT_VITS_MODEL_NAME)
+
+
+def vits_config_path() -> str:
+    """内置 VITS 模型配置（说话人表）路径。"""
+    from meapet.paths import project_path
+
+    return project_path("vits_models", DEFAULT_VITS_CONFIG_NAME)
+
+
+def _is_speaker_table(speakers: object) -> bool:
+    """说话人表判定一律走鸭子类型，不能 ``isinstance(x, dict)``。
+
+    ``finetune_speaker.json`` 经 ``vits_core.utils.get_hparams_from_file`` 读出来
+    后，``hps.speakers`` 是一个 ``HParams`` 实例：它有 ``__contains__`` /
+    ``__getitem__`` / ``keys``，**但不继承 dict**。老代码的
+    ``isinstance(speaker_ids, dict)`` 因此恒为假 —— 说话人查表从来没有真正
+    执行过，`--speaker` 一直是死的。
+    """
+    return speakers is not None and hasattr(speakers, "__contains__") and hasattr(
+        speakers, "__getitem__"
+    )
+
+
+def resolve_vits_speaker(
+    speakers: object, requested: str | None
+) -> tuple[int, str | None]:
+    """把说话人名解析成 id，并如实报告回落。
+
+    返回 ``(speaker_id, warning)``。``warning`` 为 None 表示请求被满足。
+    名字不在 ``finetune_speaker.json`` 里时静默换成 0 号音色，正是
+    "换错音色没人数得清"的来源，所以这里必须把回落返回给调用方去出声。
+    """
+    if not _is_speaker_table(speakers):
+        if requested:
+            return 0, (
+                f"VITS 配置没有说话人表，已忽略请求的说话人 {requested!r}，使用 0 号"
+            )
+        return 0, None
+    if not requested:
+        return 0, None
+    if requested not in speakers:
+        try:
+            available = ", ".join(repr(name) for name in speakers.keys())
+        except Exception:
+            available = "?"
+        return 0, (
+            f"VITS 说话人 {requested!r} 不在模型里（可用: {available or '(空)'}），"
+            "已静默换到 0 号音色"
+        )
+    try:
+        return int(speakers[requested]), None
+    except (TypeError, ValueError):
+        return 0, f"VITS 说话人 {requested!r} 的 id 不是整数，使用 0 号"
+
+
+class VitsRoute:
+    """VITS 选路结果：两路共用的单一判据。"""
+
+    __slots__ = ("inprocess", "external_python", "reason", "ignored_inprocess_pref")
+
+    def __init__(
+        self,
+        *,
+        inprocess: bool,
+        external_python: str,
+        reason: str,
+        ignored_inprocess_pref: bool = False,
+    ) -> None:
+        self.inprocess = inprocess
+        self.external_python = external_python
+        self.reason = reason
+        self.ignored_inprocess_pref = ignored_inprocess_pref
+
+    @property
+    def mode(self) -> str:
+        return "inprocess" if self.inprocess else "subprocess"
+
+    def describe(self) -> str:
+        return (
+            f"mode={self.mode} reason={self.reason}"
+            + (
+                f" python={os.path.basename(self.external_python)}"
+                if self.external_python
+                else ""
+            )
+        )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<VitsRoute {self.describe()}>"
+
+
+def resolve_vits_route(
+    *,
+    external_python: str | None = None,
+    configured_python: str | None = None,
+    inprocess_pref: bool | None = None,
+    frozen: bool | None = None,
+    fallback_python: str | None = None,
+) -> VitsRoute:
+    """决定 VITS 走子进程还是进程内 —— 全仓库唯一的判据。
+
+    取值口径（``inprocess_pref`` 是「三态」：None=用户没说话）：
+
+    1. 用户显式 ``tts.vits_inprocess`` 优先于打包默认值。
+    2. 打包版（frozen）在没有外部解释器时默认走进程内。
+    3. **外部解释器可用时一律优先走子进程**，包括用户声明
+       ``vits_inprocess: true`` 的情况；此时
+       :attr:`VitsRoute.ignored_inprocess_pref` 为 True，调用方**必须出声**。
+       这条优先级是有意的（打包版自带 torch DLL 可能加载不了），所以保留，
+       但不再无声吞掉用户的显式声明。
+
+    ``external_python`` 已是解析结果时直接传；否则传 ``configured_python``，
+    由本函数经 :func:`resolve_external_python` 解析（空串 / pet exe / 不存在
+    都算没有外部解释器）。
+    """
+    if external_python is None:
+        external_python = resolve_external_python(configured_python)
+    external_python = external_python or ""
+
+    if frozen is None:
+        frozen = _is_frozen()
+
+    explicit_inprocess = inprocess_pref is True
+    if inprocess_pref is None:
+        want_inprocess = bool(frozen and not external_python)
+        reason = "frozen_no_external" if want_inprocess else "not_frozen"
+    else:
+        want_inprocess = explicit_inprocess
+        reason = "explicit_inprocess" if explicit_inprocess else "explicit_subprocess"
+
+    if external_python:
+        # 这条分支就是老代码里那个恒真式的结果：external_py 一旦可用，
+        # prefer_subprocess 必为 True，vits_inprocess 影响不了任何结论。
+        return VitsRoute(
+            inprocess=False,
+            external_python=external_python,
+            reason=(
+                "explicit_inprocess_overridden_by_external"
+                if explicit_inprocess
+                else "external_configured"
+            ),
+            ignored_inprocess_pref=explicit_inprocess,
+        )
+
+    if want_inprocess:
+        return VitsRoute(
+            inprocess=True,
+            external_python="",
+            reason=reason if explicit_inprocess else "frozen_no_external",
+        )
+
+    # 用户没有声明进程内、又没有外部解释器：回落到本进程解释器
+    # （源码运行时就是真 Python；打包版下这条路不可用，由选路方报错）。
+    return VitsRoute(
+        inprocess=False,
+        external_python=resolve_external_python(fallback_python),
+        reason="no_external_python_fallback",
+    )
+
+
 def hidden_subprocess_kwargs() -> dict:
     """Kwargs so Windows console Python does not flash a black terminal window.
 

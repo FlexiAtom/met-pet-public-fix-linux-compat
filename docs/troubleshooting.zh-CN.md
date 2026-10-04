@@ -35,6 +35,29 @@
    模型文件；Git LFS pointer 不是可用模型。
 3. 多语言参考音频应放在 `voice_cache/` 或使用绝对路径，并确保语言配置匹配。
 4. TTS 失败时桌宠会保留文字回复。检查脱敏日志中的引擎状态和错误类型。
+5. VITS 走哪条路由日志里的 `VITS route: mode=… reason=…` 决定，只有两种：
+   `mode=subprocess`（外部解释器跑 `vits_infer.py`）与 `mode=inprocess`
+   （本进程 torch）。这一行就是最终裁决，不要照配置猜。
+
+### VITS 填了解释器却不走子进程 / 填了 `vits_inprocess: true` 却没生效
+
+`tts.vits_python` 只在它真是一个可用的 Python 解释器时才生效：空串、指向
+`MeaPet.exe` 自己、或路径不在盘上，三者都会被判为“没配”，此时打包版回落到
+进程内 torch。启动日志对这种情况有一行 `tts.vits_python=… 不是可用的 Python
+解释器` 的警告，向导里点保存也会当场提示。
+
+`tts.vits_inprocess: true` 不会否决一个真的外部解释器：外部解释器优先是有意的
+（打包版自带的 torch 可能加载不了），此时日志会明确写出
+`reason=explicit_inprocess_overridden_by_external`。想让进程内真正生效，先把
+`tts.vits_python` 清空。
+
+`tts.vits_model` / `tts.vits_config` / `tts.vits_speaker` 留空即使用随包的
+`vits_models/G_latest.pth` 与 `vits_models/finetune_speaker.json`。说话人名字不在
+`finetune_speaker.json` 的 `speakers` 表里时会回落到 0 号音色，**并留下一行
+warning**，不会静默换音色。
+
+完整判据表、全部配置键与实测读数见
+[`docs/tts-vits-routing.zh-CN.md`](tts-vits-routing.zh-CN.md)。
 
 ## 气泡不跟着桌宠（平铺桌面）
 

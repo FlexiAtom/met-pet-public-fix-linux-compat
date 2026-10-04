@@ -1561,6 +1561,12 @@ class SetupWizard(QWidget):
             if detected:
                 gsv_python = detected
 
+        # vits_python 落盘前先校验：resolve_external_python 对空串 / pet exe /
+        # 不在盘上三种输入都判为"没配"，以前这里无条件落盘，用户填完保存却
+        # 一个读数都拿不到。存还是照存（不夺走用户输入），但当场出声。
+        if hasattr(self.tts_page, "_report_vits_python_for_save"):
+            self.tts_page._report_vits_python_for_save()
+
         patch = {
             "engine": engine,
             "enabled": self.tts_page.enable_cb.isChecked(),

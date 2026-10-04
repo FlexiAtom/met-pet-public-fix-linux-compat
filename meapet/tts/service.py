@@ -30,11 +30,18 @@ from meapet.log import get_color_logger
 log = get_color_logger("tts")
 
 from meapet.tts.common import (
+    DEFAULT_VITS_CONFIG_NAME,
+    DEFAULT_VITS_MODEL_NAME,
+    DEFAULT_VITS_SPEAKER,
     auto_install_gsv_deps,
     is_git_lfs_pointer,
     is_model_artifact_ready,
     is_pet_executable,
     resolve_external_python,
+    resolve_vits_route,
+    resolve_vits_speaker,
+    vits_config_path,
+    vits_model_path,
     _is_frozen,
 )
 from meapet.tts.common import _get_import_name as _get_import_name
@@ -309,16 +316,58 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self._mimo_mode = engine == "mimo"
         # 外部 VITS Python 优先：向导里配置的 vits_python / 可用解释器。
         # 只有在没有外部解释器时，打包版才默认走进程内 torch。
-        configured_vits_python = resolve_external_python(
-            tts_cfg.get("vits_python", "")
+        raw_vits_python = str(tts_cfg.get("vits_python") or "").strip()
+        configured_vits_python = resolve_external_python(raw_vits_python)
+        # 选路判据只有这一处（meapet.tts.common.resolve_vits_route）：
+        # 健康日志、speak、以及引擎 mixin 都读同一个结果，不可能再两处口径。
+        # `vits_inprocess` 是三态：没这个键 = 用户没表态（用打包默认值）。
+        self._vits_inprocess_pref = (
+            bool(tts_cfg.get("vits_inprocess"))
+            if "vits_inprocess" in tts_cfg
+            else None
         )
-        if "vits_inprocess" in tts_cfg:
-            self._vits_inprocess = bool(tts_cfg.get("vits_inprocess"))
-        else:
-            self._vits_inprocess = bool(_is_frozen() and not configured_vits_python)
-        self._vits_python = configured_vits_python or (
-            "" if self._vits_inprocess else self.python_exe
+        # 配置里写了 vits_python 但解析不出来（空 / pet exe / 不在盘上）是
+        # 最容易被"填了保存了"骗过去的一格，构造函数末尾会为此留一行读数。
+        self._vits_configured_python = configured_vits_python
+        self._vits_configured_python_rejected = bool(
+            raw_vits_python and not configured_vits_python
         )
+        # 兼容旧读者（日志 / 旧测试）：_vits_python / _vits_inprocess 现在都从
+        # 选路结果派生，不再各自算一份。
+        self._vits_python = configured_vits_python
+        self._vits_inprocess = self._vits_route().inprocess
+
+        # 旋钮生产者：以前 _vits_model/_vits_config/_vits_speaker 只有读者没有
+        # 写者，两条路各自 hardcode 默认值；现在由配置落成属性，两路共用。
+        self._vits_model = str(
+            tts_cfg.get("vits_model") or vits_model_path()
+        )
+        self._vits_config = str(
+            tts_cfg.get("vits_config") or vits_config_path()
+        )
+        self._vits_speaker = str(
+            tts_cfg.get("vits_speaker") or DEFAULT_VITS_SPEAKER
+        )
+        self._vits_speaker_warning = self._check_vits_speaker(
+            self._vits_config, self._vits_speaker
+        )
+
+        if raw_vits_python and not configured_vits_python:
+            # 配置里写着解释器、实际却解析不出来（空串 / pet exe / 不在盘上）
+            # 是最容易被"填了保存了"骗过去的一格，必须留读数。
+            log.warning(
+                "TTS: tts.vits_python=%r 不是可用的 Python 解释器"
+                "（空 / 指向 MeaPet 自己 / 不在盘上），已按未配置处理。",
+                raw_vits_python[:200],
+            )
+        if self._vits_route().ignored_inprocess_pref:
+            log.warning(
+                "TTS: tts.vits_inprocess=true 被外部解释器优先级覆盖，"
+                "实际走子进程（%s）。",
+                self._vits_route().describe(),
+            )
+        if self._vits_speaker_warning:
+            log.warning("TTS: %s", self._vits_speaker_warning)
         self.voice_lang = (tts_cfg.get("voice_lang") or "jp")
 
         # MiMo 云端 TTS（与对话共用 Key / api_base，也可单独覆盖）
@@ -375,6 +424,18 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 f"voice={self.mimo_voice}{clone_info} | base={self.mimo_api_base} | "
                 f"key={'yes' if self.mimo_api_key else 'NO'}"
             )
+        elif self._vits_mode:
+            # VITS 不再借用 GSV 的 "(subprocess)" 抬头与 GPT/SoVITS 字段：
+            # 它有自己的两条路和旋钮，日志要能直接读出选了哪条。
+            model_path, config_path, speaker = self._vits_knobs()
+            log.info(
+                "MeaTTS (VITS) | engine=%s | %s | speaker=%s | model=%s | config=%s",
+                self.engine,
+                self._vits_route().describe(),
+                speaker,
+                os.path.basename(model_path),
+                os.path.basename(config_path),
+            )
         else:
             log.info(
                 f"MeaTTS v2 (subprocess) | engine={self.engine} | "
@@ -382,6 +443,54 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 f"GPT={self.gpt_model} | SoVITS={self.sovits_model} | "
                 f"top_k={self.top_k} top_p={self.top_p} temp={self.temperature}"
             )
+
+    def _vits_route(self):
+        """本实例的 VITS 选路结果 —— 健康检查与 speak 的唯一判据。
+
+        以前 health_check 自带一份恒真式、engines/vits.py 自带另一份，于是
+        健康日志可以自称 ``mode=subprocess`` 而引擎实际走另一条路。现在两处
+        都调这里。
+        """
+        fallback = ""
+        if self._vits_configured_python or self._vits_inprocess_pref is not True:
+            # 显式关掉进程内、又没有外部解释器时不留回落：打包版的
+            # self.python_exe 就是 pet exe，拿它跑脚本只会再开一个桌宠实例。
+            fallback = self.python_exe
+        return resolve_vits_route(
+            external_python=self._vits_configured_python,
+            inprocess_pref=self._vits_inprocess_pref,
+            frozen=_is_frozen(),
+            fallback_python=fallback,
+        )
+
+    # 引擎 mixin 经这个可调用属性取宿主判据（见 engines/vits.py::_vits_route）。
+    _vits_route_decision = _vits_route
+
+    @staticmethod
+    def _check_vits_speaker(config_path: str, speaker: str) -> str:
+        """按 finetune_speaker.json 校验说话人；不在表里就返回要出声的警告。
+
+        只读 JSON 的 speakers 表，不加载模型（探针税不落在 speak 路径上）。
+        """
+        if not speaker:
+            return ""
+        try:
+            import json
+
+            with open(config_path, "r", encoding="utf-8") as f:
+                hps = json.load(f)
+            speakers = hps.get("speakers") if isinstance(hps, dict) else None
+        except FileNotFoundError:
+            return ""
+        except Exception as exc:
+            log.warning(
+                "TTS: 读 VITS 配置失败，说话人无法校验: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return ""
+        _speaker_id, warning = resolve_vits_speaker(speakers, speaker)
+        return warning or ""
 
     def health_check(self) -> bool:
         """检查关键文件是否存在，并确保依赖已安装"""
@@ -396,34 +505,35 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             return self._deps_ready
 
         if self._vits_mode:
-            model_ok = is_model_artifact_ready(
-                project_path("vits_models", "G_latest.pth")
-            )
-            config_ok = os.path.isfile(
-                project_path("vits_models", "finetune_speaker.json")
-            )
+            route = self._vits_route()
+            # 健康检查与 speak 用同一个 route：模型/配置也取引擎真正会用的
+            # 那两个路径，不再对着硬编码默认值验 A 而实际合成 B。
+            model_path, config_path, _speaker = self._vits_knobs()
+            model_ok = is_model_artifact_ready(model_path)
+            config_ok = os.path.isfile(config_path)
             core_ok = os.path.isdir(project_path("vits_core"))
             script_ok = os.path.isfile(
                 project_path("meapet", "tools", "vits_infer.py")
             )
-            external_py = resolve_external_python(self._vits_python)
-            # 外部 Python 可用时优先按子进程路径验收；否则验收进程内资源。
-            prefer_subprocess = bool(external_py) and (
-                not self._vits_inprocess or bool(external_py)
-            )
-            if prefer_subprocess and external_py:
+            external_py = route.external_python
+            if not route.inprocess:
+                # mode 由 route.describe() 给出，这里不重复一份可能分叉的字符串。
                 checks = {
-                    "mode": "subprocess",
-                    "python": True,
+                    "python": bool(external_py),
                     "script": script_ok,
                     "model": model_ok,
                     "config": config_ok,
                 }
-                # 子进程脚本缺失时仍可回退进程内
-                self._deps_ready = model_ok and config_ok and (script_ok or core_ok)
+                if not external_py:
+                    # 显式关掉进程内、又没有外部解释器：两路都没有，别报绿。
+                    self._deps_ready = False
+                else:
+                    # 子进程脚本缺失时仍可回退进程内
+                    self._deps_ready = (
+                        model_ok and config_ok and (script_ok or core_ok)
+                    )
             else:
                 checks = {
-                    "mode": "inprocess",
                     "core": core_ok,
                     "model": model_ok,
                     "config": config_ok,
@@ -434,7 +544,9 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             log.info(
                 "Health (vits): "
                 + " ".join(f"{name}={ok}" for name, ok in checks.items())
-                + (f" python={os.path.basename(external_py)}" if external_py else "")
+                + f" {route.describe()}"
+                + (f" model={model_path}" if not model_ok else "")
+                + (f" config={config_path}" if not config_ok else "")
             )
             return self._deps_ready
 
@@ -844,10 +956,16 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                     log.error(f"TTS: SoVITS 模型文件不存在，跳过合成: {self.sovits_path}")
                 return None
         elif self._vits_mode:
-            vits_model = project_path("vits_models", "G_latest.pth")
+            # 验的是引擎真正会用的那个模型（旋钮有生产者后两者可以不同）。
+            vits_model, vits_config, _speaker = self._vits_knobs()
             if not is_model_artifact_ready(vits_model):
                 if is_git_lfs_pointer(vits_model):
                     log.error("TTS: VITS 模型仍是 Git LFS pointer，不会自动拉取")
+                else:
+                    log.error(f"TTS: VITS 模型文件不存在，跳过合成: {vits_model}")
+                return None
+            if not os.path.isfile(vits_config):
+                log.error(f"TTS: VITS 配置不存在，跳过合成: {vits_config}")
                 return None
 
         # 确保依赖就绪

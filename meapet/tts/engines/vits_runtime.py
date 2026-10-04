@@ -1,6 +1,11 @@
 """In-process VITS inference (no external Python subprocess).
 
-Used by the frozen onedir build and when ``tts.vits_inprocess`` is enabled.
+Reached when no external interpreter is configured (or the user explicitly
+asked for in-process and none is available) — the decision itself lives in
+``meapet.tts.common.resolve_vits_route``, never here. When ``tts.vits_python``
+does resolve to a real interpreter, the subprocess route is preferred even if
+``tts.vits_inprocess`` is true; that override is logged, not silent.
+
 Heavy deps (torch / vits_core) are imported lazily on first synthesis call.
 
 This module is also imported by the external ``vits_infer.py`` CLI. Keep its
@@ -15,6 +20,12 @@ from typing import Any, Optional
 
 from meapet.paths import project_path
 from meapet.log import get_color_logger
+from meapet.tts.common import (
+    DEFAULT_VITS_CONFIG_NAME,
+    DEFAULT_VITS_MODEL_NAME,
+    DEFAULT_VITS_SPEAKER,
+    resolve_vits_speaker,
+)
 
 log = get_color_logger("tts")
 
@@ -178,8 +189,10 @@ def get_cached_model(
     config_path: Optional[str] = None,
 ):
     """Load (or reuse) the VITS model. Returns ``(hps, net_g, rt)`` or ``(None, None, None)``."""
-    model_path = model_path or project_path("vits_models", "G_latest.pth")
-    config_path = config_path or project_path("vits_models", "finetune_speaker.json")
+    model_path = model_path or project_path("vits_models", DEFAULT_VITS_MODEL_NAME)
+    config_path = config_path or project_path(
+        "vits_models", DEFAULT_VITS_CONFIG_NAME
+    )
     if not os.path.isfile(model_path) or not os.path.isfile(config_path):
         return None, None, None
 
@@ -201,14 +214,16 @@ def synthesize_vits(
     *,
     model_path: Optional[str] = None,
     config_path: Optional[str] = None,
-    speaker: str = "Mea",
+    speaker: str = DEFAULT_VITS_SPEAKER,
     noise_scale: float = 0.667,
     noise_scale_w: float = 0.6,
     length_scale: float = 1.0,
 ) -> str:
     """Synthesize *text* to *output_wav* in-process. Returns the output path."""
-    model_path = model_path or project_path("vits_models", "G_latest.pth")
-    config_path = config_path or project_path("vits_models", "finetune_speaker.json")
+    model_path = model_path or project_path("vits_models", DEFAULT_VITS_MODEL_NAME)
+    config_path = config_path or project_path(
+        "vits_models", DEFAULT_VITS_CONFIG_NAME
+    )
     if not text or not str(text).strip():
         raise ValueError("empty VITS text")
     if not os.path.isfile(model_path):
@@ -226,11 +241,11 @@ def synthesize_vits(
             _MODEL_CACHE[key] = entry
         hps, net_g, rt = entry
 
-        speaker_ids = hps.speakers
-        if isinstance(speaker_ids, dict):
-            speaker_id = speaker_ids.get(speaker, 0)
-        else:
-            speaker_id = 0
+        speaker_id, speaker_warning = resolve_vits_speaker(
+            hps.speakers, speaker
+        )
+        if speaker_warning:
+            log.warning("VITS (in-process): %s", speaker_warning)
 
         stn_tst = _get_text(rt, text, hps, False)
         device = rt["device"]
