@@ -82,6 +82,20 @@ def test_infer_script_accepts_the_check_deps_flag(tmp_path):
     assert "ImportError" in proc.stderr
 
 
+def test_transient_status_text_has_a_settler():
+    """向导写"检测依赖中"这类过渡文案时，必须把状态条交给能结掉它的那条路。
+
+    实测过的坏形状：`_on_vits_env_done` 落了 warning "检测依赖中…"，而探针只写日志
+    不碰状态条 ⇒ 状态条永远停在那句过渡文案上（Qt 事件循环里没人会替它改口）。
+    """
+    src = (ROOT / "wizard" / "page_tts_vits.py").read_text(encoding="utf-8")
+
+    assert "检测依赖中" in src
+    assert "status_widget=self.vits_status" in src, (
+        "过渡文案没有交割对象：_ensure_vits_deps 需要 status_widget 才会落定结论"
+    )
+
+
 def test_probe_and_script_share_one_sentinel_contract():
     """两边各改一半就静默失效：flag 名与哨兵串必须在两处源码里同时出现。"""
     script_src = INFER_SCRIPT.read_text(encoding="utf-8")

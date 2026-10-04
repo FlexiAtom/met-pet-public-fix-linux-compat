@@ -419,13 +419,15 @@ class TtsPageVitsMixin:
 
         threading.Thread(target=task, daemon=True).start()
 
-    def _ensure_vits_deps(self, py_exe: str, log):
+    def _ensure_vits_deps(self, py_exe: str, log, status_widget=None):
         """检测 VITS 推理依赖，缺包时装完再复测；探测全程在后台线程。
 
         判据是 vits_infer._load_torch_stack 那份 import 面（--check-deps），不是
         这里另列的包名——本机实测该 env 有 torch 却缺 unidecode/eng_to_ipa/num_thai，
         从前逐个 import soundfile/scipy/librosa 的写法照样报"就绪"，到合成才炸。
-        探测要 ~20 s（torch+text 前端全量 import），所以不进主线程。
+        探测要 12–20 s（torch+text 前端全量 import，冷/热页缓存各一头），所以不进主线程。
+        *status_widget* 给了就把结论也落到状态条——调用方若要写"检测中"这类
+        过渡文案，只有这里能把它结掉。
         """
         _ensure_main_invoker()  # 主线程入口：先建好跨线程投递器
         from meapet.paths import project_path
@@ -433,6 +435,8 @@ class TtsPageVitsMixin:
 
         if TtsPageVitsMixin._path_is_pet_exe(py_exe):
             log("  ⚠ 打包版中无法检查 VITS 依赖（pet exe 不是 Python 解释器）")
+            if status_widget is not None:
+                set_status(status_widget, "warning", "打包版无法检测 VITS 依赖")
             return
         import subprocess, threading
         infer_script = project_path("meapet", "tools", "vits_infer.py")
@@ -442,10 +446,16 @@ class TtsPageVitsMixin:
         def _report(verdict, detail):
             if verdict == "ok":
                 log("✓ VITS 推理依赖就绪")
+                if status_widget is not None:
+                    set_status(status_widget, "success", "VITS 环境已就绪（依赖探针通过）")
             elif verdict == "missing":
                 log(f"  ✗ VITS 推理依赖不完整：{detail}——合成会失败并回退预制语音")
+                if status_widget is not None:
+                    set_status(status_widget, "error", f"VITS 依赖不完整：{detail}")
             else:
                 log("  ⚠ 未能判定 VITS 推理依赖状态（探测超时或脚本缺失）")
+                if status_widget is not None:
+                    set_status(status_widget, "warning", f"未能判定 VITS 依赖：{detail}")
 
         def _task():
             verdict, detail = probe_vits_deps(py_exe, infer_script)
@@ -482,6 +492,7 @@ class TtsPageVitsMixin:
             self._ensure_vits_deps(
                 result,
                 lambda msg: self.log(msg) if hasattr(self, "log") else None,
+                status_widget=self.vits_status,
             )
         else:
             set_status(self.vits_status, "error", f"配置失败: {result[:50]}")
