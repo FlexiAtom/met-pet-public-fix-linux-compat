@@ -7,6 +7,7 @@ import torch.utils.data
 import torchaudio
 
 import commons
+from audio_io import load_audio
 from mel_processing import spectrogram_torch
 from utils import load_wav_to_torch, load_filepaths_and_text
 from text import text_to_sequence, cleaned_text_to_sequence
@@ -75,7 +76,10 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         #         sampling_rate, self.sampling_rate))
         # audio_norm = audio / self.max_wav_value if audio.max() > 10 else audio
         # audio_norm = audio_norm.unsqueeze(0)
-        audio_norm, sampling_rate = torchaudio.load(filename, frame_offset=0, num_frames=-1, normalize=True, channels_first=True)
+        audio_norm, sampling_rate = load_audio(
+            torchaudio, filename,
+            frame_offset=0, num_frames=-1, normalize=True, channels_first=True,
+        )
         # spec_filename = filename.replace(".wav", ".spec.pt")
         # if os.path.exists(spec_filename):
         #     spec = torch.load(spec_filename)

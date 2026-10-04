@@ -58,6 +58,37 @@ def find_gsv_root(explicit: str, py_exe: str) -> str:
     return current if _has_gsv_tree(current) else ""
 
 
+def prefer_non_sox_backend(windows=None):
+    """POSIX 上把 torchaudio 的 sox 后端摘掉——上游 TTS.py 调的是无参 torchaudio.load。
+
+    ``libtorchaudio_sox.so`` 按上游 sox 14.4.2 的 ABI 编译，而 Arch 等发行版的
+    ``libsox`` 实为 sox_ng 14.8：命中它是 SIGSEGV，不是可捕获的异常。后端表在
+    import 期被 lru_cache 固化进 load/info/save 的闭包，所以摘掉一项就得用同模块
+    的工厂把这三个函数重建一遍。只在 soundfile 也在场时动手——否则会把
+    真 sox 14.4.2 的正常环境一起带走。
+    """
+    if (os.name == "nt") if windows is None else windows:
+        return "windows-untouched"
+    try:
+        import torchaudio
+        from torchaudio._backend import utils as _backend_utils
+
+        backends = _backend_utils.get_available_backends()
+    except Exception as exc:  # 版本形状不认识就别动它
+        log(f"读不到 torchaudio 后端表，保持原样：{exc}")
+        return "unknown-api"
+    if "sox" not in backends:
+        return "no-sox"
+    if "soundfile" not in backends:
+        log("torchaudio 没有 soundfile 后端，sox 留着不动")
+        return "no-soundfile"
+    backends.pop("sox")
+    torchaudio.info = _backend_utils.get_info_func()
+    torchaudio.load = _backend_utils.get_load_func()
+    torchaudio.save = _backend_utils.get_save_func()
+    return "sox-dropped"
+
+
 def main():
     log("=== gsv_infer 启动 ===")
     log(f"sys.argv={sys.argv}")
@@ -97,6 +128,7 @@ def main():
         log("import GPT_SoVITS.TTS_infer_pack.TTS …")
         from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
         log(f"import ok ({time.time()-t0:.1f}s)")
+        log(f"torchaudio 后端处置：{prefer_non_sox_backend()}")
 
         config_path = args.get("tts_config",
             os.path.join("GPT_SoVITS", "configs", "tts_infer.yaml"))
