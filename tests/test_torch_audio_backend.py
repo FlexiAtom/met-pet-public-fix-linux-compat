@@ -1,10 +1,12 @@
-"""torchaudio 的 sox 后端在 sox_ng 机器上是 SIGSEGV，两处调用点都得绕开它。
+"""torchaudio 的 sox 后端在 sox_ng 机器上是 SIGSEGV，交付码里不能留下裸 ``torchaudio.load``。
 
 出处：Athena 件 gsv-linux-runtime-support 的真机验收。读数——
 ``gdb`` 抓到崩溃帧全在 ``torchaudio/lib/libtorchaudio_sox.so``
 (``load_audio_file → apply_effects_file → SoxEffectsChain::addOutputBuffer``)，
 而 ``ldd`` 把它解析到 ``/usr/lib/libsox.so`` → ``readlink -f`` = ``libsox_ng.so.3.0.0``
 （Arch 的 ``sox`` 包已是 sox_ng 的分身，14.8；wheel 是按 14.4.2 的 ABI 编的）。
+
+真撞这道崩的只有 ``meapet/tools/gsv_infer.py`` 一处（它调上游无参的 ``torchaudio.load``）。
 """
 
 from __future__ import annotations
@@ -13,8 +15,6 @@ import importlib.util
 from pathlib import Path
 import sys
 import types
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,53 +26,11 @@ def _load_module(path: Path, name: str):
     return module
 
 
-audio_io = _load_module(ROOT / "vits_core" / "audio_io.py", "audio_io_under_test")
 gsv_infer = _load_module(ROOT / "meapet" / "tools" / "gsv_infer.py", "gsv_infer_under_test")
 
 
-class _RecordingTorchaudio:
-    """假 torchaudio：记下每次 load 的 kwargs，便于断言回退顺序。"""
-
-    def __init__(self, raise_on_backend=None):
-        self.calls = []
-        self.raise_on_backend = raise_on_backend
-
-    def load(self, path, **kwargs):
-        self.calls.append(kwargs)
-        if "backend" in kwargs and self.raise_on_backend is not None:
-            raise self.raise_on_backend
-        return ("waveform", path)
-
-    def info(self, path, **kwargs):  # pragma: no cover - 只为形状完整
-        return ("info", path)
-
-    def save(self, path, *args, **kwargs):  # pragma: no cover
-        self.calls.append(kwargs)
-
-
-def test_load_audio_names_the_soundfile_backend():
-    ta = _RecordingTorchaudio()
-    got = audio_io.load_audio(
-        ta, "a.wav", frame_offset=0, num_frames=-1, normalize=True, channels_first=True
-    )
-    assert got == ("waveform", "a.wav")
-    assert ta.calls == [
-        {"backend": "soundfile", "frame_offset": 0, "num_frames": -1,
-         "normalize": True, "channels_first": True}
-    ]
-
-
-@pytest.mark.parametrize("exc", [TypeError, ValueError], ids=["old-torchaudio", "no-soundfile"])
-def test_load_audio_falls_back_without_the_backend_kwarg(exc):
-    ta = _RecordingTorchaudio(raise_on_backend=exc("nope"))
-    got = audio_io.load_audio(ta, "a.wav", normalize=True)
-    assert got == ("waveform", "a.wav")
-    # 第一次带 backend 失败后，回退那一次必须不带——否则原样再撞同一堵墙
-    assert ta.calls == [{"backend": "soundfile", "normalize": True}, {"normalize": True}]
-
-
 def _fake_torchaudio(monkeypatch, backends, *, with_api=True):
-    """把假 torchaudio 的私有后端表塞进 sys.modules，返回 (模块, 表本体)。"""
+    """把假 torchaudio 的私有后端表塞进 sys.modules，返回该模块。"""
     ta = types.ModuleType("torchaudio")
     ta.load = lambda *a, **k: "sox-load"
     ta.info = lambda *a, **k: "sox-info"
@@ -139,14 +97,16 @@ def test_unrecognised_torchaudio_shape_does_not_raise(monkeypatch):
 
 
 def test_no_bare_torchaudio_load_left_in_our_own_code():
-    """两处调用点必须经助手：裸 torchaudio.load 在 sox_ng 机器上是段错误。"""
+    """我们自己的代码里不许出现裸 ``torchaudio.load``——在 sox_ng 机器上是段错误。
+
+    上游整合包内的无参调用改不了（那是用户持有的第三方文件），靠 ``prefer_non_sox_backend``
+    摘后端表绕开；这一条只守我们仓库里的那几支。
+    """
     offenders = []
-    for rel in ("vits_core/data_utils.py", "meapet/tools/gsv_infer.py",
+    for rel in ("meapet/tools/gsv_infer.py",
                 "meapet/tts/engines/vits.py", "meapet/tts/engines/vits_runtime.py"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         for line_no, line in enumerate(text.splitlines(), start=1):
             if "torchaudio.load(" in line:
                 offenders.append(f"{rel}:{line_no}: {line.strip()}")
-    assert not offenders, "裸 torchaudio.load（应走 vits_core.audio_io.load_audio）:\n" + "\n".join(
-        offenders
-    )
+    assert not offenders, "裸 torchaudio.load:\n" + "\n".join(offenders)
