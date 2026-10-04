@@ -121,6 +121,33 @@ Health (vits): python=True script=True model=True config=True mode=subprocess re
 | 超时闸 | 90 s，两路都有余量 |
 | 随包模型 | `G_latest.pth` 158 MB（非 Git LFS pointer）、`finetune_speaker.json` 说话人表 `{"Mea": 0}` |
 
+### Linux 读数（源码态，2026-10-04 实测）
+
+宿主 `.venv` = Python 3.12.13；外部解释器 = 自造 vits env Python 3.10.21 + torch 2.5.1+cpu
+（无 CUDA）。两平台的 torch 形状不同，所以这组数**不能**与上表互换引用。
+
+| | 读数 |
+|---|---|
+| 端到端子进程合成 | rc=0，整条 27.3 s（含全栈 import）；产物 22050 Hz / 单声道 / float32 / 2.48 s，peak 0.719，幅度 >0.02 的样本占 54.9%（非静音、非削顶） |
+| 选路 | `mode=subprocess reason=external_configured python=python`，健康检查与引擎两侧逐字相同 |
+| 依赖探针 | `probe_vits_deps` 全栈 import 12–20 s（冷/热页缓存差），90 s 闸有余量；该探针**不落在** `speak()` 路径上，由向导线程代付 |
+| 随包模型 | 本机 `vits_models/G_latest.pth` 是 **134 B 的 Git LFS pointer**（仓库无 git-lfs 可用） |
+| 回归 | 全量 `1040 passed, 1 skipped` |
+
+两条 Linux 特有的口径，别当成 bug：
+
+1. **权重未水化时不会自动拉取**。显式配 `tts.vits_model` 指向真身，或先 `git lfs pull`。
+   向导对 pointer 直接报 error，不再显示"模型就绪（0 MB）"；`speak()` 那一侧同一份文件
+   也判不可用，两处判据一致。
+2. **进程内那条路在源码态 Linux 不作交付路径**：`vits_inprocess: true` 且没配外部解释器时
+   才走它，而本仓库 `.venv` 里没有 torch，这条路只在打包版（自带 torch DLL/so）有意义。
+
+覆盖差一条：`tests/test_vits_route_and_knobs.py::test_real_hps_speakers_is_not_a_dict`
+——对**随包真配置**验 `HParams` 鸭子类型的那条——在 Linux 是 skip（本机无 scipy，
+`vits_core.utils` 导不进来），目前只有 Windows 真跑过。Linux 侧的等价证据是静态的：
+`vits_core/utils.py` 里 `class HParams():` 不继承 `dict`。
+
+
 ## 7. 验收
 
 ```bash
