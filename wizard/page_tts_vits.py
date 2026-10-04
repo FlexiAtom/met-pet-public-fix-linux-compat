@@ -17,6 +17,7 @@ from meapet.dependencies import (
     resolve_pip_index_url,
     resolve_torch_index_url,
 )
+from meapet.tts.common import env_site_packages, prefix_python, venv_python
 from wizard.styles import (
     styled_message_box,
     styled_open_file,
@@ -83,8 +84,9 @@ def _post_to_main(fn) -> None:
 
 class TtsPageVitsMixin:
     def _browse_python(self, input_field):
+        wanted = "python.exe" if os.name == "nt" else "python*"
         dir_path = styled_open_file(
-            self, "选择 python.exe", "", "python.exe (python.exe)"
+            self, f"选择 {wanted}", "", f"{wanted} ({wanted})"
         )
         if dir_path:
             input_field.setText(dir_path)
@@ -300,6 +302,7 @@ class TtsPageVitsMixin:
             return
 
         # 0️⃣.5️⃣ 项目自带的 _python（embedable，已存在则省去 venv 创建）
+        # embeddable 是 Windows 便携包的形态，POSIX 上没有这种目录，isfile 自然为假。
         _embedded = _os.path.join(base, "_python", "python.exe")
         if _os.path.isfile(_embedded):
             ver_ok, ver_info = _check_torch(_embedded)
@@ -324,10 +327,10 @@ class TtsPageVitsMixin:
             return
 
         # 1️⃣ vits_ft conda 环境
+        _home = _os.path.expanduser("~")
         candidates = [
-            _os.path.join(_os.path.expanduser("~"), ".conda", "envs", "vits_ft", "python.exe"),
-            _os.path.join(_os.path.expanduser("~"), "miniconda3", "envs", "vits_ft", "python.exe"),
-            _os.path.join(_os.path.expanduser("~"), "anaconda3", "envs", "vits_ft", "python.exe"),
+            prefix_python(_os.path.join(_home, root, "envs", "vits_ft"))
+            for root in (".conda", "miniconda3", "anaconda3")
         ]
         found = None
         for c in candidates:
@@ -351,7 +354,7 @@ class TtsPageVitsMixin:
         # 2️⃣ 已有 vits_env venv
         venv_path = _os.path.join(base, "vits_env")
         if _os.path.isdir(venv_path):
-            py_path = _os.path.join(venv_path, "Scripts", "python.exe")
+            py_path = venv_python(venv_path)
             if _os.path.isfile(py_path):
                 ok, _ = _check_torch(py_path)
                 if ok:
@@ -378,7 +381,7 @@ class TtsPageVitsMixin:
                     )
                 subprocess.run([_master_py, "-m", "venv", venv_path],
                              capture_output=True, timeout=60)
-                py_path = _os.path.join(venv_path, "Scripts", "python.exe")
+                py_path = venv_python(venv_path)
                 if not _os.path.isfile(py_path):
                     raise Exception("venv 创建失败")
 
@@ -386,10 +389,11 @@ class TtsPageVitsMixin:
 
                 # 复制 pyopenjtalk 词典
                 import shutil
-                src_dict = _os.path.join(_os.path.expanduser("~"), ".conda", "envs", "vits_ft",
-                                        "lib", "site-packages", "pyopenjtalk")
+                src_pkg = env_site_packages(_os.path.join(
+                    _os.path.expanduser("~"), ".conda", "envs", "vits_ft"))
+                src_dict = _os.path.join(src_pkg, "pyopenjtalk")
                 if _os.path.isdir(src_dict):
-                    dst_pkg = _os.path.join(venv_path, "Lib", "site-packages")
+                    dst_pkg = env_site_packages(venv_path)
                     if _os.path.isdir(dst_pkg):
                         shutil.copytree(src_dict, _os.path.join(dst_pkg, "pyopenjtalk"),
                                        dirs_exist_ok=True)

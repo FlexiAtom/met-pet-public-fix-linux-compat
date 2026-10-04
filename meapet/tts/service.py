@@ -34,6 +34,7 @@ from meapet.tts.common import (
     is_git_lfs_pointer,
     is_model_artifact_ready,
     is_pet_executable,
+    prefix_python,
     resolve_external_python,
     _is_frozen,
 )
@@ -82,13 +83,15 @@ def gsv_python_candidates(
         "GPT-SoVITS-v2pro",
         "GPT_SoVITS",
     ):
-        candidates.append(home_path / directory / "runtime" / "python.exe")
+        candidates.append(
+            Path(prefix_python(home_path / directory / "runtime"))
+        )
 
     for root_key in ("ProgramFiles", "ProgramData", "LOCALAPPDATA"):
         root = str(env.get(root_key) or "").strip()
         if root:
             candidates.append(
-                Path(root) / "GPT-SoVITS" / "runtime" / "python.exe"
+                Path(prefix_python(Path(root) / "GPT-SoVITS" / "runtime"))
             )
 
     for conda_root in (
@@ -97,9 +100,9 @@ def gsv_python_candidates(
     ):
         candidates.extend(
             (
-                conda_root / "envs" / "GPTSoVits" / "python.exe",
-                conda_root / "envs" / "gpt-sovits" / "python.exe",
-                conda_root / "python.exe",
+                Path(prefix_python(conda_root / "envs" / "GPTSoVits")),
+                Path(prefix_python(conda_root / "envs" / "gpt-sovits")),
+                Path(prefix_python(conda_root)),
             )
         )
 
@@ -170,6 +173,10 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self.python_exe = resolve_external_python(self.python_exe)
         if not self.python_exe:
             log.warning("python_exe unset or invalid for local GSV subprocess TTS")
+
+        # GSV 根：conda env 装在源码树外时，解释器路径反推不出根，只能由配置给。
+        # 缺省为空串——子进程仍会按 GPT_SoVITS/TTS_infer_pack 标记自行上溯。
+        self.gsv_root = str(tts_cfg.get("gsv_root", "") or "").strip()
 
         # 推理脚本路径
         from meapet.paths import project_root

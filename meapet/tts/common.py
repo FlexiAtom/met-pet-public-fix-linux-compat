@@ -1,6 +1,7 @@
 """TTS shared utilities and constants (used by tts.py and engine mixins)."""
 from __future__ import annotations
 
+import glob
 import os
 import subprocess
 import sys
@@ -46,6 +47,43 @@ def resolve_external_python(path: str | None) -> str:
     if not os.path.isfile(raw):
         return ""
     return raw
+
+
+def _is_windows(windows: bool | None) -> bool:
+    return (os.name == "nt") if windows is None else bool(windows)
+
+
+def venv_python(env_dir: "os.PathLike[str] | str", *, windows: bool | None = None) -> str:
+    """Interpreter of a ``python -m venv`` environment (``Scripts`` on Windows)."""
+    if _is_windows(windows):
+        return os.path.join(env_dir, "Scripts", "python.exe")
+    return os.path.join(env_dir, "bin", "python")
+
+
+def prefix_python(env_dir: "os.PathLike[str] | str", *, windows: bool | None = None) -> str:
+    """Interpreter that sits directly in *env_dir* — conda envs and the GSV
+    整合包 ``runtime/`` folder, which use a flat prefix on Windows."""
+    if _is_windows(windows):
+        return os.path.join(env_dir, "python.exe")
+    return os.path.join(env_dir, "bin", "python")
+
+
+def env_site_packages(env_dir: "os.PathLike[str] | str", *, windows: bool | None = None) -> str:
+    """Purelib of an environment directory.
+
+    POSIX venv/conda put site-packages under a Python-version segment
+    (``lib/python3.12/site-packages``); globbing keeps that version out of
+    the source.  When nothing matches, the unversioned path is returned so
+    callers' ``isdir`` guards fail cleanly instead of guessing a file.
+    """
+    if _is_windows(windows):
+        return os.path.join(env_dir, "Lib", "site-packages")
+    matches = sorted(
+        glob.glob(os.path.join(env_dir, "lib", "python3.*", "site-packages"))
+    )
+    if matches:
+        return matches[0]
+    return os.path.join(env_dir, "lib", "site-packages")
 
 
 def hidden_subprocess_kwargs() -> dict:
