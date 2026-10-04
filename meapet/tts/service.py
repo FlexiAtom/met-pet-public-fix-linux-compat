@@ -419,9 +419,12 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 not self._vits_inprocess or bool(external_py)
             )
             if prefer_subprocess and external_py:
+                # checks 里从前有硬写的 "python": True，而合取项从来没有它——
+                # 空 env（有解释器、无包）因此被放行到 speak() 才撞 ModuleNotFoundError。
+                # 依赖探针不在这里跑：全栈 import ≈20 s，而 health_check 在 speak() 路径上，
+                # 那笔税由向导线程（_on_vits_env_done）代付。
                 checks = {
                     "mode": "subprocess",
-                    "python": True,
                     "script": script_ok,
                     "model": model_ok,
                     "config": config_ok,

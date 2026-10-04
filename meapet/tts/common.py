@@ -125,6 +125,65 @@ def is_model_artifact_ready(path: str) -> bool:
     return bool(path and os.path.isfile(path) and not is_git_lfs_pointer(path))
 
 
+VITS_DEPS_PROBE_TIMEOUT = 90
+
+
+def probe_vits_deps(py_exe: str, infer_script: str) -> tuple[str, str]:
+    """问 *py_exe* "能不能 import 推理依赖"，判据交给交付脚本自己。
+
+    返回 ``("ok"|"missing"|"unknown", detail)``。``unknown`` 表示这一问没有答案
+    （没解释器、脚本不在、超时、别的崩溃），调用方**不应**据此判不就绪——
+    那会把"探针自己坏了"变成"用户环境坏了"的新误报。
+    """
+    py_exe = (py_exe or "").strip()
+    if not py_exe or is_pet_executable(py_exe):
+        return "unknown", "no external python"
+    if not os.path.isfile(infer_script):
+        return "unknown", "infer script missing"
+    if _is_frozen() and not os.path.isfile(py_exe):
+        return "unknown", "frozen and python path not on disk"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    try:
+        proc = subprocess.run(
+            [
+                py_exe,
+                infer_script,
+                "--check-deps",
+                # --text/--output 是脚本的必填项，这条路不会用到它们
+                "--text",
+                "probe",
+                "--output",
+                os.devnull,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=VITS_DEPS_PROBE_TIMEOUT,
+            env=env,
+            **hidden_subprocess_kwargs(),
+        )
+    except subprocess.TimeoutExpired:
+        return "unknown", f"probe timeout ({VITS_DEPS_PROBE_TIMEOUT}s)"
+    except Exception as exc:
+        return "unknown", f"{type(exc).__name__}: {exc}"
+    if proc.returncode == 0 and "OK:deps_loaded" in (proc.stdout or ""):
+        return "ok", "deps importable"
+    stderr = proc.stderr or ""
+    if "ModuleNotFoundError" in stderr or "ImportError" in stderr:
+        tail = next(
+            (ln.strip() for ln in stderr.splitlines() if "Error" in ln),
+            stderr[-120:],
+        )
+        return "missing", tail
+    return "unknown", f"rc={proc.returncode} {(stderr or proc.stdout)[-160:]}"
+
+
+
 # ═══════════════════════════════════════════
 # GSV 子进程依赖自动安装
 # ═══════════════════════════════════════════

@@ -123,10 +123,21 @@ class TtsPageVitsMixin:
     def _check_vits(self):
         """检查 VITS 模型是否就绪"""
         from meapet.paths import project_path
+        from meapet.tts.common import is_git_lfs_pointer
 
         model_path = project_path("vits_models", "G_latest.pth")
         config_path = project_path("vits_models", "finetune_speaker.json")
-        if os.path.exists(model_path) and os.path.exists(config_path):
+        # exists() 对 LFS 指针为真——从前它会显示"模型就绪（0 MB）"，
+        # 而 speak() 那边同一份文件被判不可用（service.py 的 pointer 分支）。
+        if is_git_lfs_pointer(model_path):
+            set_status(
+                self.vits_status,
+                "error",
+                "VITS 权重仍是 Git LFS pointer（不会自动拉取）"
+                "——运行 git lfs pull，或手动放置真身",
+            )
+            return
+        if os.path.isfile(model_path) and os.path.isfile(config_path):
             model_size = os.path.getsize(model_path) / 1e6
             set_status(
                 self.vits_status,
@@ -409,59 +420,69 @@ class TtsPageVitsMixin:
         threading.Thread(target=task, daemon=True).start()
 
     def _ensure_vits_deps(self, py_exe: str, log):
-        """确保 VITS 所需的基础依赖已安装（soundfile, numpy, scipy 等），非阻塞
+        """检测 VITS 推理依赖，缺包时装完再复测；探测全程在后台线程。
 
-        打包版中 pet exe 不是真正 Python，跳过子进程检查。
+        判据是 vits_infer._load_torch_stack 那份 import 面（--check-deps），不是
+        这里另列的包名——本机实测该 env 有 torch 却缺 unidecode/eng_to_ipa/num_thai，
+        从前逐个 import soundfile/scipy/librosa 的写法照样报"就绪"，到合成才炸。
+        探测要 ~20 s（torch+text 前端全量 import），所以不进主线程。
         """
         _ensure_main_invoker()  # 主线程入口：先建好跨线程投递器
+        from meapet.paths import project_path
+        from meapet.tts.common import probe_vits_deps
+
         if TtsPageVitsMixin._path_is_pet_exe(py_exe):
             log("  ⚠ 打包版中无法检查 VITS 依赖（pet exe 不是 Python 解释器）")
             return
         import subprocess, threading
-        needed = []
-        _checks = {
-            "soundfile": "import soundfile; print('ok')",
-            "scipy": "import scipy; print('ok')",
-            "librosa": "import librosa; print('ok')",
-        }
+        infer_script = project_path("meapet", "tools", "vits_infer.py")
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
-        for mod, test_code in _checks.items():
-            try:
-                r = subprocess.run([py_exe, "-c", test_code],
-                                   capture_output=True, text=True, timeout=10, env=env)
-                if r.returncode != 0:
-                    needed.append(mod)
-            except Exception:
-                needed.append(mod)
 
-        if not needed:
-            log("✓ VITS 基础依赖已就绪")
-            return
+        def _report(verdict, detail):
+            if verdict == "ok":
+                log("✓ VITS 推理依赖就绪")
+            elif verdict == "missing":
+                log(f"  ✗ VITS 推理依赖不完整：{detail}——合成会失败并回退预制语音")
+            else:
+                log("  ⚠ 未能判定 VITS 推理依赖状态（探测超时或脚本缺失）")
 
-        # 后台异步安装（不阻塞主线程、不阻塞向导流程）
-        log(f"  ⚠ 缺少 {len(needed)} 个 VITS 依赖: {', '.join(needed)}，后台安装中…")
         def _task():
-            try:
-                r = subprocess.run(
-                    [py_exe, "-m", "pip", "install", "--timeout", "120",
-                     "-i", resolve_pip_index_url()] + needed,
-                    capture_output=True, text=True, timeout=300, env=env
+            verdict, detail = probe_vits_deps(py_exe, infer_script)
+            if verdict == "missing":
+                _post_to_main(
+                    lambda d=detail: log(f"  ⚠ 缺依赖（{d}），安装基础包后复测…")
                 )
-                if r.returncode == 0:
-                    _post_to_main(lambda: log("✓ VITS 依赖安装完成"))
-                else:
-                    _post_to_main(lambda: log(f"  ⚠ pip 安装失败: {r.stderr[-150:]}"))
-            except subprocess.TimeoutExpired:
-                _post_to_main(lambda: log("  ⚠ pip 安装超时，VITS 可能无法正常工作"))
+                try:
+                    r = subprocess.run(
+                        [py_exe, "-m", "pip", "install", "--timeout", "120",
+                         "-i", resolve_pip_index_url(),
+                         "soundfile", "scipy", "librosa"],
+                        capture_output=True, text=True, timeout=600, env=env
+                    )
+                    if r.returncode != 0:
+                        _post_to_main(
+                            lambda e=r.stderr[-150:]: log(f"  ⚠ pip 安装失败: {e}")
+                        )
+                except subprocess.TimeoutExpired:
+                    _post_to_main(lambda: log("  ⚠ pip 安装超时"))
+                verdict, detail = probe_vits_deps(py_exe, infer_script)
+            _post_to_main(lambda v=verdict, d=detail: _report(v, d))
+
         threading.Thread(target=_task, daemon=True).start()
 
     def _on_vits_env_done(self, ok, result):
         self.setup_vits_btn.setEnabled(True)
         if ok:
             self.vits_python_input.setText(result)
-            set_status(self.vits_status, "success", "VITS 环境已就绪")
+            # 这里只说明"解释器已就位"；依赖齐不齐由 _ensure_vits_deps 的探针
+            # 另报——从前这句无条件写"环境已就绪"，空 env 也会被它安抚过去。
+            set_status(self.vits_status, "warning", "VITS 环境已配置，检测依赖中…")
             self.setup_vits_btn.setText("VITS 环境已配置")
+            self._ensure_vits_deps(
+                result,
+                lambda msg: self.log(msg) if hasattr(self, "log") else None,
+            )
         else:
             set_status(self.vits_status, "error", f"配置失败: {result[:50]}")
             self.setup_vits_btn.setText("自动配置 VITS 环境（重试）")
