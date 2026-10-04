@@ -37,6 +37,7 @@ from meapet.tts.common import (
     is_git_lfs_pointer,
     is_model_artifact_ready,
     is_pet_executable,
+    module_present,
     prefix_python,
     resolve_external_python,
     resolve_vits_route,
@@ -546,14 +547,34 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                         model_ok and config_ok and (script_ok or core_ok)
                     )
             else:
+                # 进程内那条路的"解释器"就是本进程，所以 torch 在不在本进程里
+                # 是它的前置事实——老代码只验 core/model/config 三个磁盘事实，
+                # 于是源码态（宿主 .venv 无 torch）能打出
+                #   Health (vits): core=True model=True config=True mode=inprocess
+                # 而同一轮 speak() 撞 ModuleNotFoundError: No module named 'torch'
+                # （Windows 用户报的就是这个形状）。子进程分支本轮刚拆掉同形的
+                # python=True 谎报，这一支不能继续留着一半。
+                # 判据用 find_spec 而不是 import torch：前者实测 0.1–0.4 ms，
+                # 后者 3914 ms（全栈探针 12–20 s），health_check 在 speak() 路径上。
+                # 残余盲区如实留着：find_spec 证不了"能寻到但加载不起来"
+                # （打包版 DLL/so 起不来那一格仍由 speak 的异常分支出声）。
+                torch_ok = module_present("torch")
                 checks = {
                     "core": core_ok,
                     "model": model_ok,
                     "config": config_ok,
+                    "torch": torch_ok,
                 }
                 self._deps_ready = all(
-                    [core_ok, model_ok, config_ok]
+                    [core_ok, model_ok, config_ok, torch_ok]
                 )
+                if not torch_ok:
+                    log.warning(
+                        "Health (vits): 本进程寻不到 torch，进程内那条路不可用"
+                        "——配 tts.vits_python 指向带 torch 的解释器，"
+                        "或去掉 tts.vits_inprocess 让它走默认选路"
+                    )
+
             log.info(
                 "Health (vits): "
                 + " ".join(f"{name}={ok}" for name, ok in checks.items())

@@ -167,6 +167,7 @@ class TtsPageVitsMixin:
         try:
             from meapet.tts.common import (
                 _is_frozen,
+                module_present,
                 resolve_external_python,
                 resolve_vits_route,
             )
@@ -180,6 +181,14 @@ class TtsPageVitsMixin:
                 frozen=_is_frozen(),
             )
             if route.inprocess:
+                # 进程内那条路的解释器就是本进程，torch 在不在是本路的第一个
+                # 会撞的事实。判据与 service.health_check 同一个 module_present
+                # （find_spec，0.1–0.4 ms），别在这里 import torch。
+                if not module_present("torch"):
+                    return (
+                        "实际走进程内 torch——但本进程寻不到 torch，"
+                        "这条路会失败：填下方解释器走子进程，或给本程序装上 torch"
+                    )
                 return "实际走进程内 torch"
             if route.external_python:
                 return f"实际走子进程（{os.path.basename(route.external_python)}）"

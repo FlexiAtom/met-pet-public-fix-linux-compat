@@ -116,6 +116,28 @@ def vits_config_path() -> str:
     return project_path("vits_models", DEFAULT_VITS_CONFIG_NAME)
 
 
+def module_present(name: str) -> bool:
+    """本进程能不能**寻址到**某个模块——只查 import 元数据，不执行 import。
+
+    给进程内那条路的健康检查用：`find_spec` 本机实测 0.1–0.4 ms，同一个 env 里
+    真 `import torch` 是 3914 ms、全栈依赖探针是 12–20 s，后两笔都不能落在
+    `speak()` 路径上。
+
+    它证明不了模块**加载得起来**：打包版里 torch 在 `sys._MEIPASS` 寻得到，
+    而 DLL/so 起不来的话 import 照样失败（那一格由 `vits_runtime.py` 的
+    `Failed to load bundled torch` 分支管）。所以这个判据只能往"缺失"方向用
+    ——False 一定不可用；True 只说"找到了"，不代表就绪。
+    """
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        # 父包 __init__ 自己抛 ImportError 时 find_spec 会连带抛出；对"这条路
+        # 能不能走"的结论，"名字不存在"和"父包坏了"是同一格。
+        return False
+
+
 def _is_speaker_table(speakers: object) -> bool:
     """说话人表判定一律走鸭子类型，不能 ``isinstance(x, dict)``。
 

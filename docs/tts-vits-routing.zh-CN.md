@@ -76,13 +76,30 @@ VITS route: mode=subprocess reason=external_configured python=python.exe
 `mode` 只有 `subprocess` 与 `inprocess` 两个值，它**就是**最终裁决。排查时不要照配置
 猜，读这一行。
 
-健康检查同源：
+健康检查同源。三行都是本机源码态读数（第一条把 `project_path` 指到了临时目录，所以
+`script=False`；`python` 是 `.venv/bin/python` 的 basename；本机 `.venv` 未装 torch）。
+「改前」那行的 `checks` 里根本没有 `torch` 这一格，同一份临时现场上另外三格都是
+`True`：
 
 ```
-Health (vits): python=True script=True model=True config=True mode=subprocess reason=external_configured python=python.exe
+Health (vits): script=False model=True config=True mode=subprocess reason=external_configured python=python
+Health (vits): core=True model=True config=True mode=inprocess                                       ← 改前
+Health (vits): core=True model=True config=True torch=False mode=inprocess reason=explicit_inprocess ← 改后
 ```
+
+改前那一行因此 `health_check()` 返回 `True`，而同一现场下一步 `speak()` 撞
+`ModuleNotFoundError: No module named 'torch'`（Windows 用户报的就是这个形状）。
 
 模型或配置验不过时，同一行会带上实际检查的路径，避免「验的和用的不是一个文件」。
+
+`checks` 里只有量过的事实。以前子进程那一支硬写着 `python=True`，而 health_check
+从不验解释器里装了什么包——空 env（有解释器、无包）因此被放行到 `speak()` 才撞
+`ModuleNotFoundError`；那个键已删，解释器改由 `describe()` 以 `python=<basename>`
+出现。进程内那一支以前对着同样的空缺报绿：这条路没有外部解释器，torch 就装在
+**本进程**里，所以它现在带一个 `torch=` 键，False 时 `health_check()` 返回 False
+并另落一行 warning。判据是 `find_spec`（0.1–0.4 ms；真 `import torch` 3914 ms，
+而 health_check 在 `speak()` 路径上），它只能往「缺失」方向拦——**寻得到不等于
+加载得起来**，打包版 torch 的 DLL/so 起不来那一格仍由 `speak()` 的异常分支出声。
 
 ## 4. 出声的地方
 
@@ -93,10 +110,13 @@ Health (vits): python=True script=True model=True config=True mode=subprocess re
 | `vits_inprocess: true` 被外部解释器覆盖 | `reason=explicit_inprocess_overridden_by_external` + 一行 warning，说明优先级出处与去掉它的办法 |
 | `vits_python` 解析失败 | 构造函数一行 warning，写明是空 / pet exe / 不在盘上，并说明已按未配置处理 |
 | 说话人不在模型里 | 一行 warning，列出模型实际可用的说话人名字 |
+| 进程内那条路本进程寻不到 torch | `Health (vits): … torch=False` + 一行 warning（补哪一格：`tts.vits_python` 或去掉 `tts.vits_inprocess`），`health_check()` 返回 False |
 | 两条路都不可用 | `speak()` 报 error 并说明补哪一格 |
 
 向导侧：保存时校验「VITS Python 路径」，不通过就在状态条上写警告（**照存不误**，
-不夺走用户输入）；VITS 模型就绪的状态条上会预告实际会走哪条路。
+不夺走用户输入）；VITS 模型就绪的状态条上会预告实际会走哪条路，走到进程内而本进程
+寻不到 torch 时，那句预告会接着说这条路会失败——与 `health_check` 同一个
+`module_present` 判据，两处不许一个白一个红。
 
 ## 5. 说话人
 
