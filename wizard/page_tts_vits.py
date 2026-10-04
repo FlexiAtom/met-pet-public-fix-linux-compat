@@ -121,12 +121,16 @@ class TtsPageVitsMixin:
                 return False
 
     def _check_vits(self):
-        """检查 VITS 模型是否就绪"""
+        """检查 VITS 模型是否就绪，并预告实际会走哪条路"""
         from meapet.paths import project_path
-        from meapet.tts.common import is_git_lfs_pointer
+        from meapet.tts.common import (
+            DEFAULT_VITS_CONFIG_NAME,
+            DEFAULT_VITS_MODEL_NAME,
+            is_git_lfs_pointer,
+        )
 
-        model_path = project_path("vits_models", "G_latest.pth")
-        config_path = project_path("vits_models", "finetune_speaker.json")
+        model_path = project_path("vits_models", DEFAULT_VITS_MODEL_NAME)
+        config_path = project_path("vits_models", DEFAULT_VITS_CONFIG_NAME)
         # exists() 对 LFS 指针为真——从前它会显示"模型就绪（0 MB）"，
         # 而 speak() 那边同一份文件被判不可用（service.py 的 pointer 分支）。
         if is_git_lfs_pointer(model_path):
@@ -139,10 +143,12 @@ class TtsPageVitsMixin:
             return
         if os.path.isfile(model_path) and os.path.isfile(config_path):
             model_size = os.path.getsize(model_path) / 1e6
+            route = self._vits_route_summary()
+            suffix = f"；{route}" if route else ""
             set_status(
                 self.vits_status,
                 "success",
-                f"VITS 模型就绪（{model_size:.0f} MB；打包版默认进程内合成）",
+                f"VITS 模型就绪（{model_size:.0f} MB）{suffix}",
             )
         else:
             set_status(
@@ -150,6 +156,75 @@ class TtsPageVitsMixin:
                 "error",
                 "VITS 模型文件缺失（不会自动下载，请手动放置或点下方安装）",
             )
+
+    def _vits_route_summary(self) -> str:
+        """据当前输入框内容预告实际走哪条路 —— 与交付码同一判据。
+
+        打包版在没有外部解释器时才默认进程内；填了解释器就一定走子进程，
+        哪怕手改 config.json 写了 vits_inprocess=true（那条优先级是有意的，
+        交付码会为此落一行 warning）。
+        """
+        try:
+            from meapet.tts.common import (
+                _is_frozen,
+                resolve_external_python,
+                resolve_vits_route,
+            )
+
+            raw = ""
+            if hasattr(self, "vits_python_input"):
+                raw = self.vits_python_input.text().strip()
+            route = resolve_vits_route(
+                external_python=resolve_external_python(raw),
+                inprocess_pref=None,
+                frozen=_is_frozen(),
+            )
+            if route.inprocess:
+                return "实际走进程内 torch"
+            if route.external_python:
+                return f"实际走子进程（{os.path.basename(route.external_python)}）"
+            return "当前无可用解释器"
+        except Exception:
+            return ""
+
+    def _validate_vits_python_for_save(self) -> str:
+        """保存前的 D2 校验：返回 warning 文本（空串=没问题）。
+
+        ``resolve_external_python`` 对空串 / pet exe / 不在盘上三种输入都返回
+        ""，而向导以前是无条件 ``.text().strip()`` 落盘。用户填了一个路径、
+        看见它被保存，产品却走了另一条路 —— 这一格必须当场说出来，而不是等
+        合成失败才发现。取值放在这里，是为了和交付码共用同一个解析函数。
+        """
+        try:
+            raw = self.vits_python_input.text().strip()
+        except Exception:
+            return ""
+        if not raw:
+            return ""
+        from meapet.tts.common import is_pet_executable, resolve_external_python
+
+        if is_pet_executable(raw):
+            return (
+                "填的是 MeaPet 自己，不是 Python 解释器："
+                "这条配置不会生效（会按未配置处理）。"
+            )
+        if not os.path.isfile(raw):
+            return f"这个路径上找不到 Python：{raw}"
+        if resolve_external_python(raw):
+            return ""
+        return "这个路径不是可用的 Python 解释器，配置不会生效。"
+
+    def _report_vits_python_for_save(self) -> str:
+        """保存时把校验结果写到 VITS 状态条上（不改变落盘内容）。"""
+        warning = self._validate_vits_python_for_save()
+        if not warning:
+            return ""
+        set_status(self.vits_status, "warning", f"⚠ {warning}")
+        try:
+            self.log(f"  ⚠ VITS Python 路径：{warning}")
+        except Exception:
+            pass
+        return warning
 
     def _setup_vits_env(self):
         """On explicit user click, detect / create the VITS Python environment.

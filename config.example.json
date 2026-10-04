@@ -97,7 +97,12 @@
     "voice_clone": false,
     "clone_ref": "",
     "clone_dir": "./voice_cache",
-    "sync_with_audio": true
+    "sync_with_audio": true,
+    "vits_python": "",
+    "vits_inprocess": null,
+    "vits_model": "",
+    "vits_config": "",
+    "vits_speaker": "Mea"
   },
   "display": {
     "scale": 0.5,

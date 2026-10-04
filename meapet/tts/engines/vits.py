@@ -8,7 +8,15 @@ from typing import Optional
 
 from meapet.paths import project_path, project_root
 from meapet.log import get_color_logger
-from meapet.tts.common import hidden_subprocess_kwargs, resolve_external_python
+from meapet.tts.common import (
+    DEFAULT_VITS_CONFIG_NAME,
+    DEFAULT_VITS_MODEL_NAME,
+    DEFAULT_VITS_SPEAKER,
+    VitsRoute,
+    hidden_subprocess_kwargs,
+    resolve_external_python,
+    resolve_vits_route,
+)
 
 log = get_color_logger("tts")
 
@@ -20,6 +28,55 @@ class TtsVitsMixin:
             or getattr(self, "python_exe", None)
         )
 
+    def _vits_route(self) -> VitsRoute:
+        """本实例的 VITS 选路结果。
+
+        健康检查与 speak 都取这一处，两处口径不可能再分叉。宿主若自己实现了
+        ``_vits_route``（MeaTTS 就是），用宿主的；否则按同类口径就地判定。
+        """
+        host_route = getattr(self, "_vits_route_decision", None)
+        if callable(host_route):
+            return host_route()
+
+        external_py = TtsVitsMixin._vits_external_python(self)
+        inprocess_pref = getattr(self, "_vits_inprocess", None)
+        if inprocess_pref is not None:
+            inprocess_pref = bool(inprocess_pref)
+        return resolve_vits_route(
+            external_python=external_py,
+            inprocess_pref=inprocess_pref,
+            fallback_python=getattr(self, "python_exe", None),
+        )
+
+    def _vits_knobs(self) -> tuple[str, str, str]:
+        """模型 / 配置 / 说话人 —— 两条路共用的取值口径。
+
+        三处 ``getattr`` 以前只有进程内那条路在用，于是"健康检查验 A、
+        一条路合成 B"是默认状态；现在两路都从这里取，并且都透传下去。
+        """
+        model = getattr(self, "_vits_model", None) or project_path(
+            "vits_models", DEFAULT_VITS_MODEL_NAME
+        )
+        config = getattr(self, "_vits_config", None) or project_path(
+            "vits_models", DEFAULT_VITS_CONFIG_NAME
+        )
+        speaker = (
+            getattr(self, "_vits_speaker", None) or DEFAULT_VITS_SPEAKER
+        )
+        return str(model), str(config), str(speaker)
+
+    @staticmethod
+    def _vits_extra_args(argv: list[str], values: list[tuple[str, object]]) -> None:
+        """按 ``vits_infer.py --help`` 逐条把非空旋钮追加进 argv。
+
+        不能再现"引擎以为传了、脚本其实没这个参数"的静默失败，所以这里只
+        追加用户真的配了的值：脚本自带同名默认，不传就是走默认。
+        """
+        for flag, value in values:
+            if value is None or value == "":
+                continue
+            argv.extend([flag, str(value)])
+
     def _speak_vits(self, tts_text: str, output_wav: str) -> Optional[tuple[str, str]]:
         """VITS backend inference.
 
@@ -27,21 +84,37 @@ class TtsVitsMixin:
         (most reliable on Windows frozen builds). Fall back to in-process torch
         when no external interpreter is configured, or when the subprocess path
         is unavailable.
+
+        The route is decided once, in ``resolve_vits_route``. An explicit
+        ``tts.vits_inprocess: true`` does **not** outrank a real external
+        interpreter, but that override is reported instead of being swallowed.
         """
         # 内部辅助一律经类限定调用：保证以鸭子类型宿主（仅有配置属性、
         # 不继承本 mixin）非绑定调用 _speak_vits 时同样可用（测试契约）。
-        external_py = TtsVitsMixin._vits_external_python(self)
-        force_inprocess = bool(getattr(self, "_vits_inprocess", False))
-        # Explicit vits_inprocess=true still allows external fallback on failure.
-        prefer_subprocess = bool(external_py) and not (
-            force_inprocess and not external_py
-        )
-        # If user configured an external python, always prefer it over broken
-        # bundled torch DLLs — even when frozen defaulted to in-process.
-        if external_py:
-            prefer_subprocess = True
+        route = TtsVitsMixin._vits_route(self)
+        if route.ignored_inprocess_pref:
+            log.warning(
+                "VITS: vits_inprocess=true 被外部解释器优先级覆盖，实际走子进程 "
+                "(python=%s)。这条优先级是有意的（打包版自带 torch 可能加载不了）；"
+                "要去掉它请清空 tts.vits_python。",
+                os.path.basename(route.external_python),
+            )
+        log.info("VITS route: %s", route.describe())
 
-        if prefer_subprocess and external_py:
+        external_py = route.external_python
+        if not route.inprocess and not external_py:
+            # 既没有外部解释器、又不走进程内 —— 打包版下本进程解释器就是 pet
+            # exe，拿它跑 vits_infer.py 只会再开一个桌宠实例。
+            log.error(
+                "VITS: 没有可用的外部解释器，且进程内推理被显式关闭"
+                "（tts.vits_inprocess=false）。请配置 tts.vits_python，"
+                "或删掉 tts.vits_inprocess 让打包版回落到进程内。"
+            )
+            return None, ""
+
+        if external_py:
+            # 外部解释器可用：先子进程，失败再退进程内（打包版自带 torch 可能
+            # 加载不了，这条兜底是原有行为）。
             result = TtsVitsMixin._speak_vits_subprocess(
                 self, tts_text, output_wav, external_py
             )
@@ -52,24 +125,15 @@ class TtsVitsMixin:
             )
             return TtsVitsMixin._speak_vits_inprocess(self, tts_text, output_wav)
 
-        result = TtsVitsMixin._speak_vits_inprocess(self, tts_text, output_wav)
-        if result[0]:
-            return result
-        if external_py:
-            log.warning(
-                "VITS in-process failed; retrying with external Python %s",
-                external_py,
-            )
-            return TtsVitsMixin._speak_vits_subprocess(
-                self, tts_text, output_wav, external_py
-            )
-        return None, ""
+        # 进程内单路：没有可退的外部解释器（上面已挡掉"两路都没有"）。
+        return TtsVitsMixin._speak_vits_inprocess(self, tts_text, output_wav)
 
     def _speak_vits_subprocess(
         self,
         tts_text: str,
         output_wav: str,
         vits_python: str,
+        knobs: Optional[tuple[str, str, str]] = None,
     ) -> Optional[tuple[str, str]]:
         log.info("VITS inference (subprocess)...")
         t1 = time.time()
@@ -77,6 +141,34 @@ class TtsVitsMixin:
         if not os.path.isfile(vits_script):
             log.error(f"VITS script missing: {vits_script}")
             return None, ""
+
+        model_path, config_path, speaker = (
+            knobs if knobs is not None else TtsVitsMixin._vits_knobs(self)
+        )
+        argv = [
+            vits_python,
+            vits_script,
+            "--text",
+            f"[JA]{tts_text}[JA]",
+            "--output",
+            output_wav,
+            "--noise_scale",
+            "0.667",
+            "--noise_scale_w",
+            "0.6",
+            "--length_scale",
+            "1.0",
+        ]
+        # 旋钮透传：argv 里以前没有 --model/--config/--speaker，脚本只能回落
+        # 硬编码默认值，与进程内那条路的口径不同。
+        TtsVitsMixin._vits_extra_args(
+            argv,
+            [
+                ("--model", model_path),
+                ("--config", config_path),
+                ("--speaker", speaker),
+            ],
+        )
 
         try:
             env = os.environ.copy()
@@ -87,20 +179,7 @@ class TtsVitsMixin:
             env.pop("PYTHONPATH", None)
             env.pop("PYTHONHOME", None)
             proc = subprocess.run(
-                [
-                    vits_python,
-                    vits_script,
-                    "--text",
-                    f"[JA]{tts_text}[JA]",
-                    "--output",
-                    output_wav,
-                    "--noise_scale",
-                    "0.667",
-                    "--noise_scale_w",
-                    "0.6",
-                    "--length_scale",
-                    "1.0",
-                ],
+                argv,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -142,18 +221,13 @@ class TtsVitsMixin:
         try:
             from meapet.tts.engines.vits_runtime import synthesize_vits
 
-            model_path = getattr(self, "_vits_model", None) or project_path(
-                "vits_models", "G_latest.pth"
-            )
-            config_path = getattr(self, "_vits_config", None) or project_path(
-                "vits_models", "finetune_speaker.json"
-            )
+            model_path, config_path, speaker = TtsVitsMixin._vits_knobs(self)
             synthesize_vits(
                 f"[JA]{tts_text}[JA]",
                 output_wav,
                 model_path=model_path,
                 config_path=config_path,
-                speaker=str(getattr(self, "_vits_speaker", None) or "Mea"),
+                speaker=speaker,
             )
             elapsed = time.time() - t1
             if not os.path.exists(output_wav):

@@ -144,6 +144,47 @@ def _load_model(rt, model_path, config_path):
     return hps, net_g
 
 
+def _is_speaker_table(speakers) -> bool:
+    """说话人表判定走鸭子类型，不能 isinstance(x, dict)。
+
+    get_hparams_from_file 读出来的 hps.speakers 是 utils.HParams：它有
+    __contains__ / __getitem__ / keys，但不继承 dict，所以 isinstance 恒为假。
+    """
+    return speakers is not None and hasattr(
+        speakers, "__contains__"
+    ) and hasattr(speakers, "__getitem__")
+
+
+def resolve_speaker(speaker_ids, requested: str | None) -> tuple[int, str | None]:
+    """把说话人名解析成 id，并如实报告回落。
+
+    本文件不得 import meapet.*（外部解释器只能看到落盘的本脚本），所以这里
+    与 meapet.tts.common.resolve_vits_speaker 是同一条口径的两份实现，由
+    tests/test_vits_route_and_knobs.py 钉住一致性。
+    """
+    if not _is_speaker_table(speaker_ids):
+        if requested:
+            return 0, (
+                f"VITS 配置没有说话人表，已忽略请求的说话人 {requested!r}，使用 0 号"
+            )
+        return 0, None
+    if not requested:
+        return 0, None
+    if requested not in speaker_ids:
+        try:
+            available = ", ".join(repr(name) for name in speaker_ids.keys())
+        except Exception:
+            available = "?"
+        return 0, (
+            f"VITS 说话人 {requested!r} 不在模型里（可用: {available or '(空)'}），"
+            "已静默换到 0 号音色"
+        )
+    try:
+        return int(speaker_ids[requested]), None
+    except (TypeError, ValueError):
+        return 0, f"VITS 说话人 {requested!r} 的 id 不是整数，使用 0 号"
+
+
 def synthesize(
     text: str,
     output_wav: str,
@@ -157,11 +198,9 @@ def synthesize(
     rt = _load_torch_stack()
     hps, net_g = _load_model(rt, model_path, config_path)
 
-    speaker_ids = hps.speakers
-    if isinstance(speaker_ids, dict):
-        speaker_id = speaker_ids.get(speaker, 0)
-    else:
-        speaker_id = 0
+    speaker_id, speaker_warning = resolve_speaker(hps.speakers, speaker)
+    if speaker_warning:
+        print(f"WARN:speaker:{speaker_warning}", file=sys.stderr, flush=True)
 
     stn_tst = _get_text(rt, text, hps, False)
     device = rt["device"]

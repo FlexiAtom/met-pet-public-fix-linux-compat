@@ -137,6 +137,12 @@ def test_health_check_vits_stops_claiming_an_unmeasured_python(tmp_path, monkeyp
             "enabled": True,
             "engine": "vits",
             "vits_python": sys.executable,
+            # 旋钮走显式配置，不靠 patch service.project_path：模型/配置的默认
+            # 取值现在收在 common.vits_model_path() 里，函数内 import 的是
+            # meapet.paths，patch service 那一层已经够不着它了（会验到仓库里
+            # 那份未水化的 LFS 指针）。
+            "vits_model": str(tmp_path / "vits_models" / "G_latest.pth"),
+            "vits_config": str(tmp_path / "vits_models" / "finetune_speaker.json"),
         }
     })
     assert tts.health_check() is True
