@@ -78,17 +78,17 @@ VITS route: mode=subprocess reason=external_configured python=python.exe
 
 健康检查同源。三行都是本机源码态读数（第一条把 `project_path` 指到了临时目录，所以
 `script=False`；`python` 是 `.venv/bin/python` 的 basename；本机 `.venv` 未装 torch）。
-「改前」那行的 `checks` 里根本没有 `torch` 这一格，同一份临时现场上另外三格都是
-`True`：
+「改前」那行的 `checks` 里根本没有 `torch` 这一格：
 
 ```
 Health (vits): script=False model=True config=True mode=subprocess reason=external_configured python=python
-Health (vits): core=True model=True config=True mode=inprocess                                       ← 改前
-Health (vits): core=True model=True config=True torch=False mode=inprocess reason=explicit_inprocess ← 改后
+Health (vits): core=True model=True config=True mode=inprocess reason=explicit_inprocess                     ← 改前
+Health (vits): core=True model=True config=True torch=False mode=inprocess reason=explicit_inprocess          ← 改后
 ```
 
-改前那一行因此 `health_check()` 返回 `True`，而同一现场下一步 `speak()` 撞
-`ModuleNotFoundError: No module named 'torch'`（Windows 用户报的就是这个形状）。
+改前那一次（真身权重、同一进程）里，`health_check()` 返回 `True` 与下一步 `speak()`
+撞 `ModuleNotFoundError: No module named 'torch'` 并存。Windows 用户报的就是后半个形状
+（他的报告经人手转达，那份日志不在我手上）。
 
 模型或配置验不过时，同一行会带上实际检查的路径，避免「验的和用的不是一个文件」。
 
