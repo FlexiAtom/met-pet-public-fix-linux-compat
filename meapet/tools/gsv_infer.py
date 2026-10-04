@@ -30,6 +30,34 @@ def log(msg):
     print(f"[gsv] {msg}", file=sys.stderr, flush=True)
 
 
+def _has_gsv_tree(directory: str) -> bool:
+    return bool(directory) and os.path.isdir(
+        os.path.join(directory, "GPT_SoVITS", "TTS_infer_pack")
+    )
+
+
+def find_gsv_root(explicit: str, py_exe: str) -> str:
+    """按标记认根，不认目录名。
+
+    Windows 整合包是 ``<root>/runtime/python.exe``，POSIX venv 是 ``<root>/runtime/bin/python``，
+    conda env 干脆在树外——解释器离根的层数不固定，而 ``GPT_SoVITS/TTS_infer_pack`` 三者共有。
+    """
+    if explicit:
+        if _has_gsv_tree(explicit):
+            return explicit
+        log(f"配置给的 gsv_root 没有 GPT_SoVITS/TTS_infer_pack：{explicit}")
+    current = os.path.dirname(os.path.abspath(py_exe)) if py_exe else ""
+    for _ in range(5):
+        if not current or _has_gsv_tree(current):
+            break
+        parent = os.path.dirname(current)
+        if parent == current:
+            current = ""
+            break
+        current = parent
+    return current if _has_gsv_tree(current) else ""
+
+
 def main():
     log("=== gsv_infer 启动 ===")
     log(f"sys.argv={sys.argv}")
@@ -43,15 +71,11 @@ def main():
             return
         args = json.loads(payload_line)
         output_wav = args["output_wav"]
-        gsv_root = None
         py_exe = sys.executable
         log(f"python_exe={py_exe}")
-        if py_exe:
-            d = os.path.dirname(py_exe)
-            if os.path.basename(d).lower() == "runtime":
-                gsv_root = os.path.dirname(d)
+        gsv_root = find_gsv_root(str(args.get("gsv_root") or ""), py_exe)
 
-        if gsv_root and os.path.isdir(gsv_root):
+        if gsv_root:
             os.chdir(gsv_root)
             sys.path.insert(0, gsv_root)
             sys.path.insert(0, os.path.join(gsv_root, "GPT_SoVITS"))
