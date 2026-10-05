@@ -358,11 +358,6 @@ def probe_vits_deps(py_exe: str, infer_script: str) -> tuple[str, str]:
                 py_exe,
                 infer_script,
                 "--check-deps",
-                # --text/--output 是脚本的必填项，这条路不会用到它们
-                "--text",
-                "probe",
-                "--output",
-                os.devnull,
             ],
             capture_output=True,
             text=True,
@@ -380,11 +375,14 @@ def probe_vits_deps(py_exe: str, infer_script: str) -> tuple[str, str]:
         return "ok", "deps importable"
     stderr = proc.stderr or ""
     if "ModuleNotFoundError" in stderr or "ImportError" in stderr:
-        tail = next(
-            (ln.strip() for ln in stderr.splitlines() if "Error" in ln),
-            stderr[-120:],
-        )
-        return "missing", tail
+        lines = stderr.splitlines()
+        # 从**后往前**取真因行：pip/setuptools 的劝告（"…pkg_resources…Error…"那类）
+        # 常排在 traceback 之前，取第一条含 "Error" 的行会把劝告当结论，真因反而看不见。
+        for needle in ("No module named", "Error"):
+            tail = next((ln.strip() for ln in reversed(lines) if needle in ln), "")
+            if tail:
+                return "missing", tail
+        return "missing", stderr[-120:]
     return "unknown", f"rc={proc.returncode} {(stderr or proc.stdout)[-160:]}"
 
 

@@ -44,6 +44,46 @@ def test_probe_maps_missing_module_to_missing_with_the_name(tmp_path):
     assert "unidecode" in detail
 
 
+def test_probe_detail_picks_the_real_cause_over_an_error_looking_admonition(tmp_path):
+    """劝告行里也带 "Error"，取**第一**条会把劝告当结论（本机实测复现过）。
+
+    真现场：``.venv``(无 torch) 跑 ``vits_infer.py --check-deps``，stderr 第 2 行是
+    ``⚠ pkg_resources 不可用 (ModuleNotFoundError)；若合成失败请: pip install …``，
+    真因 ``ModuleNotFoundError: No module named 'torch'`` 在第 8 行。
+    """
+    from meapet.tts.common import probe_vits_deps
+
+    script = _write_stub(
+        tmp_path,
+        "import sys\n"
+        "print('  \\u26a0 pkg_resources 不可用 (ModuleNotFoundError)；pip install setuptools', "
+        "file=sys.stderr)\n"
+        "print('Traceback (most recent call last):', file=sys.stderr)\n"
+        "print(\"  File 'vits_infer.py', line 100, in _load_torch_stack\", file=sys.stderr)\n"
+        "print(\"ModuleNotFoundError: No module named 'torch'\", file=sys.stderr)\n"
+        "sys.exit(1)\n",
+    )
+    verdict, detail = probe_vits_deps(sys.executable, script)
+    assert verdict == "missing"
+    assert detail == "ModuleNotFoundError: No module named 'torch'"
+    assert "pkg_resources" not in detail
+
+
+def test_probe_detail_survives_import_errors_without_a_module_name(tmp_path):
+    """没有 "No module named" 那一档（DLL 加载失败）仍要出结论，不许退成整段尾巴。"""
+    from meapet.tts.common import probe_vits_deps
+
+    script = _write_stub(
+        tmp_path,
+        "import sys\n"
+        "print('SetuptoolsDeprecationWarning: Error prone behaviour', file=sys.stderr)\n"
+        "print('ImportError: DLL load failed while importing _C', file=sys.stderr)\n"
+        "sys.exit(1)\n",
+    )
+    verdict, detail = probe_vits_deps(sys.executable, script)
+    assert verdict == "missing"
+    assert detail == "ImportError: DLL load failed while importing _C"
+
 def test_probe_reports_unknown_for_problems_that_are_not_the_users(tmp_path, monkeypatch):
     """探测自己坏了（超时/脚本不在/没解释器）不许判成"你的环境缺包"。"""
     from meapet.tts import common
@@ -72,14 +112,27 @@ def test_infer_script_accepts_the_check_deps_flag(tmp_path):
     env = os.environ.copy()
     env["PYTHONPATH"] = str(fake) + os.pathsep + env.get("PYTHONPATH", "")
 
+    # 两种形状都要过：探针现在只发 `--check-deps`，而 Windows 那组实测读数是按带
+    # --text/--output 的旧形状取的（rc=0 / 8.67 s），别把那条量过的路改断
+    for extra in ([], ["--text", "probe", "--output", os.devnull]):
+        proc = subprocess.run(
+            [sys.executable, str(INFER_SCRIPT), "--check-deps", *extra],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        assert proc.returncode != 2, (extra, proc.stderr)
+        assert "unrecognized arguments" not in proc.stderr
+        assert "required" not in proc.stderr
+        assert "ImportError" in proc.stderr
+
+
+def test_infer_script_still_demands_text_for_synthesis(tmp_path):
+    """必填下移 ≠ 文本变可选：不合成才不读它，合成那条路缺 -t 仍是用法错。"""
     proc = subprocess.run(
-        [sys.executable, str(INFER_SCRIPT), "--check-deps",
-         "--text", "probe", "--output", os.devnull],
-        capture_output=True, text=True, timeout=60, env=env,
+        [sys.executable, str(INFER_SCRIPT)],
+        capture_output=True, text=True, timeout=60,
     )
-    assert proc.returncode != 2, proc.stderr
-    assert "unrecognized arguments" not in proc.stderr
-    assert "ImportError" in proc.stderr
+    assert proc.returncode == 2
+    assert "--text" in proc.stderr
 
 
 def test_transient_status_text_has_a_settler():

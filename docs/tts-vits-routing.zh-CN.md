@@ -205,7 +205,7 @@ Linux 侧的等价证据是静态的：
 | 同一次运行出不出声 | **不出声**：`speak()` → `(None, '')`；失败点是 `import torch` 抛 `OSError [WinError 1114] … \_internal\torch\lib\c10.dll` | 这就是 `module_present` 证不了的那半格（**寻得到 ≠ 加载得起来**）。当时它报绿是设计上认下的残余盲区、**不是回归**；2026-10-05 裁「机制结论与构建环境属性无关，那么就应该改判据」后，这一格由后台真 import 探针接住——探针出 `failed` 才报红，未出结论仍报绿 |
 | 向导 pet-exe 那行警告 | 那行字在真冻结进程里**打得出来**，但现行调用图**走不到** | `_check_torch` 开头与那条分支用的是**同一个谓词** `_path_is_pet_exe`，上游先返回 `False, "frozen"` ⇒ 两边锁死，当时是防御性死代码。现已接通：tier 0️⃣ 判出 pet exe 后显式排一次 `_ensure_vits_deps`（不 `return`，后面档位找到真解释器就把结论覆盖掉）。**这是接线层面的结论，Windows 上那句字有没有真上屏仍待他复跑** |
 | 依赖探针耗时 | `ok` 档 6.91 / 6.98 / 7.07 s（三次）；`missing` 0.15 s；`unknown` 五种入口都落得住 | Windows 侧比 Linux 的 12–20 s 快一倍以上，90 s 闸余量充足 |
-| `--check-deps` 单独跑 | **rc=2**，stderr 是 `the following arguments are required: -t/--text` | **不是** argparse 不认这个开关（它就在 usage 里）；`-t/--text` 是 `required=True`。探针实际用的形状 `--check-deps --text probe --output NUL` 是 rc=0 / `OK:deps_loaded` / 8.67 s，**契约在探针→脚本这条路上是通的** |
+| `--check-deps` 单独跑 | **rc=2**，stderr 是 `the following arguments are required: -t/--text` | **不是** argparse 不认这个开关（它就在 usage 里）；`-t/--text` 是 `required=True`。探针实际用的形状 `--check-deps --text probe --output NUL` 是 rc=0 / `OK:deps_loaded` / 8.67 s，**契约在探针→脚本这条路上是通的**。**这一行是改码前的读数**：2026-10-05 人已裁「两处小改先改了」，`required` 从 argparse 下移到解析后校验，改后读数见下表 |
 
 ### 改判据之后（2026-10-05，我实测）
 
@@ -222,11 +222,26 @@ Linux 侧的等价证据是静态的：
 **待他复跑**：打包版里 `probe=` 那一格是否如期落到 `failed`、以及向导那句「打包版无法检测
 VITS 依赖」是否真上屏。我这边没有 Windows 冻结件，两条都只能是接线层面的结论。
 
-### 判据面的一处缺陷（这条是我在本机实测复现的，两平台共因）
+### 两处小改之后（2026-10-05，我实测）
+
+人裁「两处小改先改了」。两处都在判据/交付脚本面，逐条读数：
+
+| | 读数 |
+|---|---|
+| `--check-deps` 单独跑 | **rc=0** + `OK:deps_loaded`（`/home/flexiatom/vits_e2e/vits_env/bin/python` → 整合包 runtime）。旧形状 `--check-deps --text probe --output /dev/null` 同一次也是 rc=0（31.97 s vs 32.21 s：`--text/--output` 在探针那条支上根本不读） |
+| 探针实发形状 | 随之改成只发 `--check-deps`——脚本既然不再自带必填项，探针就不该喂与这一问无关的参数。改后同一次：`('ok', 'deps importable')` 用时 **47.29 s**；无 torch 那次 `('missing', "ModuleNotFoundError: No module named 'torch'")` 用时 2.16 s |
+| 耗时余量 | 那个 47.29 s 把上表「Linux 12–20 s、90 s 闸余量充足」这句顶掉了：同一台机器、同一套包，本轮比先前记的高出一倍以上。**差在哪一档（页缓存 / 负载）我没隔离**，只能说这个数的散布比我先前写的宽；闸没动 |
+| 不带任何参数 | **rc=2** + `vits_infer.py: error: 合成需要 -t/--text（--check-deps / --warmup 不需要）`（合成那条路仍把文本当必填，只是不再挡探针） |
+| `missing` 档 detail | 同一个无 torch 现场，改前 `⚠ pkg_resources 不可用 (ModuleNotFoundError)；若合成失败请: pip install 'setuptools==69.5.1'` → 改后 `ModuleNotFoundError: No module named 'torch'` |
+| 回归 | 全量 `1052 passed, 1 skipped, 218 subtests passed`（上节 1049 + 本轮 3 条：倒序取行两条 + 合成那条路仍要 `-t` 一条） |
+
+**未做**：§3 那条 stdout 单行错误协议（交付脚本自己声明 `ERR:module_not_found:torch`，而不是从
+stderr 里猜真因）——它不在「两处小改」这句授权里，没动，也没裁。
 
 
+### 判据面的一处缺陷（这条是我在本机实测复现的，两平台共因；2026-10-05 已修）
 
-`probe_vits_deps` 取 `missing` 档的 `detail` 用的是：
+`probe_vits_deps` 从前取 `missing` 档的 `detail` 用的是：
 
 ```python
 next((ln.strip() for ln in stderr.splitlines() if "Error" in ln), stderr[-120:])
@@ -242,8 +257,10 @@ verdict = missing
 detail  = "⚠ pkg_resources 不可用 (ModuleNotFoundError)；若合成失败请: pip install 'setuptools==69.5.1'"
 ```
 
-真因是缺 torch，状态条却把用户指向 `setuptools`。取**最后**一条 `ModuleNotFoundError: No module named 'X'`
-（或按 stderr 尾部倒序找）即可修对；本轮未改码。
+真因是缺 torch，状态条却把用户指向 `setuptools`。现在改成**倒序**取：先找最后一条含
+`No module named` 的行；那一档在 DLL 失败（`ImportError: DLL load failed…`，没有模块名）下
+会落空，所以再退一步找最后一条含 `Error` 的行；两条都没有才退到 stderr 尾部。
+同一现场改后读数见上节，逐字为 `ModuleNotFoundError: No module named 'torch'`。
 
 
 
