@@ -155,6 +155,20 @@ GPT-SoVITS can be configured with a fixed reference audio per language in `tts.r
 
 Legacy `gsv_ref_wav` + `gsv_ref_lang` fields are read-only migrated to a single reference audio entry. A `.txt` file with the same name as the WAV is used as reference text.
 
+The GPT-SoVITS project root normally needs no configuration: the app walks up from `tts.python_exe` looking for the `GPT_SoVITS/TTS_infer_pack/` marker. Only one case has to state it explicitly — an interpreter installed **outside** the source tree (typically a conda env, e.g. `/home/you/miniconda3/envs/GPTSoVits/bin/python`), where the upward walk never reaches the marker. Point `tts.gsv_root` at the absolute path of the directory containing `GPT_SoVITS/`:
+
+```json
+{
+  "tts": {
+    "engine": "gpt_sovits",
+    "python_exe": "/home/you/miniconda3/envs/GPTSoVits/bin/python",
+    "gsv_root": "/home/you/GPT-SoVITS-v2pro"
+  }
+}
+```
+
+This key has no wizard entry and can only be set in `config.json`; if the directory you give lacks `GPT_SoVITS/TTS_infer_pack/`, it is ignored and the automatic upward walk is used instead. Paths are not `~`-expanded — write a full absolute path.
+
 Speech translation uses MeaPet's built-in non-LLM machine translation service pool, rotating services on single-segment failure (max 3 total attempts). When "prefer model voice translation" is enabled, the model's returned `voice_language` and `voice_text` are checked against the configured target language — if inconsistent, they are translated to the target. A separate "translate when unsupported" toggle controls fallback for unsupported output languages. When translation ultimately fails, the voice segment is skipped and the text bubble is preserved.
 
 ## Screen Vision
@@ -245,7 +259,7 @@ Secret priority: environment variable > `config.json` plaintext. Config values a
 | `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway token |
 | `AGENT_LINK_TOKEN` / `MEAPET_AGENT_TOKEN` | Custom Agent Link token |
 | `MEAPET_CONTROL_TOKEN` | Companion MCP Bearer Token |
-| `GSV_PYTHON` | GPT-SoVITS environment `python.exe` |
+| `MEA_PET_GSV_PYTHON` | GPT-SoVITS environment `python.exe` |
 | `MEAPET_PIP_INDEX_URL` / `PIP_INDEX_URL` | Python package index override; defaults to Tsinghua TUNA |
 | `MEAPET_TORCH_INDEX_URL` / `TORCH_INDEX_URL` | Optional PyTorch wheel index override |
 | `MEAPET_HF_ENDPOINT` / `HF_ENDPOINT` | Optional Hugging Face endpoint override |

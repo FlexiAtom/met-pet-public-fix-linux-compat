@@ -163,6 +163,20 @@ GPT-SoVITS 可以通过 `tts.reference_audios` 为每种语言配置固定参考
 
 旧版 `gsv_ref_wav` 和 `gsv_ref_lang` 字段只会被读取，并迁移为一条参考音频配置。与 WAV 同名的 `.txt` 文件会作为参考文本。
 
+GPT-SoVITS 的项目根一般不用填：程序从 `tts.python_exe` 所在目录逐级向上找 `GPT_SoVITS/TTS_infer_pack/` 这个标记。只有一种情形必须自己说——解释器装在源码树**之外**（典型是 conda env，如 `/home/you/miniconda3/envs/GPTSoVits/bin/python`），上溯永远撞不到标记。这时把 `tts.gsv_root` 指向含 `GPT_SoVITS/` 的那一层绝对路径：
+
+```json
+{
+  "tts": {
+    "engine": "gpt_sovits",
+    "python_exe": "/home/you/miniconda3/envs/GPTSoVits/bin/python",
+    "gsv_root": "/home/you/GPT-SoVITS-v2pro"
+  }
+}
+```
+
+这一项向导里没有入口，只能写在 `config.json` 里；填了但那个目录下没有 `GPT_SoVITS/TTS_infer_pack/` 会被忽略，仍回落到自动上溯。路径不做 `~` 展开，请写完整绝对路径。
+
 语音翻译使用 MeaPet 内置的非 LLM 机器翻译服务池。单个分段失败时会轮换服务，总尝试次数最多为 3 次。启用“优先使用模型语音翻译”后，模型返回的 `voice_language` 和 `voice_text` 会与配置的目标语言核对；若不一致，则翻译到目标语言。单独的“不支持时翻译”开关控制输出语言不受支持时的回退策略。翻译最终失败时会跳过该语音分段，但保留文本气泡。
 
 ## 屏幕视觉
@@ -253,7 +267,7 @@ http(s)://<listen_host>:<port>/mcp
 | `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway Token |
 | `AGENT_LINK_TOKEN` / `MEAPET_AGENT_TOKEN` | 自定义 Agent Link Token |
 | `MEAPET_CONTROL_TOKEN` | Companion MCP Bearer Token |
-| `GSV_PYTHON` | GPT-SoVITS 环境中的 `python.exe` |
+| `MEA_PET_GSV_PYTHON` | GPT-SoVITS 环境中的 `python.exe` |
 | `MEAPET_PIP_INDEX_URL` / `PIP_INDEX_URL` | Python 包索引覆盖；默认使用清华 TUNA |
 | `MEAPET_TORCH_INDEX_URL` / `TORCH_INDEX_URL` | 可选的 PyTorch wheel 索引覆盖 |
 | `MEAPET_HF_ENDPOINT` / `HF_ENDPOINT` | 可选的 Hugging Face 端点覆盖 |
