@@ -133,8 +133,8 @@ Health (vits): core=True model=True config=True torch=False mode=inprocess reaso
 
 ## 6. 实测读数（Windows，vits_ft = Python 3.8.20 + torch 2.1.2+cu121）
 
-来源：Neko_mea（Windows 侧维护者）的现场报告，按 2026-10-05 人工口径采信；**不是我在本机实测**，
-Linux 侧无法复核这些数。
+来源：Neko_mea（GitHub 提交名 suan-11，同一人，2026-10-05 人工确认）的现场报告，按 2026-10-05 人工口径采信；
+**不是我在本机实测**，Linux 侧无法复核这些数。
 
 | | 读数 |
 |---|---|
