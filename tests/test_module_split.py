@@ -404,10 +404,6 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
             def _on_vits_env_done(self, ok, message):
                 self.completed = (ok, message)
 
-            # _is_pet_exe: page_tts_vits 调用此方法判断 python 是否为打包后的 exe
-            def _is_pet_exe(self, py_exe):
-                return False
-
         class CheckResult:
             returncode = 1
             stdout = ""

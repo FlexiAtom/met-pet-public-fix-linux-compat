@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -66,14 +67,22 @@ def test_env_site_packages_does_not_invent_a_missing_dir(tmp_path):
     assert not Path(env_site_packages(str(empty), windows=False)).exists()
 
 
-def test_gsv_python_candidates_cover_posix_layouts(tmp_path):
-    """GSV 发现层不能只给 .exe：conda/整合包在 POSIX 上是 bin/python。"""
+def test_gsv_python_candidates_cover_the_native_layout(tmp_path):
+    """GSV 发现层按平台各出自己的形状：POSIX 是 ``bin/python``，Windows 是 ``python.exe``。
+
+    从前这条把 POSIX 那侧写死成无条件断言，Windows 上必红——同一条 assert 在两个
+    平台上问的是两件不同的事。改法不是放宽成"任一即可"，而是正向钉本平台那侧、
+    反向钉对面那侧（两台机器的形状都铺在磁盘上，才看得出有没有串味）。
+    """
     from meapet.tts.service import gsv_python_candidates
 
     home = tmp_path / "home"
     runtime = home / "GPT-SoVITS" / "runtime"
     (runtime / "bin").mkdir(parents=True)
-    (runtime / "bin" / "python").write_text("", encoding="utf-8")
+    posix = runtime / "bin" / "python"
+    windows = runtime / "python.exe"
+    posix.write_text("", encoding="utf-8")
+    windows.write_text("", encoding="utf-8")
 
     candidates = gsv_python_candidates(
         home=home,
@@ -82,9 +91,11 @@ def test_gsv_python_candidates_cover_posix_layouts(tmp_path):
         frozen=True,
     )
 
-    assert str(runtime / "bin" / "python") in candidates
-    # 每台机器只出自己的形状：POSIX 上不必再列 .exe
-    assert str(runtime / "python.exe") not in candidates
+    native, foreign = (
+        (windows, posix) if os.name == "nt" else (posix, windows)
+    )
+    assert str(native) in candidates, "每台机器只出自己的形状：本平台那侧必须在"
+    assert str(foreign) not in candidates, "另一平台的形状不该出现在候选里"
 
 
 def test_windows_shapes_are_only_built_by_the_helper():

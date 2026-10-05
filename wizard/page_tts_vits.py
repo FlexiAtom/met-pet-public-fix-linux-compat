@@ -91,20 +91,6 @@ class TtsPageVitsMixin:
         if dir_path:
             input_field.setText(dir_path)
 
-    def _is_pet_exe(self, py_exe: str) -> bool:
-        """判断是否为打包版 MeaPet.exe（非真正 Python 解释器）。"""
-        try:
-            from meapet.tts.common import is_pet_executable
-
-            return is_pet_executable(py_exe)
-        except Exception:
-            if not (getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")):
-                return False
-            try:
-                return os.path.realpath(py_exe) == os.path.realpath(sys.executable)
-            except Exception:
-                return False
-
     @staticmethod
     def _path_is_pet_exe(py_exe: str) -> bool:
         """Static-safe pet-exe check (works when mixin methods are unbound)."""
@@ -395,6 +381,13 @@ class TtsPageVitsMixin:
             log(f"✓ 当前 Python 已有 torch {ver_info}")
             self._ensure_vits_deps(_sys.executable, log)
             return
+        if TtsPageVitsMixin._path_is_pet_exe(_sys.executable):
+            # 打包版里 _check_torch 在最上游就按 pet exe 返回 False，所以那句
+            # 「打包版无法检测 VITS 依赖」以前走不到（谓词与上游是同一个，两边锁死）。
+            # 这里显式把它请出来出声；不 return——后面的档位找到真解释器就会覆盖这条结论。
+            self._ensure_vits_deps(
+                _sys.executable, log, status_widget=self.vits_status
+            )
 
         # 0️⃣.5️⃣ 项目自带的 _python（embedable，已存在则省去 venv 创建）
         # embeddable 是 Windows 便携包的形态，POSIX 上没有这种目录，isfile 自然为假。
