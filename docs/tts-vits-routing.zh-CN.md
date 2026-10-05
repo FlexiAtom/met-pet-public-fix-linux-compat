@@ -171,6 +171,43 @@ Health (vits): core=True model=True config=True torch=False mode=inprocess reaso
 Linux 侧的等价证据是静态的：
 `vits_core/utils.py` 里 `class HParams():` 不继承 `dict`。
 
+### 打包版读数（2026-10-05 合流后，来源: Neko_mea 的回执，非我实测）
+
+前置配置 `tts.engine=vits` / `vits_inprocess=true` / `vits_python=""`，产物是他按
+`scripts/build_windows.ps1` + `MeaPet.spec` 现打的 onedir 包。回执全文在状态根
+`reference/vits-windows-postmerge-readouts-closeout.zh-CN.md`。这一组只证明**机制**，
+具体的 DLL 失败与他那个构建环境绑定（conda torch 2.12.1+cpu / PyInstaller 6.21），发布构建环境要另复。
+
+| | 读数 | 对判据意味着什么 |
+|---|---|---|
+| 健康行逐字 | `Health (vits): core=True model=True config=True torch=True mode=inprocess reason=explicit_inprocess` | 打包形态**不误伤**：`find_spec` 命中的就是随包那份 torch（`origin=…\_internal\torch\__init__.py`，`loader=PyiFrozenLoader`）。torch 落盘在 `_internal/torch`、`_MEIPASS` 在 `sys.path` 上，所以「寻得到」与「引擎要用的」是同一份 |
+| 同一次运行出不出声 | **不出声**：`speak()` → `(None, '')`；失败点是 `import torch` 抛 `OSError [WinError 1114] … \_internal\torch\lib\c10.dll` | 这就是 `module_present` 证不了的那半格（**寻得到 ≠ 加载得起来**）。健康检查报绿、合成失败并存，是设计上认下的残余盲区，**不是回归**；出声面够用（引擎侧 ERROR 行 + 上层回退预制语音） |
+| 向导 pet-exe 那行警告 | 那行字在真冻结进程里**打得出来**，但现行调用图**走不到** | `_check_torch` 开头与那条分支用的是**同一个谓词** `_path_is_pet_exe`，上游先返回 `False, "frozen"` ⇒ 两边锁死，现在是防御性死代码 |
+| 依赖探针耗时 | `ok` 档 6.91 / 6.98 / 7.07 s（三次）；`missing` 0.15 s；`unknown` 五种入口都落得住 | Windows 侧比 Linux 的 12–20 s 快一倍以上，90 s 闸余量充足 |
+| `--check-deps` 单独跑 | **rc=2**，stderr 是 `the following arguments are required: -t/--text` | **不是** argparse 不认这个开关（它就在 usage 里）；`-t/--text` 是 `required=True`。探针实际用的形状 `--check-deps --text probe --output NUL` 是 rc=0 / `OK:deps_loaded` / 8.67 s，**契约在探针→脚本这条路上是通的** |
+
+### 判据面的一处缺陷（这条是我在本机实测复现的，两平台共因）
+
+`probe_vits_deps` 取 `missing` 档的 `detail` 用的是：
+
+```python
+next((ln.strip() for ln in stderr.splitlines() if "Error" in ln), stderr[-120:])
+```
+
+——取**第一行**含 `Error` 的。而 `vits_infer.py` 在 `_bootstrap()` 阶段就往 stderr 打一句
+`⚠ pkg_resources 不可用 (ModuleNotFoundError)；若合成失败请: pip install 'setuptools==69.5.1'`，
+它比真正的 `ModuleNotFoundError: No module named 'torch'` **先出现**。本机 `.venv`
+（Python 3.12.13，无 torch）实测：
+
+```
+verdict = missing
+detail  = "⚠ pkg_resources 不可用 (ModuleNotFoundError)；若合成失败请: pip install 'setuptools==69.5.1'"
+```
+
+真因是缺 torch，状态条却把用户指向 `setuptools`。取**最后**一条 `ModuleNotFoundError: No module named 'X'`
+（或按 stderr 尾部倒序找）即可修对；本轮未改码。
+
+
 
 ## 7. 验收
 
