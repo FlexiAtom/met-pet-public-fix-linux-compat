@@ -475,6 +475,35 @@ def test_voice_input_installer_does_not_run_frozen_executable_as_python():
     assert any("pypi.tuna.tsinghua.edu.cn" in part for part in command)
 
 
+def test_voice_input_keeps_only_keys_the_engine_reads():
+    """语音输入只认 enabled/language/auto_send；换引擎前那几个键不得再长回来。"""
+    from meapet.config.store import normalize_config, scrub_secrets
+
+    cfg = normalize_config({
+        "voice_input": {
+            "enabled": True,
+            "engine": "faster_whisper",
+            "model": "base",
+            "device": "cpu",
+        }
+    })
+    assert set(cfg["voice_input"]) == {"enabled", "language", "auto_send"}
+
+    # api_key 不当死键清掉：那是用户文件里可能的真凭据，只在导出面去掉
+    kept = normalize_config({"voice_input": {"api_key": "sk-legacy"}})
+    assert kept["voice_input"]["api_key"] == "sk-legacy"
+    scrubbed = scrub_secrets({"voice_input": {"enabled": True, "api_key": "sk-legacy"}})
+    assert "api_key" not in scrubbed["voice_input"]
+
+    example = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+    assert set(example["voice_input"]) == {"enabled", "language", "auto_send"}
+
+    for rel in ("meapet/desktop/voice_mixin.py", "wizard/page_voice_input.py"):
+        source = (ROOT / rel).read_text(encoding="utf-8")
+        assert '"engine"' not in source
+        assert "faster_whisper" not in source
+
+
 def test_mimo_reference_browser_uses_runtime_data_path():
     source = (ROOT / "wizard" / "page_tts_mimo.py").read_text(encoding="utf-8")
     assert 'data_path("voice_cache")' in source

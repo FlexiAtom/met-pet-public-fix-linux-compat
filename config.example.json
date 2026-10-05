@@ -161,7 +161,6 @@
   },
   "voice_input": {
     "enabled": false,
-    "engine": "sherpa_onnx",
     "language": "zh",
     "auto_send": false
   },

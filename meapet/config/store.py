@@ -1137,8 +1137,10 @@ def normalize_config(config: dict) -> dict:
         if isinstance(cfg.get("voice_input"), dict)
         else {}
     )
+    # faster_whisper 时代留下的键，切到 sherpa-onnx 后无人读取，读到即清
+    for dead_key in ("engine", "model", "device"):
+        voice.pop(dead_key, None)
     voice.setdefault("enabled", False)
-    voice.setdefault("engine", "sherpa_onnx")
     voice.setdefault("language", "zh")
     voice.setdefault("auto_send", False)
     cfg["voice_input"] = voice
@@ -1200,8 +1202,10 @@ def scrub_secrets(config: dict) -> dict:
         out["vision"]["api_key"] = ""
     if "agent_control" in out and isinstance(out["agent_control"], dict):
         out["agent_control"]["auth_token"] = ""
-    if "voice_input" in out and isinstance(out["voice_input"], dict):
-        out["voice_input"]["api_key"] = ""
+    voice = out.get("voice_input")
+    if isinstance(voice, dict):
+        # whisper 时代可能留过键的用户配置：导出时整键去掉，不再注入一个空字段
+        voice.pop("api_key", None)
     return out
 
 

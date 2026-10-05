@@ -66,10 +66,7 @@ class PetVoiceMixin:
         """右键菜单回调：开启/关闭语音输入，并立即刷新按钮可见性。"""
         vi = self.config.setdefault("voice_input", {
             "enabled": False,
-            "engine": "faster_whisper",
-            "model": "base",
             "language": "zh",
-            "device": "cpu",
             "auto_send": False,
         })
         turning_on = not vi.get("enabled", False)

@@ -140,16 +140,6 @@ class VoiceInputPage(QFrame):
         self.settings_frame.setVisible(False)
         layout.addWidget(self.settings_frame)
 
-        eng_label = QLabel("识别引擎：")
-        eng_label.setObjectName("FieldLabel")
-        self.settings_layout.addWidget(eng_label)
-        self.engine_combo = WheelSafeComboBox()
-        self.engine_combo.setObjectName("VoiceEngine")
-        self.engine_combo.addItem(
-            "sherpa-onnx zipformer（中英双语，约 220MB）", "sherpa_onnx"
-        )
-        self.settings_layout.addWidget(self.engine_combo)
-
         lang_label = QLabel("识别语言：")
         lang_label.setObjectName("FieldLabel")
         self.settings_layout.addWidget(lang_label)
@@ -303,7 +293,6 @@ class VoiceInputPage(QFrame):
         return {
             "voice_input": {
                 "enabled": self.enable_cb.isChecked(),
-                "engine": "sherpa_onnx",
                 "language": self.lang_combo.currentData() or "zh",
                 "auto_send": self.auto_send_cb.isChecked(),
             }
