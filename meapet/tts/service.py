@@ -513,6 +513,8 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             return self._deps_ready
 
         if self._vits_mode:
+            from meapet.tts.engines import vits_runtime
+
             route = self._vits_route()
             # 健康检查与 speak 用同一个 route：模型/配置也取引擎真正会用的
             # 那两个路径，不再对着硬编码默认值验 A 而实际合成 B。
@@ -524,6 +526,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 project_path("meapet", "tools", "vits_infer.py")
             )
             external_py = route.external_python
+            probe_state = ""
             if not route.inprocess:
                 # mode 由 route.describe() 给出，这里不重复一份可能分叉的字符串。
                 # checks 里不放 "python" 键：health_check 从不验解释器里装了什么包，
@@ -554,21 +557,32 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 # 而同一轮 speak() 撞 ModuleNotFoundError: No module named 'torch'
                 # （Windows 用户报的就是这个形状）。子进程分支本轮刚拆掉同形的
                 # python=True 谎报，这一支不能继续留着一半。
-                # 判据用 find_spec 而不是 import torch：前者实测 0.1–0.4 ms，
-                # 后者 3914 ms（全栈探针 12–20 s），health_check 在 speak() 路径上。
-                # 残余盲区如实留着：find_spec 证不了"能寻到但加载不起来"
-                # （打包版 DLL/so 起不来那一格仍由 speak 的异常分支出声）。
+                # 两级判据，成本与分辨率各管一段：
+                #   ① module_present（find_spec，0.1–0.4 ms）——寻不到就是不可用；
+                #   ② vits_runtime 的后台真 import 探针——寻得到但加载不起来那一格
+                #      （打包版 c10.dll WinError 1114，Windows 侧实测到）只有真
+                #      import 能证，而它 3.9 s（失败 0.8 s）不能落在本路径上，所以
+                #      这里只**排**探针、只读结论：failed 才拦，未出结论不拦。
                 torch_ok = module_present("torch")
+                probe_state, probe_detail = (
+                    vits_runtime.probe_torch_loadable() if torch_ok else ("", "")
+                )
+                if probe_state == vits_runtime.PROBE_FAILED:
+                    torch_ok = False
+                    log.warning(
+                        "Health (vits): torch 寻得到但加载不起来（%s），进程内那条路不可用"
+                        "——配 tts.vits_python 指向带 torch 的解释器，"
+                        "或按随包 torch 的构建环境重新打包",
+                        probe_detail,
+                    )
                 checks = {
                     "core": core_ok,
                     "model": model_ok,
                     "config": config_ok,
                     "torch": torch_ok,
                 }
-                self._deps_ready = all(
-                    [core_ok, model_ok, config_ok, torch_ok]
-                )
-                if not torch_ok:
+                self._deps_ready = all(checks.values())
+                if not torch_ok and probe_state != vits_runtime.PROBE_FAILED:
                     log.warning(
                         "Health (vits): 本进程寻不到 torch，进程内那条路不可用"
                         "——配 tts.vits_python 指向带 torch 的解释器，"
@@ -578,6 +592,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             log.info(
                 "Health (vits): "
                 + " ".join(f"{name}={ok}" for name, ok in checks.items())
+                + (f" probe={probe_state}" if probe_state else "")
                 + f" {route.describe()}"
                 + (f" model={model_path}" if not model_ok else "")
                 + (f" config={config_path}" if not config_ok else "")

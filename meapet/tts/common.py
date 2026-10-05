@@ -124,8 +124,10 @@ def module_present(name: str) -> bool:
     `speak()` 路径上。
 
     它证明不了模块**加载得起来**：打包版里 torch 在 `sys._MEIPASS` 寻得到，
-    而 DLL/so 起不来的话 import 照样失败（那一格由 `vits_runtime.py` 的
-    `Failed to load bundled torch` 分支管）。所以这个判据只能往"缺失"方向用
+    而 DLL/so 起不来的话 import 照样失败（Windows 侧打包版实测：健康行
+    `torch=True` 而 `import torch` 抛 `WinError 1114 … c10.dll`）。那一格由
+    `vits_runtime.probe_torch_loadable()` 的后台真 import 探针管——它只跑一次，
+    健康检查读结论，不在这条路上付 import 的钱。所以这个判据只能往"缺失"方向用
     ——False 一定不可用；True 只说"找到了"，不代表就绪。
     """
     import importlib.util

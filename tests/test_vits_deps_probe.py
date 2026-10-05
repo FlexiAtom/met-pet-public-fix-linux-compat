@@ -96,6 +96,39 @@ def test_transient_status_text_has_a_settler():
     )
 
 
+def test_frozen_wizard_reaches_the_pet_exe_dependency_warning():
+    """打包版里那句「打包版无法检测 VITS 依赖」得真能出声——从前它是死字。
+
+    `_check_torch` 开头就对 pet exe 返回 False，tier 0️⃣ 于是直接落到下一档，而那条
+    警告分支与它用的是同一个谓词 ⇒ 调用图永远走不到 `_ensure_vits_deps` 的 pet-exe
+    提示。现在 tier 0️⃣ 判不出来时显式排一次（不 return：后面的档位找到真解释器会把
+    结论覆盖掉）。这条钉的是接线本身——谓词与那次调用都得在同一个窗口里。
+    """
+    lines = (ROOT / "wizard" / "page_tts_vits.py").read_text(
+        encoding="utf-8"
+    ).splitlines()
+
+    tier0 = [
+        i
+        for i, ln in enumerate(lines)
+        if "_check_torch(_sys.executable)" in ln and not ln.strip().startswith("#")
+    ]
+    assert len(tier0) == 1, f"tier 0️⃣ 的入口应当唯一，实为 {tier0}"
+    guard = next(
+        (
+            i
+            for i in range(tier0[0], min(tier0[0] + 20, len(lines)))
+            if "_path_is_pet_exe(_sys.executable)" in lines[i]
+        ),
+        None,
+    )
+    assert guard is not None, "tier 0️⃣ 不再判 pet exe ⇒ 那句警告重新变回死字"
+    tail = "\n".join(lines[guard : guard + 6])
+    assert "_ensure_vits_deps(" in tail, "pet-exe 分支必须显式排一次依赖检测"
+    assert "_sys.executable, log" in tail, "排的就是那个 pet exe，别换成别的候选"
+    assert "status_widget=self.vits_status" in tail, "状态条也得改口"
+
+
 def test_probe_and_script_share_one_sentinel_contract():
     """两边各改一半就静默失效：flag 名与哨兵串必须在两处源码里同时出现。"""
     script_src = INFER_SCRIPT.read_text(encoding="utf-8")
@@ -128,10 +161,10 @@ def _vits_health_env(tmp_path, monkeypatch):
 
     lines: list[str] = []
     collector = type("Log", (), {
-        "info": staticmethod(lambda msg, *a: lines.append(str(msg))),
-        "warning": staticmethod(lambda msg, *a: lines.append(str(msg))),
-        "error": staticmethod(lambda msg, *a: lines.append(str(msg))),
-        "debug": staticmethod(lambda msg, *a: lines.append(str(msg))),
+        "info": staticmethod(lambda msg, *a: lines.append(str(msg) % a if a else str(msg))),
+        "warning": staticmethod(lambda msg, *a: lines.append(str(msg) % a if a else str(msg))),
+        "error": staticmethod(lambda msg, *a: lines.append(str(msg) % a if a else str(msg))),
+        "debug": staticmethod(lambda msg, *a: lines.append(str(msg) % a if a else str(msg))),
     })
     monkeypatch.setattr(service, "log", collector)
     return lines
@@ -183,6 +216,24 @@ def _inprocess_tts(tmp_path, **extra):
     return service.MeaTTS({"tts": cfg})
 
 
+def _stub_torch_probe(monkeypatch, state: str, detail: str = ""):
+    """把 vits_runtime 的后台探针钉成给定结论。
+
+    health_check 只**读**这个结论，所以测试必须钉住它：否则上一个用例留下的
+    模块级状态会串到下一个用例里（那正是本判据唯一的谎报面）。
+    """
+    from meapet.tts.engines import vits_runtime
+
+    calls: list[int] = []
+
+    def fake_probe():
+        calls.append(1)
+        return state, detail
+
+    monkeypatch.setattr(vits_runtime, "probe_torch_loadable", fake_probe)
+    return vits_runtime, calls
+
+
 def test_inprocess_health_check_is_red_when_this_process_cannot_find_torch(
     tmp_path, monkeypatch
 ):
@@ -190,6 +241,7 @@ def test_inprocess_health_check_is_red_when_this_process_cannot_find_torch(
 
     lines = _vits_health_env(tmp_path, monkeypatch)
     monkeypatch.setattr(service, "module_present", lambda name: False)
+    _stub_torch_probe(monkeypatch, "loaded")
 
     assert _inprocess_tts(tmp_path).health_check() is False
     joined = "\n".join(lines)
@@ -201,14 +253,115 @@ def test_inprocess_health_check_is_red_when_this_process_cannot_find_torch(
 def test_inprocess_health_check_does_not_newly_block_when_torch_is_present(
     tmp_path, monkeypatch
 ):
-    """新判据只往"缺失"方向拦：torch 在，磁盘事实齐就不该因它变红。"""
+    """新判据只往"缺失"方向拦：torch 在，磁盘事实齐就不该因它变红。
+
+    探针处于 probing（后台还没出结论）时**不许**拦——那等于把"我还没量到"
+    说成"用户环境坏了"，与 probe_vits_deps 的 unknown 档同一个原则。
+    """
     from meapet.tts import service
 
     lines = _vits_health_env(tmp_path, monkeypatch)
     monkeypatch.setattr(service, "module_present", lambda name: True)
+    _stub_torch_probe(monkeypatch, "probing")
 
     assert _inprocess_tts(tmp_path).health_check() is True
-    assert "torch=True" in "\n".join(lines)
+    joined = "\n".join(lines)
+    assert "torch=True" in joined
+    assert "probe=probing" in joined
+
+
+def test_health_check_asks_the_probe_once_and_only_when_torch_is_addressable(
+    tmp_path, monkeypatch
+):
+    """探针得真被排上，否则"两级判据"是空话；torch 寻不到时不该白起线程。"""
+    from meapet.tts import service
+
+    lines = _vits_health_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(service, "module_present", lambda name: True)
+    _, calls = _stub_torch_probe(monkeypatch, "probing")
+
+    tts = _inprocess_tts(tmp_path)
+    tts.health_check()
+    tts.health_check()
+    assert len(calls) == 2, "health_check 每次都要把探针问一遍（探针自己保证只跑一次）"
+
+    monkeypatch.setattr(service, "module_present", lambda name: False)
+    tts.health_check()
+    assert len(calls) == 2, "寻不到 torch 时探针无从谈起，别白起一个 import 线程"
+
+
+def test_inprocess_health_check_is_red_when_bundled_torch_fails_to_load(
+    tmp_path, monkeypatch
+):
+    """class (b)：`find_spec` 命中、真 import 起不来——这一格只有真 import 能证。
+
+    形状取自 Windows 侧打包版实测回执（Neko_mea）：健康行 torch=True 而
+    `import torch` 抛 `WinError 1114 … c10.dll`，speak() 返回 (None, '')。
+    改前它报绿；改后探针出结论了就必须报红，且日志要说清是"加载不起来"而不是"寻不到"。
+    """
+    from meapet.tts import service
+
+    detail = (
+        "OSError: Failed to load bundled torch ([WinError 1114] "
+        "动态链接库(DLL)初始化例程失败。 Error loading c10.dll)"
+    )
+    lines = _vits_health_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(service, "module_present", lambda name: True)
+    _stub_torch_probe(monkeypatch, "failed", detail)
+
+    assert _inprocess_tts(tmp_path).health_check() is False
+    joined = "\n".join(lines)
+    assert "torch=False" in joined
+    assert "probe=failed" in joined
+    assert "加载不起来" in joined
+    assert "WinError 1114" in joined, "真因得进日志，不能只说'寻不到'"
+    assert "寻不到" not in joined, "加载失败报成寻不到会把人指向装 torch，而不是换解释器"
+
+
+def test_probe_reports_failed_for_an_addressable_but_unloadable_torch(tmp_path):
+    """上一用例钉的是结论的消费面；这条在**真子进程**里复现 class (b)。
+
+    临时目录放一个 `torch/__init__.py` 抛 OSError 的假包：`find_spec` 命中（寻得到），
+    真 import 失败（加载不起来）。判据不 patch，探针与寻址都跑真的——这样"两级判据"
+    不是两个 stub 的排列组合。
+    """
+    fake = tmp_path / "torch"
+    fake.mkdir()
+    (fake / "__init__.py").write_text(
+        "raise OSError('[WinError 1114] fake c10.dll in a frozen build')\n",
+        encoding="utf-8",
+    )
+    code = (
+        "import sys, time\n"
+        "from meapet.tts.common import module_present\n"
+        "from meapet.tts.engines import vits_runtime as vr\n"
+        "addr = module_present('torch')\n"
+        "state, detail = vr.probe_torch_loadable()\n"
+        "deadline = time.time() + 20\n"
+        "while state == vr.PROBE_PROBING and time.time() < deadline:\n"
+        "    time.sleep(0.02)\n"
+        "    state, detail = vr.torch_probe_status()\n"
+        "print('RESULT', addr, state, detail, sep='|')\n"
+    )
+    env = {
+        "PYTHONPATH": os.pathsep.join([str(tmp_path), str(ROOT)]),
+        "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), "")
+    assert line, f"子进程没给出读数：{proc.stdout} / {proc.stderr[-400:]}"
+    _, addr, state, detail = line.split("|", 3)
+    assert addr == "True", "假包必须寻得到——否则测的是 class (a) 不是 (b)"
+    assert state == "failed"
+    assert "WinError 1114" in detail
 
 
 def test_module_present_addresses_a_module_without_running_it(tmp_path, monkeypatch):
@@ -235,6 +388,27 @@ def test_module_present_addresses_a_module_without_running_it(tmp_path, monkeypa
         importlib.import_module("addressed_not_executed")
 
     assert module_present("definitely_not_installed_here_xyz") is False
+
+
+def test_health_check_does_not_import_torch_itself():
+    """两级判据的重税必须在后台线程里，`health_check` 自己只读结论。
+
+    真 `import torch` 本机实测 3914 ms，而 `health_check()` 落在 `speak()` 路径上；
+    一旦有人把它改成同步 import，那条路每次说话都要付这笔钱。这条静态守卫钉的就是
+    "service.py 里不许出现装载 torch 的调用"——只数代码行，注释与散文不算。
+    """
+    banned = ("import torch", "_import_torch(", "_import_runtime(")
+    hits = []
+    for no, line in enumerate(
+        (ROOT / "meapet" / "tts" / "service.py").read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if any(b in stripped for b in banned):
+            hits.append(f"meapet/tts/service.py:{no}: {stripped}")
+    assert hits == [], f"health_check 不能同步装载 torch：{hits}"
 
 
 def test_speak_path_is_not_taxed_by_the_full_stack_probe():
