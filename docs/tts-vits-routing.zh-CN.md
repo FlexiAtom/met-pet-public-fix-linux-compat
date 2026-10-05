@@ -133,6 +133,9 @@ Health (vits): core=True model=True config=True torch=False mode=inprocess reaso
 
 ## 6. 实测读数（Windows，vits_ft = Python 3.8.20 + torch 2.1.2+cu121）
 
+来源：Neko_mea（Windows 侧维护者）的现场报告，按 2026-10-05 人工口径采信；**不是我在本机实测**，
+Linux 侧无法复核这些数。
+
 | | 读数 |
 |---|---|
 | 子进程整句合成 | 8.0–8.1 s，rc=0 |
@@ -164,7 +167,8 @@ Health (vits): core=True model=True config=True torch=False mode=inprocess reaso
 
 覆盖差一条：`tests/test_vits_route_and_knobs.py::test_real_hps_speakers_is_not_a_dict`
 ——对**随包真配置**验 `HParams` 鸭子类型的那条——在 Linux 是 skip（本机无 scipy，
-`vits_core.utils` 导不进来），目前只有 Windows 真跑过。Linux 侧的等价证据是静态的：
+`vits_core.utils` 导不进来），目前只有 Windows 真跑过（来源: Neko_mea 的回执，非我实测）。
+Linux 侧的等价证据是静态的：
 `vits_core/utils.py` 里 `class HParams():` 不继承 `dict`。
 
 
