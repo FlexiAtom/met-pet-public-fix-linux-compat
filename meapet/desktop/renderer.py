@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QObject, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QMovie, QPainter, QPixmap
+from PyQt5.QtGui import QImage, QMovie, QPainter, QPixmap
 from PyQt5.QtWidgets import QWidget
 
 
@@ -109,6 +109,10 @@ class SpriteCanvas(QWidget):
         if self.size() != self._frame.size():
             self.resize(self._frame.size())
         self.repaint(self.rect())
+
+    def frame_image(self) -> QImage:
+        """穿透模式下窗口隐藏、`paintEvent` 不派发，layer surface 的像素来源就是这份后备帧。"""
+        return self._frame.toImage()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)

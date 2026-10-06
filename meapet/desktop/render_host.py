@@ -647,6 +647,9 @@ class PetRenderHostMixin:
                 callback()
             except Exception as exc:
                 safe_print(f"[pet] renderer-ready callback failed: {exc}")
+        # 穿透开关的挂载点从「Live2D 首帧」提到这里：PNG 分支也走到这一格，否则
+        # PNG 模式下面板、后端、推帧定时器全都不存在（人工 2026-10-06「如果没做需要做」）。
+        self._init_layer_overlay_mode()
 
     def _on_live2d_first_frame(self):
         """首帧已经绘制并提交后，调整窗口大小以匹配模型画布，再显现。"""
@@ -672,13 +675,6 @@ class PetRenderHostMixin:
             f"[pet] Live2D 首帧就绪 size={self.width()}x{self.height()} "
             f"pos=({self.x()},{self.y()})"
         )
-        # ★ Phase 3: 初始化 layer-shell 双模（穿透 / 交互）
-        self._init_layer_overlay_mode()
-
-        # ★ Phase 1: 首帧就绪后，强制启用 layer-shell 穿透（Niri / Wayland）
-        # 独立于 standby 状态，确保真实桌宠运行时也能接通 wayland-layer 后端
-        from PyQt5.QtCore import QTimer
-        from meapet.desktop.click_through import enable_click_through
 
     # ------------------------------------------------------------ 双模架构
     def _layer_geometry(self):
@@ -2050,7 +2046,7 @@ class PetRenderHostMixin:
         safe_print(f"[layer] ⚠ {text}")
 
     def _push_layer_frame(self) -> None:
-        """把 Live2D 离屏渲染结果推送到 layer surface。"""
+        """把当前画面推到 layer surface（Live2D 走离屏渲染，PNG 交回它手上的整帧）。"""
         backend = getattr(self, "_layer_backend", None)
         if backend is None:
             return
@@ -2058,6 +2054,8 @@ class PetRenderHostMixin:
             return          # 本拍在等回读／刚发出夹移，推了也必被尺寸门控丢掉
         widget = getattr(self, "sprite_label", None)
         renderer = getattr(widget, "render_offscreen", None)
+        if not callable(renderer):
+            renderer = getattr(widget, "frame_image", None)
         if not callable(renderer):
             return
         try:
@@ -2925,6 +2923,9 @@ class PetRenderHostMixin:
                     pass
 
     def _toggle_render_mode(self):
+        # 测量在飞时切模式：被删的是它正在量那只 widget，读数与 `_pending_mount` 那份矩形
+        # 会落到切换后的新画布上。先作废这一发（没有待挂时它就是 no-op）。
+        self._cancel_premount_measure()
         if self._use_live2d:
             self._cancel_live2d_startup_timeout()
             if self.sprite_label:
