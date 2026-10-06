@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
@@ -18,8 +18,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from meapet import __version__
 from meapet.desktop.capture_selection import select_screen_region
+from meapet.desktop.dev_options import version_label_text
 from meapet.desktop.screen_geometry import resize_dialog_to_content
 from meapet.desktop.theme import CONSENT_DIALOG_STYLE
 from meapet.ui_theme import (
@@ -984,9 +984,16 @@ class AboutDialog(QDialog):
         title_label.setObjectName("ConsentTitle")
         layout.addWidget(title_label)
 
-        version_label = QLabel(f"版本 {__version__}")
-        version_label.setObjectName("FieldLabel")
-        layout.addWidget(version_label)
+        self.version_label = QLabel(version_label_text())
+        self.version_label.setObjectName("FieldLabel")
+        # 开发者选项的彩蛋入口就挂在这一行版本号上（人工 2026-10-06 矫正：版本号本来
+        # 就在「关于」里，不该为它另开一个根菜单项）。不做成按钮——外观要保持一行字。
+        self.version_label.installEventFilter(self)
+        layout.addWidget(self.version_label)
+
+        self.dev_hint_label = QLabel("")
+        self.dev_hint_label.setObjectName("FieldLabel")
+        layout.addWidget(self.dev_hint_label)
 
         credit_title = QLabel("Live2D 模型来源致谢")
         credit_title.setObjectName("FieldLabel")
@@ -1012,4 +1019,14 @@ class AboutDialog(QDialog):
 
         resize_dialog_to_content(self, QSize(360, 220))
         self.close_button.setFocus(Qt.OtherFocusReason)
+
+    def eventFilter(self, watched, event):
+        if watched is self.version_label and event.type() == QEvent.MouseButtonPress:
+            self._note_version_click()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _note_version_click(self) -> None:
+        """把这一击记到宿主那边，反馈显示在对话框里（气泡在模态窗后面，看不见）。"""
+        self.dev_hint_label.setText(self.parent()._dev_note_version_click())
 

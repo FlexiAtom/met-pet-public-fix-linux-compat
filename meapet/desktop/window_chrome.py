@@ -18,6 +18,7 @@ from PyQt5.QtCore import QRect, Qt
 
 from meapet.desktop import status_language
 from meapet.desktop.icons import standard_icon
+from meapet.desktop.menu_window import SWITCH_ACTION_NAME
 from meapet.config.defaults import DEFAULT_OLLAMA_VISION_MODEL
 from meapet.desktop.screen_geometry import (
     available_geometry_for,
@@ -346,7 +347,7 @@ class PetWindowChromeMixin:
         menu.addSeparator()
 
         # 「设置与数据」先建出来：凡是要写 self.config 的项都挂它下面，根层只留高频动作
-        # （人工 2026-10-06 点的形状：根＝养成状态·看看我在干嘛·切换表情·设置与数据▸·关于·版本·退出）。
+        # （人工 2026-10-06 点的形状：根＝养成状态·看看我在干嘛·切换表情·设置与数据▸·关于·退出）。
         settings_menu = QMenu("设置与数据", self)
         settings_menu.setIcon(standard_icon("settings"))
         settings_menu.setObjectName("SettingsAndDataMenu")
@@ -411,13 +412,13 @@ class PetWindowChromeMixin:
             vision_menu.addAction(tip)
 
         vision_menu.addSeparator()
-        w_enabled = self.config.get("watcher", {}).get("enabled", False)
-        watch_text = (
-            status_language.menu_watch_disable()
-            if w_enabled
-            else status_language.menu_watch_enable()
-        )
-        watch_action = QAction(watch_text, self)
+        w_enabled = bool((self.config.get("watcher") or {}).get("enabled", False))
+        watch_action = QAction(status_language.menu_watch_toggle(), self)
+        # 这一项是状态开关而不是动作：文字恒定，状态由拨杆本身表示
+        # （人工 2026-10-06 点的形状）。菜单窗口见到这个 objectName 才画拨杆。
+        watch_action.setObjectName(SWITCH_ACTION_NAME)
+        watch_action.setCheckable(True)
+        watch_action.setChecked(w_enabled)
         watch_action.setToolTip("开启后可能定时截取屏幕内容")
         watch_action.triggered.connect(self._toggle_watcher_enabled)
         vision_menu.addAction(watch_action)
@@ -566,8 +567,6 @@ class PetWindowChromeMixin:
         about_action.setIcon(standard_icon("about"))
         about_action.triggered.connect(self._show_about)
         menu.addAction(about_action)
-
-        menu.addAction(self._dev_build_version_action())
 
         quit_action = QAction("退出", self)
         quit_action.setIcon(standard_icon("quit"))

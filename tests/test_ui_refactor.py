@@ -2097,8 +2097,6 @@ class UiRefactorTests(unittest.TestCase):
         return self._track(MenuHost())
 
     def test_context_menu_groups_secondary_actions_into_submenus(self) -> None:
-        from meapet.desktop.dev_options import version_action_text
-
         host = self._make_menu_host()
         menu = self._track(host._build_context_menu())
         self.assertIsInstance(menu, QMenu)
@@ -2115,7 +2113,6 @@ class UiRefactorTests(unittest.TestCase):
                 "切换表情",
                 "设置与数据",
                 "关于",
-                version_action_text(),
                 "退出",
             ],
             "根层只留高频动作；要写 config 的都收进「设置与数据」（人工 2026-10-06 点的形状）",
@@ -2143,18 +2140,16 @@ class UiRefactorTests(unittest.TestCase):
             "没解锁时这一支压根不存在",
         )
 
-    def test_context_menu_version_action_is_the_unlock_entry(self) -> None:
-        """版本号那一发认 objectName：菜单窗口靠它决定「点了不关窗」。"""
-        from meapet.desktop.dev_options import VERSION_ACTION_NAME, version_action_text
+    def test_context_menu_has_no_version_item_of_its_own(self) -> None:
+        """版本号不另开根菜单项——彩蛋点的是「关于」里那一行（人工 2026-10-06 矫正）。"""
+        from meapet.desktop.dev_options import version_label_text
 
         host = self._make_menu_host()
         menu = self._track(host._build_context_menu())
-        version = next(
-            action
-            for action in menu.actions()
-            if action.text() == version_action_text()
+        self.assertNotIn(
+            version_label_text(),
+            [action.text() for action in menu.actions() if not action.isSeparator()],
         )
-        self.assertEqual(version.objectName(), VERSION_ACTION_NAME)
 
     def test_context_menu_shows_dev_branch_only_after_unlock(self) -> None:
         from meapet.desktop.dev_options import DEV_MENU_LABELS
@@ -2816,7 +2811,7 @@ class UiRefactorTests(unittest.TestCase):
 
         self.assertIn("思考", status_language.thinking())
         self.assertIn("稍等", status_language.thinking_busy())
-        self.assertIn("截屏", status_language.menu_watch_enable())
+        self.assertIn("屏幕观察", status_language.menu_watch_toggle())
         self.assertIn("Live2D", status_language.menu_render_to_live2d())
         self.assertIn("回忆", status_language.empty_memories())
 

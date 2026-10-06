@@ -26,13 +26,11 @@ log = get_color_logger("dev")
 
 DEV_UNLOCK_CLICKS = 5
 DEV_UNLOCK_WINDOW_S = 10.0
-#: 版本号那一发点了不该关窗：菜单一次只活一轮，关窗会把"连点 5 次"变成"开 5 次菜单"。
-#: `menu_window.PetMenuWindow` 认这个 objectName。
-VERSION_ACTION_NAME = "VersionAction"
 #: 导出落点（相对数据目录）——与日志同侧，不往用户没预期的地方写。
 EXPORTS_DIR = "exports"
 DEV_TEST_SENTENCE = "开发者选项测试：你好，我是梅尔。"
 DEV_VOICE_SECONDS = 4
+DEV_UNLOCKED_HINT = "开发者选项已解锁（本次运行有效）"
 # 日志导出里除了 LOG_DIR，还想要这几个（同属数据目录，散在旁边）
 DATA_LOG_FILES = ("chat_errors.log", "meapet_boot.log", "meapet_fault.log")
 #: 解锁后「设置与数据」里那一支的五项，顺序即菜单顺序（测试按它断言）。
@@ -45,8 +43,13 @@ DEV_MENU_LABELS = (
 )
 
 
-def version_action_text() -> str:
+def version_label_text() -> str:
+    """「关于」里那一行版本号（彩蛋的点击目标，人工 2026-10-06 矫正的位置）。"""
     return f"版本 {__version__}"
+
+
+def dev_unlock_hint(left: int) -> str:
+    return f"再点 {left} 次解锁开发者选项"
 
 
 class PetDevOptionsMixin:
@@ -59,32 +62,27 @@ class PetDevOptionsMixin:
     _dev_click_times: tuple = ()
 
     # ------------------------------------------------------------------ 解锁
-    def _dev_build_version_action(self) -> QAction:
-        action = QAction(version_action_text(), self)
-        action.setObjectName(VERSION_ACTION_NAME)
-        action.setToolTip("连点 5 次可解锁开发者选项")
-        action.triggered.connect(self._dev_note_version_click)
-        return action
+    def _dev_note_version_click(self) -> str:
+        """10 秒窗口内点满 5 次才解锁；返回该在「关于」里显示的那句反馈。
 
-    def _dev_note_version_click(self) -> None:
-        """10 秒窗口内点满 5 次才解锁；窗口外的点击各算各的。"""
+        反馈不走气泡：「关于」是 ApplicationModal，气泡在它后面看不见。
+        """
+        if getattr(self, "_dev_unlocked", False):
+            self._dev_click_times = ()
+            return DEV_UNLOCKED_HINT
         now = time.monotonic()
         clicks = [
             stamp for stamp in getattr(self, "_dev_click_times", ())
             if now - float(stamp) < DEV_UNLOCK_WINDOW_S
         ]
-        if getattr(self, "_dev_unlocked", False):
-            self._dev_click_times = ()
-            return
         clicks.append(now)
         self._dev_click_times = clicks
         left = DEV_UNLOCK_CLICKS - len(clicks)
         if left <= 0:
             self._dev_unlocked = True
             self._dev_click_times = ()
-            self._dev_say("开发者选项已解锁（本次运行有效）")
-            return
-        self._dev_say(f"再点 {left} 次解锁开发者选项")
+            return DEV_UNLOCKED_HINT
+        return dev_unlock_hint(left)
 
     def _dev_say(self, text: str) -> None:
         try:

@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt, QTimer
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from meapet.desktop.dev_options import VERSION_ACTION_NAME
+from meapet.desktop import theme as pet_theme
 from meapet.desktop.screen_geometry import available_geometry_for, clamp_position
 from meapet.desktop.theme import PET_MENU_WINDOW_STYLE
 from meapet.ui_theme import ensure_application_fonts, apply_named_style
@@ -35,6 +35,53 @@ MIN_CARD_WIDTH = 248
 MIN_SUBMENU_CARD_WIDTH = 220
 # 两个顶层窗口的透明阴影区互相覆盖；实际卡片之间仍保留约 10px 呼吸空间。
 SIDE_WINDOW_OVERLAP = SHADOW_MARGIN
+
+# 带这个 objectName 的叶子项渲染成「文字 + 拨杆」的一行（人工 2026-10-06：
+# 屏幕观察是状态开关，不该把状态写在动词里）。
+SWITCH_ACTION_NAME = "PetMenuSwitchAction"
+SWITCH_WIDTH = 40
+SWITCH_HEIGHT = 22
+
+
+class SwitchControl(QWidget):
+    """拨杆本体：轨道 + 旋钮自绘，位置随开关状态左右平移。
+
+    它自己不吃鼠标事件——点击由所在的整行按钮接收，所以整行都是开关的命中区。
+    """
+
+    def __init__(self, on: bool, parent=None):
+        super().__init__(parent)
+        self.setObjectName("PetMenuSwitch")
+        self.setFixedSize(SWITCH_WIDTH, SWITCH_HEIGHT)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._on = bool(on)
+
+    def set_on(self, on: bool) -> None:
+        if self._on != bool(on):
+            self._on = bool(on)
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        track = self.rect().adjusted(1, 1, -1, -1)
+        radius = track.height() / 2.0
+        base = QColor(pet_theme.COLOR_OK if self._on else pet_theme.COLOR_MUTED)
+        base.setAlpha(235 if self._on else 90)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(base)
+        painter.drawRoundedRect(track, radius, radius)
+
+        knob = QColor(pet_theme.COLOR_CARD)
+        inset = 3
+        size = track.height() - inset * 2
+        left = track.left() + inset
+        if self._on:
+            left += track.width() - size - inset * 2
+        painter.setBrush(knob)
+        painter.drawEllipse(QRect(left, track.top() + inset, size, size))
+        painter.end()
+
 
 
 def calculate_submenu_position(
@@ -405,7 +452,7 @@ class PetMenuWindow(QWidget):
         return button
 
     def _make_action_button(self, action, *, surface: QWidget) -> QPushButton:
-        button = QPushButton(action.text())
+        button = QPushButton()
         button.setObjectName("PetMenuItem")
         button.setCursor(Qt.PointingHandCursor)
         button.setEnabled(action.isEnabled())
@@ -413,9 +460,16 @@ class PetMenuWindow(QWidget):
         tooltip = action.toolTip()
         if tooltip and tooltip != action.text():
             button.setToolTip(tooltip)
-        accessible = action.text()
-        if action.isCheckable():
-            accessible += " · 已选中" if action.isChecked() else " · 未选中"
+        if action.objectName() == SWITCH_ACTION_NAME:
+            self._lay_out_switch_row(button, action)
+            accessible = (
+                f"{action.text()} · {'已开启' if action.isChecked() else '已关闭'}"
+            )
+        else:
+            button.setText(action.text())
+            accessible = action.text()
+            if action.isCheckable():
+                accessible += " · 已选中" if action.isChecked() else " · 未选中"
         button.setAccessibleName(accessible)
         if action.objectName() == "DangerAction":
             button.setProperty("danger", "true")
@@ -425,6 +479,18 @@ class PetMenuWindow(QWidget):
         self._action_buttons.append(entry)
         surface._menu_actions.append(entry)
         return button
+
+    @staticmethod
+    def _lay_out_switch_row(button: QPushButton, action) -> None:
+        """文字与拨杆平铺在同一行：行就是开关，不留一颗单独框起来的控件。"""
+        row = QHBoxLayout(button)
+        row.setContentsMargins(14, 8, 14, 8)
+        row.setSpacing(10)
+        label = QLabel(action.text(), button)
+        label.setObjectName("PetMenuSwitchLabel")
+        label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        row.addWidget(label, 1)
+        row.addWidget(SwitchControl(action.isChecked(), button), 0, Qt.AlignVCenter)
 
     # -------------------------------------------------------------- behavior
     @staticmethod
@@ -539,10 +605,6 @@ class PetMenuWindow(QWidget):
 
     def _activate(self, action) -> None:
         if not action.isEnabled():
-            return
-        if action.objectName() == VERSION_ACTION_NAME:
-            # 版本号是"原地连点 5 次"的解锁入口：关窗会把每次点击都变成"重开一遍菜单"。
-            action.trigger()
             return
         self.close()
         # 让整组菜单窗口先收起，再执行动作（部分动作会弹出模态对话框）。

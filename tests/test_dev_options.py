@@ -27,10 +27,11 @@ from meapet.desktop.dev_options import (  # noqa: E402
     DEV_MENU_LABELS,
     DEV_UNLOCK_CLICKS,
     DEV_UNLOCK_WINDOW_S,
+    DEV_UNLOCKED_HINT,
     EXPORTS_DIR,
-    VERSION_ACTION_NAME,
     PetDevOptionsMixin,
-    version_action_text,
+    dev_unlock_hint,
+    version_label_text,
 )
 
 _app = QApplication.instance() or QApplication(sys.argv)
@@ -88,13 +89,12 @@ class UnlockTests(unittest.TestCase):
     def test_five_clicks_inside_the_window_unlock(self) -> None:
         host = DevHost()
         for _ in range(DEV_UNLOCK_CLICKS - 1):
-            host._dev_note_version_click()
+            hint = host._dev_note_version_click()
         self.assertFalse(host._dev_unlocked)
-        self.assertEqual(host.bubbles[-1], "再点 1 次解锁开发者选项")
+        self.assertEqual(hint, dev_unlock_hint(1))
 
-        host._dev_note_version_click()
+        self.assertEqual(host._dev_note_version_click(), DEV_UNLOCKED_HINT)
         self.assertTrue(host._dev_unlocked)
-        self.assertIn("已解锁", host.bubbles[-1])
 
     def test_stale_clicks_do_not_count_toward_the_five(self) -> None:
         """窗口外的点击各算各的：4 次陈旧 + 1 次现在 ≠ 解锁。"""
@@ -103,9 +103,9 @@ class UnlockTests(unittest.TestCase):
             time.monotonic() - DEV_UNLOCK_WINDOW_S - 1.0 for _ in range(DEV_UNLOCK_CLICKS - 1)
         )
         host._dev_click_times = stale
-        host._dev_note_version_click()
+        hint = host._dev_note_version_click()
         self.assertFalse(host._dev_unlocked, "跨窗口的连点不该解锁")
-        self.assertEqual(host.bubbles[-1], f"再点 {DEV_UNLOCK_CLICKS - 1} 次解锁开发者选项")
+        self.assertEqual(hint, dev_unlock_hint(DEV_UNLOCK_CLICKS - 1))
         self.assertEqual(len(host._dev_click_times), 1, "窗口外的计数该丢掉，只留这一发")
 
     def test_unlock_stays_out_of_the_config(self) -> None:
@@ -123,16 +123,7 @@ class UnlockTests(unittest.TestCase):
         host = DevHost()
         for _ in range(DEV_UNLOCK_CLICKS):
             host._dev_note_version_click()
-        host.bubbles.clear()
-        host._dev_note_version_click()
-        self.assertEqual(host.bubbles, [], "已解锁之后不该再报『再点 N 次』")
-
-    def test_version_action_carries_the_name_the_window_looks_for(self) -> None:
-        host = DevHost()
-        action = host._dev_build_version_action()
-        self.assertEqual(action.objectName(), VERSION_ACTION_NAME)
-        self.assertEqual(action.text(), version_action_text())
-        self.assertIn("连点", action.toolTip())
+        self.assertEqual(host._dev_note_version_click(), DEV_UNLOCKED_HINT)
 
     def test_menu_lists_the_five_entries(self) -> None:
         host = DevHost()
@@ -278,37 +269,46 @@ class ExportTests(unittest.TestCase):
         self.assertFalse((self.root / EXPORTS_DIR).exists())
 
 
-class MenuWindowVersionTests(unittest.TestCase):
-    def test_version_action_does_not_close_the_menu_window(self) -> None:
-        from PyQt5.QtWidgets import QMenu
+class AboutDialogVersionClickTests(unittest.TestCase):
+    """彩蛋入口在「关于」里那一行版本号上（人工 2026-10-06 矫正的位置：版本号本来就在那儿）。"""
 
-        from meapet.desktop.menu_window import PetMenuWindow
+    def _host_dialog(self):
+        from meapet.desktop.dialogs import AboutDialog
 
-        class CountingWindow(PetMenuWindow):
-            def __init__(self, menu):
-                super().__init__(menu)
-                self.closes = 0
+        host = DevHost()
+        dialog = AboutDialog(host)
+        # 对话框是 host 的子级：只留 dialog 的引用的话，host 先被 GC 会把它一起删掉。
+        self.host = host
+        self.addCleanup(dialog.deleteLater)
+        return host, dialog
 
-            def close(self):
-                self.closes += 1
-                return True
+    def test_the_version_line_is_the_unchanged_one_line_of_text(self) -> None:
+        _host, dialog = self._host_dialog()
+        self.assertEqual(dialog.version_label.text(), version_label_text())
+        self.assertEqual(dialog.dev_hint_label.text(), "", "没点之前不该露出彩蛋的痕迹")
 
-        menu = QMenu("根")
-        fired = []
-        version = menu.addAction(version_action_text())
-        version.setObjectName(VERSION_ACTION_NAME)
-        version.triggered.connect(lambda: fired.append("version"))
-        other = menu.addAction("退出")
-        other.triggered.connect(lambda: fired.append("quit"))
+    def test_five_clicks_on_the_version_line_unlock_and_report_in_the_dialog(self) -> None:
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
 
-        window = CountingWindow(menu)
-        self.addCleanup(window.deleteLater)
-        window._activate(version)
-        self.assertEqual(window.closes, 0, "版本号点了不该关窗——连点 5 次要能在同一轮里做")
-        self.assertEqual(fired, ["version"], "版本号的触发是同步的，不排到下一轮")
+        host, dialog = self._host_dialog()
+        for _ in range(DEV_UNLOCK_CLICKS - 1):
+            QTest.mouseClick(dialog.version_label, Qt.LeftButton)
+        self.assertFalse(host._dev_unlocked)
+        self.assertEqual(dialog.dev_hint_label.text(), dev_unlock_hint(1))
 
-        window._activate(other)
-        self.assertEqual(window.closes, 1, "普通项仍是先关窗")
+        QTest.mouseClick(dialog.version_label, Qt.LeftButton)
+        self.assertTrue(host._dev_unlocked)
+        self.assertEqual(dialog.dev_hint_label.text(), DEV_UNLOCKED_HINT)
+
+    def test_clicking_the_credits_links_does_not_count_as_a_version_click(self) -> None:
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+
+        host, dialog = self._host_dialog()
+        for _ in range(DEV_UNLOCK_CLICKS):
+            QTest.mouseClick(dialog.close_button, Qt.LeftButton)
+        self.assertFalse(host._dev_unlocked, "只有那一行版本号算数")
 
 
 if __name__ == "__main__":

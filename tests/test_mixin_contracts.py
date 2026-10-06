@@ -684,7 +684,8 @@ class TestRequiredSurfaceOnMeaPetSource(unittest.TestCase):
         self.assertIn("PetWindowChromeMixin", text)
         self.assertIn("PetRenderHostMixin", text)
         self.assertIn("PetConfigBridgeMixin", text)
-        # window_chrome 直接调 _dev_build_version_action()，没接这个 mixin 的宿主会 AttributeError
+        # window_chrome 直取 _dev_unlocked/_dev_build_menu，dialogs 的「关于」直取
+        # _dev_note_version_click —— 没接这个 mixin 的宿主会 AttributeError
         self.assertIn("PetDevOptionsMixin", text)
         self.assertIn("class MeaPet(", text)
 

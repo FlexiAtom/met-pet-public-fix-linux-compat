@@ -127,12 +127,8 @@ def wizard_progressive_hint() -> str:
     return "先完成「环境」和「对话」即可开玩；语音与屏幕识图可稍后设置"
 
 
-def menu_watch_enable() -> str:
-    return "开启屏幕观察（可能截屏）"
-
-
-def menu_watch_disable() -> str:
-    return "关闭屏幕观察"
+def menu_watch_toggle() -> str:
+    return "是否开启屏幕观察"
 
 
 def menu_standby_enter() -> str:

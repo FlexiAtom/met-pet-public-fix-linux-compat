@@ -19,6 +19,7 @@ from meapet.desktop.dialogs import (
 )
 from meapet.config.defaults import (
     DEFAULT_OLLAMA_HOST,
+    DEFAULT_OLLAMA_VISION_MODEL,
     DEFAULT_WATCHER_INTERVAL,
     bubble_duration_ms,
 )
@@ -352,8 +353,59 @@ class PetWatcherMixin:
         if hasattr(self, '_watcher') and self._watcher:
             self._watcher.set_search_result(result)
 
+    def _enable_vision_for_watch(self) -> None:
+        """把识图打开到「本菜单那对识图后端」已经表示的 relay 档。
+
+        ``normalize_config`` 在 ``vision.mode == "disabled"`` 时会把
+        ``watcher.enabled`` 打回 False（观察依赖识图），而 ``vision.mode`` 从前
+        只有向导写得住：右键菜单这两支「Ollama 本地识图 / MiMo 云端识图」只改
+        ``vision.backend``，于是默认识图关闭的配置下，这个开关永远开不起来。
+        """
+        vision = self.config.setdefault("vision", {})
+        if normalize_vision_mode(vision.get("mode")) != "disabled":
+            return
+        vision["mode"] = "relay"
+        if str(vision.get("backend") or "").strip().lower() not in {"ollama", "mimo"}:
+            vision["backend"] = "ollama"
+        if not vision.get("model"):
+            vision["model"] = DEFAULT_OLLAMA_VISION_MODEL
+        self._disconnect_watcher_signals()
+        self._init_watcher()
+
+    def _watch_consent_granted(self, w: dict) -> bool:
+        """开启观察前的授权：只有截图会离开本机才问，没授权过与已授权话术不同。"""
+        if not self._is_cloud_vision():
+            return True
+        previously_allowed = bool(w.get("allow_cloud", False))
+        if previously_allowed:
+            message = "\n".join([
+                "将定时截屏并上传到云端识别。",
+                "每次上传前默认仍会弹窗确认。",
+                "",
+                "继续开启？",
+            ])
+            title, accept_text = "开启屏幕观察？", "继续开启"
+        else:
+            message = "\n".join([
+                "当前识图后端会把截图发到云端。",
+                "",
+                "是否授权「允许云端识图」并开启屏幕观察？",
+                "之后每次自动偷看默认仍会再确认一次。",
+            ])
+            title, accept_text = "开启云端屏幕观察？", "允许并开启"
+        allowed = bool(confirm_cloud_vision(
+            self,
+            title=title,
+            message=message,
+            timeout_seconds=5,
+            accept_text=accept_text,
+        ))
+        if allowed and not previously_allowed:
+            w["allow_cloud"] = True
+        return allowed
+
     def _toggle_watcher_enabled(self):
-        """Right-click toggle for screen watch. Cloud needs explicit consent."""
+        """右键的屏幕观察拨杆。云端识图下的开启需要显式授权。"""
         w = self.config.setdefault("watcher", {
             "enabled": False,
             "allow_cloud": False,
@@ -361,49 +413,14 @@ class PetWatcherMixin:
         })
         turning_on = not w.get("enabled", False)
 
-        if turning_on and self._is_cloud_vision():
-            if not w.get("allow_cloud", False):
-                q = "\n".join([
-                    "当前识图后端会把截图发到云端。",
-                    "",
-                    "是否授权「允许云端识图」并开启屏幕观察？",
-                    "之后每次自动偷看默认仍会再确认一次。",
-                ])
-                allowed = confirm_cloud_vision(
-                    self,
-                    title="开启云端屏幕观察？",
-                    message=q,
-                    timeout_seconds=5,
-                    accept_text="允许并开启",
+        if turning_on:
+            if not self._watch_consent_granted(w):
+                self._show_bubble(
+                    status_language.watcher_not_enabled(),
+                    bubble_duration_ms(self.config, "interaction"),
                 )
-                if not allowed:
-                    self._show_bubble(
-                        status_language.watcher_not_enabled(),
-                        bubble_duration_ms(self.config, "interaction"),
-                    )
-                    return
-                w["allow_cloud"] = True
-                w["require_confirm"] = True
-            else:
-                q = "\n".join([
-                    "将定时截屏并上传到云端识别。",
-                    "每次上传前默认仍会弹窗确认。",
-                    "",
-                    "继续开启？",
-                ])
-                allowed = confirm_cloud_vision(
-                    self,
-                    title="开启屏幕观察？",
-                    message=q,
-                    timeout_seconds=5,
-                    accept_text="继续开启",
-                )
-                if not allowed:
-                    self._show_bubble(
-                        status_language.watcher_not_enabled(),
-                        bubble_duration_ms(self.config, "interaction"),
-                    )
-                    return
+                return
+            self._enable_vision_for_watch()
 
         w["enabled"] = turning_on
         # Always require per-capture confirm for cloud uploads
@@ -413,7 +430,11 @@ class PetWatcherMixin:
         # 统一写入 config.json
         self._save_config()
 
-        if w["enabled"]:
+        # 落盘后以规范化写回的 config 为准：保存前那个字典会被 normalize 换掉，
+        # 拿它判断状态会谎报成功（人工 2026-10-06 报的「这一项关不掉」就是这么来的）。
+        enabled = bool((self.config.get("watcher") or {}).get("enabled", False))
+
+        if enabled:
             if self._is_cloud_vision():
                 status = status_language.watcher_enabled_cloud()
             else:
