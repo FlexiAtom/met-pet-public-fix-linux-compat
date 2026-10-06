@@ -43,6 +43,8 @@ class PetVoiceMixin:
 
         self._voice_engine = VoiceEngine(
             language=cfg.get("language", "zh"),
+            precision=cfg.get("precision"),
+            input_device_index=cfg.get("input_device_index"),
         )
         self._voice_engine.recording_started.connect(self._on_voice_recording_started)
         self._voice_engine.recording_stopped.connect(self._on_voice_recording_stopped)
@@ -64,11 +66,8 @@ class PetVoiceMixin:
 
     def _toggle_voice_input(self) -> None:
         """右键菜单回调：开启/关闭语音输入，并立即刷新按钮可见性。"""
-        vi = self.config.setdefault("voice_input", {
-            "enabled": False,
-            "language": "zh",
-            "auto_send": False,
-        })
+        # 默认值只由 config.store.normalize_config 一处给，这里不再抄一份
+        vi = self.config.setdefault("voice_input", {})
         turning_on = not vi.get("enabled", False)
         vi["enabled"] = turning_on
         self._save_config()

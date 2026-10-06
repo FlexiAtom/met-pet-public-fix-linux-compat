@@ -31,6 +31,15 @@ def normalize_gsv_ref_language(value: object) -> str:
     return _GSV_REF_LANGUAGE_ALIASES.get(raw, "jp")
 
 
+def normalize_input_device_index(value: object) -> "int | None":
+    """把配置里的录音设备号规范为非负整数；非法值按「自动选路」处理。"""
+    try:
+        index = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return index if index >= 0 else None
+
+
 def canonical_tts_language(value: object) -> str:
     """把 BCP-47 或常见别名压缩为 TTS 使用的主语言标签。"""
     raw = str(value or "").strip().lower().replace("_", "-")

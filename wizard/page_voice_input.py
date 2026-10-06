@@ -1,8 +1,9 @@
 """语音输入配置页面 — 向导第 5 标签页。
 
 默认关闭（隐私优先）。启用后支持：
-- 本地 sherpa-onnx 离线转文字（中英双语，约 220MB）
-- 一键安装依赖 + 模型下载（后台线程，不卡 UI）
+- 本地 sherpa-onnx 离线转文字（中英双语，档位可选：int8 / fp32）
+- 选择录音设备（默认自动选路）
+- 一键安装依赖 + 按档下载模型（后台线程，不卡 UI）
 """
 from __future__ import annotations
 
@@ -18,16 +19,22 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from meapet.config.normalizers import normalize_input_device_index
 from meapet.dependencies import (
     VOICE_INPUT_INSTALL_REQUIREMENTS,
     resolve_pip_index_url,
 )
 from meapet.paths import (
+    VOICE_ASR_MODEL_FILES,
     VOICE_ASR_MODEL_REPO,
+    VOICE_ASR_PRECISION_DEFAULT,
+    VOICE_ASR_REQUIRED_FILES_BY_PRECISION,
     find_voice_asr_model_dir,
     is_frozen,
+    normalize_voice_asr_precision,
     voice_asr_cache_dir,
 )
+from meapet.voice.engine import list_input_devices
 from wizard.styles import (
     STYLE_PAGE_CARD,
     set_status,
@@ -36,10 +43,38 @@ from meapet.ui_theme import apply_named_style
 from wizard.widgets import WheelSafeComboBox
 
 
+# 档位文案：体积与加载差是本机实测（2026-10-05，两档各真下真载过一次），
+# 落在磁盘上的模型文件本身仍以 meapet.paths.VOICE_ASR_MODEL_FILES 为唯一真值。
+# fp32 的**精度优势没有证据**（三条样本读得反而更短更糊），所以文案只报代价。
+_TIER_HINTS = {
+    "int8": ("int8（默认）", "约 198 MB"),
+    "fp32": ("fp32（加载多 2.6 秒，精度优势未实测）", "约 357 MB"),
+}
+
+
+def _tier_label(precision: str) -> str:
+    return _TIER_HINTS.get(precision, (precision, "所选档位"))[0]
+
+
+def _tier_size(precision: str) -> str:
+    return _TIER_HINTS.get(precision, (precision, "所选档位"))[1]
+
+
+def _known_tiers() -> list[str]:
+    """下拉可选项 = 单一真值表里的档位，默认档排最前。"""
+    return [VOICE_ASR_PRECISION_DEFAULT] + [
+        tier for tier in VOICE_ASR_MODEL_FILES if tier != VOICE_ASR_PRECISION_DEFAULT
+    ]
+
+
 class _InstallWorker(QThread):
-    """后台线程：pip install + ModelScope 模型下载。"""
+    """后台线程：pip install + ModelScope 按档模型下载。"""
     progress = pyqtSignal(str)       # 阶段文字更新
     finished = pyqtSignal(bool, str)  # (success, detail)
+
+    def __init__(self, precision: str = VOICE_ASR_PRECISION_DEFAULT, parent=None):
+        super().__init__(parent)
+        self._precision = normalize_voice_asr_precision(precision)
 
     def run(self):
         cmd = _voice_input_install_command()
@@ -66,14 +101,19 @@ class _InstallWorker(QThread):
             self.finished.emit(False, str(exc))
             return
 
-        # 步骤 2: 下载 ASR 模型
-        self.progress.emit("正在下载语音识别模型（约 220MB）…")
+        # 步骤 2: 只下所选档位那几个文件——整仓 592MB，另一档运行时永远读不到
+        allow_patterns = list(VOICE_ASR_REQUIRED_FILES_BY_PRECISION[self._precision])
+        self.progress.emit(
+            f"正在下载 {self._precision} 档语音识别模型"
+            f"（{_tier_size(self._precision)}）…"
+        )
         try:
             from modelscope import snapshot_download
 
             snapshot_download(
                 VOICE_ASR_MODEL_REPO,
                 cache_dir=str(voice_asr_cache_dir()),
+                allow_patterns=allow_patterns,
             )
             self.finished.emit(True, "安装完成！依赖 + 模型已就绪")
         except ImportError:
@@ -151,6 +191,20 @@ class VoiceInputPage(QFrame):
         self.lang_combo.addItem("日文", "ja")
         self.settings_layout.addWidget(self.lang_combo)
 
+        mic_label = QLabel("录音设备：")
+        mic_label.setObjectName("FieldLabel")
+        self.settings_layout.addWidget(mic_label)
+        self.device_combo = WheelSafeComboBox()
+        self.device_combo.setObjectName("VoiceInputDevice")
+        self.device_combo.addItem("自动（推荐）", None)
+        self.settings_layout.addWidget(self.device_combo)
+        mic_note = QLabel(
+            "自动按系统默认选路。录到的声音不对（虚拟麦克风、静音设备）时改成你那台。"
+        )
+        mic_note.setObjectName("HelperText")
+        mic_note.setWordWrap(True)
+        self.settings_layout.addWidget(mic_note)
+
         self.auto_send_cb = QCheckBox("识别完成后自动发送（关闭则只填入输入框）")
         self.auto_send_cb.setChecked(False)
         self.auto_send_cb.setToolTip(
@@ -158,12 +212,21 @@ class VoiceInputPage(QFrame):
         )
         self.settings_layout.addWidget(self.auto_send_cb)
 
+        prec_label = QLabel("模型精度：")
+        prec_label.setObjectName("FieldLabel")
+        self.settings_layout.addWidget(prec_label)
+        self.precision_combo = WheelSafeComboBox()
+        self.precision_combo.setObjectName("VoiceAsrPrecision")
+        for tier in _known_tiers():
+            self.precision_combo.addItem(_tier_label(tier), tier)
+        self.settings_layout.addWidget(self.precision_combo)
+
         deps_label = QLabel("一键安装（依赖 + 模型）")
         deps_label.setObjectName("FieldLabel")
         self.settings_layout.addWidget(deps_label)
         deps_desc = QLabel(
             "安装 sherpa-onnx + pyaudio，并下载中英双语语音识别模型。\n"
-            "模型约 220MB，仅需下载一次。"
+            "只下载上面选中的档位，仅需下载一次。"
         )
         deps_desc.setObjectName("HelperText")
         deps_desc.setWordWrap(True)
@@ -189,6 +252,7 @@ class VoiceInputPage(QFrame):
         self.settings_layout.addWidget(self.hint)
 
         layout.addStretch()
+        self.precision_combo.currentIndexChanged.connect(self._check_deps)
         self._check_deps()
         self._install_worker = None
 
@@ -203,9 +267,35 @@ class VoiceInputPage(QFrame):
             "sherpa-onnx 完全离线运行，无需 API Key。"
         )
 
+    def _precision(self) -> str:
+        return normalize_voice_asr_precision(self.precision_combo.currentData())
+
     def _model_ok(self) -> bool:
-        """检查 ASR 模型文件是否存在。"""
-        return find_voice_asr_model_dir() is not None
+        """检查所选档位的 ASR 模型文件是否齐全。"""
+        return find_voice_asr_model_dir(self._precision()) is not None
+
+    def _apply_devices(self, selected=None) -> None:
+        """重建录音设备下拉并选中 ``selected``。
+
+        ``selected`` 是存过的设备号但当前枚举不到时，仍然列出来并标「当前不可用」——
+        否则一次保存就会把用户挑过的设备静默抹成「自动」。
+        """
+        self.device_combo.blockSignals(True)
+        self.device_combo.clear()
+        self.device_combo.addItem("自动（推荐）", None)
+        known: list[int] = []
+        for index, name, channels in list_input_devices():
+            known.append(index)
+            self.device_combo.addItem(f"{name}（{channels} 声道 · index {index}）", index)
+        if selected is not None and selected not in known:
+            self.device_combo.addItem(f"index {selected}（当前不可用）", selected)
+        target = 0
+        for i in range(self.device_combo.count()):
+            if self.device_combo.itemData(i) == selected:
+                target = i
+                break
+        self.device_combo.setCurrentIndex(target)
+        self.device_combo.blockSignals(False)
 
     def _check_deps(self):
         missing = []
@@ -218,9 +308,14 @@ class VoiceInputPage(QFrame):
         except ImportError:
             missing.append("sherpa-onnx")
 
+        if "pyaudio" not in missing:
+            self._apply_devices(self.device_combo.currentData())
+
+        precision = self._precision()
+        size = _tier_size(precision)
         model_ok = self._model_ok()
         if not missing and model_ok:
-            set_status(self.deps_status, "success", "依赖与模型已就绪")
+            set_status(self.deps_status, "success", f"依赖与 {precision} 档模型已就绪")
             self.deps_status_detail.setText("可以正常使用语音输入功能")
             self.install_btn.setEnabled(False)
             self.install_btn.setText("已安装就绪")
@@ -228,7 +323,7 @@ class VoiceInputPage(QFrame):
             set_status(
                 self.deps_status,
                 "warning",
-                "冻结版缺少语音识别依赖或模型",
+                f"冻结版缺少语音识别依赖或 {precision} 档模型",
             )
             self.deps_status_detail.setText(
                 "当前冻结版不支持运行时安装或下载。"
@@ -237,8 +332,8 @@ class VoiceInputPage(QFrame):
             self.install_btn.setEnabled(False)
             self.install_btn.setText("需重新打包")
         elif not missing:
-            set_status(self.deps_status, "warning", "依赖已安装，但模型文件缺失")
-            self.deps_status_detail.setText("点击按钮下载语音识别模型（约 220MB）")
+            set_status(self.deps_status, "warning", f"依赖已安装，但 {precision} 档模型缺失")
+            self.deps_status_detail.setText(f"点击按钮下载语音识别模型（{size}）")
             self.install_btn.setEnabled(True)
             self.install_btn.setText("下载语音识别模型")
         else:
@@ -246,7 +341,7 @@ class VoiceInputPage(QFrame):
                        f"缺少: {', '.join(missing)}")
             self.deps_status_detail.setText(
                 "点击按钮一键安装依赖库并下载模型\n"
-                "（sherpa-onnx + pyaudio + 220MB 模型）"
+                f"（sherpa-onnx + pyaudio + {precision} 档模型 {size}）"
             )
             self.install_btn.setEnabled(True)
             self.install_btn.setText("安装语音识别依赖与模型")
@@ -264,7 +359,7 @@ class VoiceInputPage(QFrame):
         set_status(self.deps_status, "info", "第一步：安装 Python 依赖…")
         self.deps_status_detail.setText("正在后台执行，请稍候")
 
-        self._install_worker = _InstallWorker()
+        self._install_worker = _InstallWorker(self._precision())
         self._install_worker.progress.connect(self.deps_status_detail.setText)
         self._install_worker.finished.connect(self._on_install_finished)
         self._install_worker.start()
@@ -286,6 +381,15 @@ class VoiceInputPage(QFrame):
         lidx = self.lang_combo.findData(lang)
         self.lang_combo.setCurrentIndex(lidx if lidx >= 0 else 0)
 
+        pidx = self.precision_combo.findData(
+            normalize_voice_asr_precision(voice_cfg.get("precision"))
+        )
+        self.precision_combo.setCurrentIndex(pidx if pidx >= 0 else 0)
+
+        self._apply_devices(normalize_input_device_index(
+            voice_cfg.get("input_device_index")
+        ))
+
         self.auto_send_cb.setChecked(bool(voice_cfg.get("auto_send", False)))
         self._sync_hint()
 
@@ -295,5 +399,9 @@ class VoiceInputPage(QFrame):
                 "enabled": self.enable_cb.isChecked(),
                 "language": self.lang_combo.currentData() or "zh",
                 "auto_send": self.auto_send_cb.isChecked(),
+                "precision": self._precision(),
+                "input_device_index": normalize_input_device_index(
+                    self.device_combo.currentData()
+                ),
             }
         }

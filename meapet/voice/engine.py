@@ -14,10 +14,47 @@ from typing import Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from meapet.config.normalizers import normalize_input_device_index
 from meapet.log import get_color_logger
-from meapet.paths import find_voice_asr_model_dir
+from meapet.paths import (
+    VOICE_ASR_MODEL_FILES,
+    find_voice_asr_model_dir,
+    normalize_voice_asr_precision,
+)
 
 log = get_color_logger("voice")
+
+
+def list_input_devices() -> list[tuple[int, str, int]]:
+    """枚举有输入通道的设备 [(index, name, channels)]；pyaudio 缺失或异常时返回空表。"""
+    try:
+        import pyaudio
+    except ImportError:
+        return []
+
+    devices: list[tuple[int, str, int]] = []
+    audio = None
+    try:
+        audio = pyaudio.PyAudio()
+        for index in range(audio.get_device_count()):
+            info = audio.get_device_info_by_index(index)
+            try:
+                channels = int(info.get("maxInputChannels", 0) or 0)
+            except (TypeError, ValueError):
+                channels = 0
+            if channels > 0:
+                devices.append(
+                    (index, str(info.get("name") or f"设备 {index}"), channels)
+                )
+    except Exception as exc:
+        log.warning(f"[voice] 设备枚举失败: {type(exc).__name__}: {exc}")
+    finally:
+        if audio is not None:
+            try:
+                audio.terminate()
+            except Exception:
+                pass
+    return devices
 
 
 class VoiceEngine(QThread):
@@ -34,12 +71,16 @@ class VoiceEngine(QThread):
         sample_rate: int = 16000,
         channels: int = 1,
         chunk_ms: int = 30,
+        precision: object = None,
+        input_device_index: object = None,
     ):
         super().__init__()
         self._language = str(language or "zh").strip() or "zh"
         self._sample_rate = int(sample_rate or 16000)
         self._channels = int(channels or 1)
         self._chunk_size = max(256, self._sample_rate * int(chunk_ms or 30) // 1000)
+        self._precision = normalize_voice_asr_precision(precision)
+        self._input_device_index = normalize_input_device_index(input_device_index)
 
         self._stop = False
         self._toggle = False
@@ -81,7 +122,7 @@ class VoiceEngine(QThread):
 
             self._audio_frames = []
             p = pyaudio.PyAudio()
-            mic_idx = self._find_mic_device(p)
+            mic_idx = self._pick_mic_index(p)
             log.info(f"[voice] using mic device index={mic_idx}")
 
             stream = p.open(
@@ -128,6 +169,24 @@ class VoiceEngine(QThread):
     # 模型加载
     # ------------------------------------------------------------------
 
+    def _pick_mic_index(self, p_audio) -> int:
+        """用户指定的设备优先；那台不在或没有输入通道时回落自动选路（出声，不闷掉）。"""
+        if self._input_device_index is None:
+            return self._find_mic_device(p_audio)
+
+        info = None
+        try:
+            info = p_audio.get_device_info_by_index(self._input_device_index)
+        except Exception:
+            info = None
+        if info and int(info.get("maxInputChannels", 0) or 0) > 0:
+            return self._input_device_index
+
+        log.info(
+            f"[voice] 指定设备 index={self._input_device_index} 不可用，回落自动选路"
+        )
+        return self._find_mic_device(p_audio)
+
     def _find_mic_device(self, p_audio) -> int:
         """找真正的麦克风，跳过立体声混音/扬声器回录等设备。"""
         exclude = {"立体声混音", "stereo mix", "扬声器", "speaker",
@@ -156,16 +215,21 @@ class VoiceEngine(QThread):
         try:
             import sherpa_onnx
 
-            model_dir = find_voice_asr_model_dir()
+            model_dir = find_voice_asr_model_dir(self._precision)
             if model_dir is None:
-                self.error.emit("语音识别模型缺失，请在配置页下载")
+                self.error.emit(
+                    f"语音识别模型缺失（{self._precision} 档），请在配置页下载"
+                )
                 return False
-            log.info("[voice] loading sherpa-onnx zipformer zh-en model...")
+            files = VOICE_ASR_MODEL_FILES[self._precision]
+            log.info(
+                f"[voice] loading sherpa-onnx zipformer zh-en model ({self._precision})..."
+            )
             self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
-                encoder=os.path.join(model_dir, "encoder-epoch-99-avg-1.int8.onnx"),
-                decoder=os.path.join(model_dir, "decoder-epoch-99-avg-1.int8.onnx"),
-                joiner=os.path.join(model_dir, "joiner-epoch-99-avg-1.int8.onnx"),
-                tokens=os.path.join(model_dir, "tokens.txt"),
+                encoder=os.path.join(model_dir, files["encoder"]),
+                decoder=os.path.join(model_dir, files["decoder"]),
+                joiner=os.path.join(model_dir, files["joiner"]),
+                tokens=os.path.join(model_dir, files["tokens"]),
                 num_threads=4,
                 provider="cpu",
                 sample_rate=self._sample_rate,
@@ -237,4 +301,6 @@ def create_voice_engine(config: Optional[dict] = None) -> Optional[VoiceEngine]:
         return None
     return VoiceEngine(
         language=cfg.get("language", "zh"),
+        precision=cfg.get("precision"),
+        input_device_index=cfg.get("input_device_index"),
     )

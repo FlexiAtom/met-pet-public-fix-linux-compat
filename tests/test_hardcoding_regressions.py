@@ -476,8 +476,13 @@ def test_voice_input_installer_does_not_run_frozen_executable_as_python():
 
 
 def test_voice_input_keeps_only_keys_the_engine_reads():
-    """语音输入只认 enabled/language/auto_send；换引擎前那几个键不得再长回来。"""
+    """语音输入只认 enabled/language/auto_send/precision/input_device_index。
+
+    换引擎前留下的 engine/model/device 不得再长回来；新增键必须同时被运行时读到，
+    否则它就是这个断言要拦的那类死键。
+    """
     from meapet.config.store import normalize_config, scrub_secrets
+    import meapet.paths as paths
 
     cfg = normalize_config({
         "voice_input": {
@@ -487,7 +492,16 @@ def test_voice_input_keeps_only_keys_the_engine_reads():
             "device": "cpu",
         }
     })
-    assert set(cfg["voice_input"]) == {"enabled", "language", "auto_send"}
+    assert set(cfg["voice_input"]) == {
+        "enabled",
+        "language",
+        "auto_send",
+        "precision",
+        "input_device_index",
+    }
+    # 默认值只在这一处给：非法档位收敛到默认档，非法设备号按「自动」处理
+    assert cfg["voice_input"]["precision"] == paths.VOICE_ASR_PRECISION_DEFAULT
+    assert cfg["voice_input"]["input_device_index"] is None
 
     # api_key 不当死键清掉：那是用户文件里可能的真凭据，只在导出面去掉
     kept = normalize_config({"voice_input": {"api_key": "sk-legacy"}})
@@ -496,7 +510,8 @@ def test_voice_input_keeps_only_keys_the_engine_reads():
     assert "api_key" not in scrubbed["voice_input"]
 
     example = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
-    assert set(example["voice_input"]) == {"enabled", "language", "auto_send"}
+    assert set(example["voice_input"]) == set(cfg["voice_input"])
+    assert example["voice_input"]["precision"] == paths.VOICE_ASR_PRECISION_DEFAULT
 
     for rel in ("meapet/desktop/voice_mixin.py", "wizard/page_voice_input.py"):
         source = (ROOT / rel).read_text(encoding="utf-8")

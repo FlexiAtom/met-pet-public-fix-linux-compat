@@ -162,7 +162,9 @@
   "voice_input": {
     "enabled": false,
     "language": "zh",
-    "auto_send": false
+    "auto_send": false,
+    "precision": "int8",
+    "input_device_index": null
   },
   "fidus": {
     "enabled": false,

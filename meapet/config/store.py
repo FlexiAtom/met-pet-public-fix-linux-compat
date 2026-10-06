@@ -25,6 +25,7 @@ from typing import Dict, Optional, Tuple, Union
 from meapet.config.normalizers import (
     canonical_tts_language,
     normalize_gsv_ref_language,
+    normalize_input_device_index,
 )
 from meapet.config.defaults import (
     DEFAULT_AGENT_LINK_WS_URL,
@@ -50,6 +51,7 @@ from meapet.ui_theme import (
 )
 from meapet.utils import mask_secret, normalize_watcher
 from meapet.vision.policy import normalize_vision_mode
+from meapet.paths import normalize_voice_asr_precision
 
 
 # 通用 LLM 环境变量（未知/未标注 backend 时的兜底）。
@@ -1143,6 +1145,12 @@ def normalize_config(config: dict) -> dict:
     voice.setdefault("enabled", False)
     voice.setdefault("language", "zh")
     voice.setdefault("auto_send", False)
+    # 档位词汇表在 meapet.paths 的单一真值表里，这里只把非法值收敛到默认档；
+    # 设备号 None = 自动选路，非负整数 = 用户点名的那台。
+    voice["precision"] = normalize_voice_asr_precision(voice.get("precision"))
+    voice["input_device_index"] = normalize_input_device_index(
+        voice.get("input_device_index")
+    )
     cfg["voice_input"] = voice
 
     # fidus 定位规范化（默认关闭：代价可见——秒级校准 + 屏幕闪现）
