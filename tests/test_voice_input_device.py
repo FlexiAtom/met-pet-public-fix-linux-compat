@@ -71,7 +71,11 @@ def test_normalize_input_device_index(raw, expected):
 
 
 def test_find_model_dir_checks_completeness_per_tier(tmp_path, monkeypatch):
-    """只有 int8 四件套的目录：int8 档找到，fp32 档必须说"缺"，不能拿 int8 顶。"""
+    """只有 int8 四件套的目录：int8 档找到，fp32 档必须说"缺"，不能拿 int8 顶。
+
+    目录形状按**真机干净装机落盘**那一条写（modelscope 在 cache_dir 下建
+    models/<name>/snapshots/master），不是拍脑袋的扁平布局。
+    """
     import meapet.paths as paths
 
     new_cache = tmp_path / "runtime-voice-asr"
@@ -82,7 +86,13 @@ def test_find_model_dir_checks_completeness_per_tier(tmp_path, monkeypatch):
         paths, "project_path", lambda *parts: str(tmp_path.joinpath(*parts))
     )
 
-    model_dir = paths.voice_asr_cache_dir() / paths.VOICE_ASR_MODEL_CACHE_NAME
+    model_dir = (
+        paths.voice_asr_cache_dir()
+        / "models"
+        / paths.VOICE_ASR_MODEL_CACHE_NAME
+        / "snapshots"
+        / "master"
+    )
     model_dir.mkdir(parents=True)
     for name in VOICE_ASR_REQUIRED_FILES_BY_PRECISION["int8"]:
         (model_dir / name).write_bytes(b"model")
@@ -98,10 +108,11 @@ def test_find_model_dir_checks_completeness_per_tier(tmp_path, monkeypatch):
 
 
 class _FakeAudio:
-    """只喂 get_device_info_by_index / 计数，不碰真实音频后端。"""
+    """只喂 get_device_info_by_index / is_format_supported，不碰真实音频后端。"""
 
-    def __init__(self, devices: dict[int, dict]):
+    def __init__(self, devices: dict[int, dict], supported: dict[int, bool] | None = None):
         self._devices = devices
+        self._supported = supported or {}
 
     def get_device_count(self):
         return max(self._devices, default=-1) + 1
@@ -111,9 +122,39 @@ class _FakeAudio:
             raise IndexError(f"no device {index}")
         return self._devices[index]
 
+    def is_format_supported(self, rate, input_device=None, input_channels=None,
+                            input_format=None):
+        if not self._supported.get(input_device, True):
+            raise ValueError(f"device {input_device} cannot do {rate}")
+        return rate
+
 
 def _engine(**kwargs) -> VoiceEngine:
     return VoiceEngine(**kwargs)
+
+
+class _RecordingLog:
+    """把 engine.log 的三个级别都收进同一个列表：断言只关心"有没有出声、说了什么"。"""
+
+    def __init__(self, sink: list[str]):
+        self.sink = sink
+
+    def info(self, message):
+        self.sink.append(message)
+
+    def warning(self, message):
+        self.sink.append(message)
+
+    def error(self, message):
+        self.sink.append(message)
+
+
+def _quiet_log(monkeypatch) -> list[str]:
+    from meapet.voice import engine as engine_module
+
+    logged: list[str] = []
+    monkeypatch.setattr(engine_module, "log", _RecordingLog(logged))
+    return logged
 
 
 def test_pick_mic_honours_requested_device():
@@ -123,21 +164,7 @@ def test_pick_mic_honours_requested_device():
 
 
 def test_pick_mic_falls_back_with_log_when_device_unusable(monkeypatch):
-    from meapet.voice import engine as engine_module
-
-    logged: list[str] = []
-
-    class _RecordingLog:
-        def info(self, message):
-            logged.append(message)
-
-        def warning(self, message):
-            logged.append(message)
-
-        def error(self, message):
-            logged.append(message)
-
-    monkeypatch.setattr(engine_module, "log", _RecordingLog())
+    logged = _quiet_log(monkeypatch)
     audio = _FakeAudio(
         {
             7: {"name": "no inputs", "maxInputChannels": 0},
@@ -148,7 +175,26 @@ def test_pick_mic_falls_back_with_log_when_device_unusable(monkeypatch):
     engine._find_mic_device = lambda _p: 9  # 自动选路由既有实现负责，这里只验回落发生
 
     assert engine._pick_mic_index(audio) == 9
-    assert any("不可用" in message for message in logged)
+    assert any("回落自动选路" in message for message in logged)
+
+
+def test_pick_mic_falls_back_when_device_cannot_do_the_sample_rate(monkeypatch):
+    """设备在、也有输入通道，但开不了 16k（本机 hw 内置麦 index 9 就是这样，实测）。
+
+    理由须点名到"不支持采样率"，否则现场报告只剩一句"不可用"，查不出是哪种。
+    """
+    stub = types.ModuleType("pyaudio")
+    stub.paInt16 = 8
+    monkeypatch.setitem(sys.modules, "pyaudio", stub)
+    logged = _quiet_log(monkeypatch)
+
+    audio = _FakeAudio({9: {"name": "Built-in Audio Analog Stereo", "maxInputChannels": 4}},
+                       supported={9: False})
+    engine = _engine(input_device_index=9)
+    engine._find_mic_device = lambda _p: 8
+
+    assert engine._pick_mic_index(audio) == 8
+    assert any("不支持 16000 Hz" in message for message in logged)
 
 
 def test_pick_mic_falls_back_when_index_missing_entirely():
@@ -184,6 +230,8 @@ def test_list_input_devices_without_pyaudio_returns_empty(monkeypatch):
 
 def test_list_input_devices_skips_devices_without_input_channels(monkeypatch):
     class _PyAudio:
+        paInt16 = 8
+
         def get_device_count(self):
             return 3
 
@@ -194,14 +242,24 @@ def test_list_input_devices_skips_devices_without_input_channels(monkeypatch):
                 2: {"name": "", "maxInputChannels": 1},
             }[index]
 
+        def is_format_supported(self, rate, input_device=None, input_channels=None,
+                               input_format=None):
+            if input_device == 2:
+                raise ValueError("48k-only hardware")
+            return rate
+
         def terminate(self):
             pass
 
     module = types.ModuleType("pyaudio")
     module.PyAudio = _PyAudio
+    module.paInt16 = 8
     monkeypatch.setitem(sys.modules, "pyaudio", module)
 
-    assert list_input_devices() == [(1, "mic", 2), (2, "设备 2", 1)]
+    assert list_input_devices() == [
+        (1, "mic", 2, True),
+        (2, "设备 2", 1, False),
+    ]
 
 
 # ----------------------------------------------------------------------
@@ -220,10 +278,15 @@ def page():
 def test_wizard_device_and_tier_round_trip(page, monkeypatch):
     monkeypatch.setattr(
         "wizard.page_voice_input.list_input_devices",
-        lambda: [(3, "Built-in", 2), (7, "USB", 1)],
+        lambda: [(3, "Built-in", 2, True), (7, "USB", 1, False)],
     )
     page._apply_devices(7)
     assert page.device_combo.currentData() == 7
+    # 开不了 16k 的设备在文案里就得看出来——选了也不会生效，别让人白选
+    assert "不支持 16kHz" in page.device_combo.currentText()
+    assert "不支持 16kHz" not in page.device_combo.itemText(
+        page.device_combo.findData(3)
+    )
     page.precision_combo.setCurrentIndex(
         page.precision_combo.findData("fp32")
     )
@@ -240,7 +303,10 @@ def test_wizard_device_and_tier_round_trip(page, monkeypatch):
 
 def test_wizard_keeps_stale_device_index_instead_of_silently_resetting(page, monkeypatch):
     """存过的设备号当下枚举不到时仍列出来（标不可用），一次保存不得把它抹成「自动」。"""
-    monkeypatch.setattr("wizard.page_voice_input.list_input_devices", lambda: [(3, "a", 1)])
+    monkeypatch.setattr(
+        "wizard.page_voice_input.list_input_devices",
+        lambda: [(3, "a", 1, True)],
+    )
     page.apply_config({"input_device_index": 99})
     assert page.device_combo.currentData() == 99
     assert page.collect()["voice_input"]["input_device_index"] == 99
@@ -252,7 +318,7 @@ def test_wizard_keeps_stale_device_index_instead_of_silently_resetting(page, mon
 
 
 def test_wizard_falls_back_to_auto_for_illegal_saved_index(page, monkeypatch):
-    monkeypatch.setattr("wizard.page_voice_input.list_input_devices", lambda: [(3, "a", 1)])
+    monkeypatch.setattr("wizard.page_voice_input.list_input_devices", lambda: [(3, "a", 1, True)])
     page.apply_config({"input_device_index": "auto"})
     assert page.device_combo.currentData() is None
 

@@ -34,7 +34,7 @@ from meapet.paths import (
     normalize_voice_asr_precision,
     voice_asr_cache_dir,
 )
-from meapet.voice.engine import list_input_devices
+from meapet.voice.engine import VOICE_INPUT_SAMPLE_RATE, list_input_devices
 from wizard.styles import (
     STYLE_PAGE_CARD,
     set_status,
@@ -199,7 +199,9 @@ class VoiceInputPage(QFrame):
         self.device_combo.addItem("自动（推荐）", None)
         self.settings_layout.addWidget(self.device_combo)
         mic_note = QLabel(
-            "自动按系统默认选路。录到的声音不对（虚拟麦克风、静音设备）时改成你那台。"
+            "自动按系统默认选路。录到的声音不对（虚拟麦克风、静音设备）时改成你那台。\n"
+            f"标了「不支持 {VOICE_INPUT_SAMPLE_RATE // 1000}kHz」的设备选了也不会生效，"
+            "运行时会回落自动选路。"
         )
         mic_note.setObjectName("HelperText")
         mic_note.setWordWrap(True)
@@ -284,9 +286,13 @@ class VoiceInputPage(QFrame):
         self.device_combo.clear()
         self.device_combo.addItem("自动（推荐）", None)
         known: list[int] = []
-        for index, name, channels in list_input_devices():
+        rate_khz = VOICE_INPUT_SAMPLE_RATE // 1000
+        for index, name, channels, supported in list_input_devices():
             known.append(index)
-            self.device_combo.addItem(f"{name}（{channels} 声道 · index {index}）", index)
+            unsupported = "" if supported else f" · 不支持 {rate_khz}kHz"
+            self.device_combo.addItem(
+                f"{name}（{channels} 声道 · index {index}{unsupported}）", index
+            )
         if selected is not None and selected not in known:
             self.device_combo.addItem(f"index {selected}（当前不可用）", selected)
         target = 0

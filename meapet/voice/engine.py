@@ -24,27 +24,63 @@ from meapet.paths import (
 
 log = get_color_logger("voice")
 
+# 识别器与采集共用的采样率：设备的可用性按它探测，向导文案也按它标注，别两处各写一个数。
+VOICE_INPUT_SAMPLE_RATE = 16000
 
-def list_input_devices() -> list[tuple[int, str, int]]:
-    """枚举有输入通道的设备 [(index, name, channels)]；pyaudio 缺失或异常时返回空表。"""
+
+def _device_supports_input(p_audio, index: int, sample_rate: int, channels: int) -> bool:
+    """这台设备能否按 (sample_rate, channels, paInt16) 开输入流。
+
+    pyaudio 用 ``ValueError`` 表示"不支持"，实测与真开流的失败一致（hw 设备固定 48k 时
+    16k 直接 Errno -9997）。探针本身出别的错（老版本、缺方法）时**按可用处理**——
+    探测失败不该把设备判死，真开流时自会出声。
+    """
+    try:
+        import pyaudio
+
+        p_audio.is_format_supported(
+            sample_rate,
+            input_device=index,
+            input_channels=channels,
+            input_format=pyaudio.paInt16,
+        )
+    except ValueError:
+        return False
+    except Exception:
+        return True
+    return True
+
+
+def list_input_devices(
+    sample_rate: int = VOICE_INPUT_SAMPLE_RATE, channels: int = 1
+) -> list[tuple[int, str, int, bool]]:
+    """枚举有输入通道的设备 ``[(index, name, channels, 该采样率可用)]``。
+
+    pyaudio 缺失或枚举异常时返回空表，不抛。
+    """
     try:
         import pyaudio
     except ImportError:
         return []
 
-    devices: list[tuple[int, str, int]] = []
+    devices: list[tuple[int, str, int, bool]] = []
     audio = None
     try:
         audio = pyaudio.PyAudio()
         for index in range(audio.get_device_count()):
             info = audio.get_device_info_by_index(index)
             try:
-                channels = int(info.get("maxInputChannels", 0) or 0)
+                input_channels = int(info.get("maxInputChannels", 0) or 0)
             except (TypeError, ValueError):
-                channels = 0
-            if channels > 0:
+                input_channels = 0
+            if input_channels > 0:
                 devices.append(
-                    (index, str(info.get("name") or f"设备 {index}"), channels)
+                    (
+                        index,
+                        str(info.get("name") or f"设备 {index}"),
+                        input_channels,
+                        _device_supports_input(audio, index, sample_rate, channels),
+                    )
                 )
     except Exception as exc:
         log.warning(f"[voice] 设备枚举失败: {type(exc).__name__}: {exc}")
@@ -68,7 +104,7 @@ class VoiceEngine(QThread):
     def __init__(
         self,
         language: str = "zh",
-        sample_rate: int = 16000,
+        sample_rate: int = VOICE_INPUT_SAMPLE_RATE,
         channels: int = 1,
         chunk_ms: int = 30,
         precision: object = None,
@@ -76,7 +112,7 @@ class VoiceEngine(QThread):
     ):
         super().__init__()
         self._language = str(language or "zh").strip() or "zh"
-        self._sample_rate = int(sample_rate or 16000)
+        self._sample_rate = int(sample_rate or VOICE_INPUT_SAMPLE_RATE)
         self._channels = int(channels or 1)
         self._chunk_size = max(256, self._sample_rate * int(chunk_ms or 30) // 1000)
         self._precision = normalize_voice_asr_precision(precision)
@@ -170,7 +206,12 @@ class VoiceEngine(QThread):
     # ------------------------------------------------------------------
 
     def _pick_mic_index(self, p_audio) -> int:
-        """用户指定的设备优先；那台不在或没有输入通道时回落自动选路（出声，不闷掉）。"""
+        """用户指定的设备优先；那台不可用时回落自动选路（出声，不闷掉）。
+
+        "不可用"有两种，实测都撞到过，日志须分开点名：
+        设备压根枚举不到/没有输入通道，或设备在但开不了 ``sample_rate``（hw 固定 48k
+        的内置麦就是这一类，真开流报 Errno -9997）。
+        """
         if self._input_device_index is None:
             return self._find_mic_device(p_audio)
 
@@ -179,11 +220,19 @@ class VoiceEngine(QThread):
             info = p_audio.get_device_info_by_index(self._input_device_index)
         except Exception:
             info = None
-        if info and int(info.get("maxInputChannels", 0) or 0) > 0:
+        reason = ""
+        if not info or int(info.get("maxInputChannels", 0) or 0) <= 0:
+            reason = "枚举不到或没有输入通道"
+        elif not _device_supports_input(
+            p_audio, self._input_device_index, self._sample_rate, self._channels
+        ):
+            reason = f"不支持 {self._sample_rate} Hz 输入"
+
+        if not reason:
             return self._input_device_index
 
         log.info(
-            f"[voice] 指定设备 index={self._input_device_index} 不可用，回落自动选路"
+            f"[voice] 指定设备 index={self._input_device_index} {reason}，回落自动选路"
         )
         return self._find_mic_device(p_audio)
 
