@@ -684,6 +684,8 @@ class TestRequiredSurfaceOnMeaPetSource(unittest.TestCase):
         self.assertIn("PetWindowChromeMixin", text)
         self.assertIn("PetRenderHostMixin", text)
         self.assertIn("PetConfigBridgeMixin", text)
+        # window_chrome 直接调 _dev_build_version_action()，没接这个 mixin 的宿主会 AttributeError
+        self.assertIn("PetDevOptionsMixin", text)
         self.assertIn("class MeaPet(", text)
 
     def test_interaction_depends_on_chat_flow_show_reply(self):

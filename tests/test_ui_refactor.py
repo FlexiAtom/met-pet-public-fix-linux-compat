@@ -1991,12 +1991,8 @@ class UiRefactorTests(unittest.TestCase):
         host = self._make_menu_host()
         host.config["display"] = {"size_factor": 1.25}
         menu = self._track(host._build_context_menu())
-        display_menu = next(
-            action.menu()
-            for action in menu.actions()
-            if action.menu() is not None
-            and action.menu().title() == "显示与立绘"
-        )
+        display_menu = self._find_menu(menu, "显示与立绘")
+        self.assertIsNotNone(display_menu, "归并后它在「设置与数据」下面，根层直取找不到")
         size_menu = next(
             action.menu()
             for action in display_menu.actions()
@@ -2019,10 +2015,25 @@ class UiRefactorTests(unittest.TestCase):
         ]
         self.assertEqual(checked, ["125%"])
 
+    @staticmethod
+    def _find_menu(menu, title):
+        """按标题在整棵菜单树里找子菜单——归并后设置项嵌了一层，根层直取不再成立。"""
+        for action in menu.actions():
+            child = action.menu()
+            if child is None:
+                continue
+            if child.title() == title:
+                return child
+            found = UiRefactorTests._find_menu(child, title)
+            if found is not None:
+                return found
+        return None
+
     def _make_menu_host(self):
+        from meapet.desktop.dev_options import PetDevOptionsMixin
         from meapet.desktop.window_chrome import PetWindowChromeMixin
 
-        class MenuHost(QWidget, PetWindowChromeMixin):
+        class MenuHost(QWidget, PetWindowChromeMixin, PetDevOptionsMixin):
             def __init__(self):
                 super().__init__()
                 self.config = {
@@ -2086,6 +2097,8 @@ class UiRefactorTests(unittest.TestCase):
         return self._track(MenuHost())
 
     def test_context_menu_groups_secondary_actions_into_submenus(self) -> None:
+        from meapet.desktop.dev_options import version_action_text
+
         host = self._make_menu_host()
         menu = self._track(host._build_context_menu())
         self.assertIsInstance(menu, QMenu)
@@ -2100,23 +2113,72 @@ class UiRefactorTests(unittest.TestCase):
                 "养成状态",
                 "看看我在干嘛",
                 "切换表情",
-                "识图与观察",
-                "开启语音输入",
-                "显示与立绘",
-                "定位与穿透",
                 "设置与数据",
                 "关于",
+                version_action_text(),
                 "退出",
             ],
+            "根层只留高频动作；要写 config 的都收进「设置与数据」（人工 2026-10-06 点的形状）",
         )
         submenu_labels = {
             action.menu().title()
             for action in menu.actions()
             if action.menu() is not None
         }
+        self.assertEqual(submenu_labels, {"切换表情", "设置与数据"})
+
+        settings_menu = self._find_menu(menu, "设置与数据")
         self.assertEqual(
-            submenu_labels,
-            {"切换表情", "识图与观察", "显示与立绘", "定位与穿透", "设置与数据"},
+            [
+                action.text()
+                for action in settings_menu.actions()
+                if not action.isSeparator()
+            ][:4],
+            ["识图与观察", "开启语音输入", "显示与立绘", "定位与穿透"],
+            "三组设置子菜单 + 散落的语音输入开关，都排在原有设置项之前",
+        )
+        self.assertNotIn(
+            "开发者选项",
+            [action.text() for action in settings_menu.actions()],
+            "没解锁时这一支压根不存在",
+        )
+
+    def test_context_menu_version_action_is_the_unlock_entry(self) -> None:
+        """版本号那一发认 objectName：菜单窗口靠它决定「点了不关窗」。"""
+        from meapet.desktop.dev_options import VERSION_ACTION_NAME, version_action_text
+
+        host = self._make_menu_host()
+        menu = self._track(host._build_context_menu())
+        version = next(
+            action
+            for action in menu.actions()
+            if action.text() == version_action_text()
+        )
+        self.assertEqual(version.objectName(), VERSION_ACTION_NAME)
+
+    def test_context_menu_shows_dev_branch_only_after_unlock(self) -> None:
+        from meapet.desktop.dev_options import DEV_MENU_LABELS
+
+        host = self._make_menu_host()
+        menu = self._track(host._build_context_menu())
+        settings_labels = [
+            action.text()
+            for action in self._find_menu(menu, "设置与数据").actions()
+            if not action.isSeparator()
+        ]
+        self.assertNotIn("开发者选项", settings_labels, "未解锁时这一支压根不存在")
+
+        host._dev_unlocked = True
+        unlocked = self._track(host._build_context_menu())
+        dev_menu = self._find_menu(unlocked, "开发者选项")
+        self.assertIsNotNone(dev_menu, "解锁后「设置与数据」里应多出这一支")
+        self.assertEqual(
+            [
+                action.text()
+                for action in dev_menu.actions()
+                if not action.isSeparator()
+            ],
+            list(DEV_MENU_LABELS),
         )
 
     def test_context_menu_opens_as_movable_standalone_window(self) -> None:
@@ -2137,13 +2199,11 @@ class UiRefactorTests(unittest.TestCase):
         self.assertTrue(flags & int(Qt.WindowStaysOnTopHint))
 
         # 根窗口只登记第一层分组；更深层目录在侧边面板打开后才按需创建。
+        # 归并后根层只剩两支：表情 + 设置与数据（其余设置项在后者面板里）。
         self.assertEqual(
             [title for _button, _menu, title in window._groups],
             [
                 "切换表情",
-                "识图与观察",
-                "显示与立绘",
-                "定位与穿透",
                 "设置与数据",
             ],
         )
@@ -2221,22 +2281,22 @@ class UiRefactorTests(unittest.TestCase):
         window = self._track(host._menu_window)
         root_height = window.height()
 
-        display_button = next(
-            button
-            for button, _menu, title in window._menu_groups
-            if title == "显示与立绘"
-        )
-        display_button.click()
+        def group_button(surface, title):
+            """按 surface 取那一层的分组按钮——`_menu_groups` 是各层自己的登记。"""
+            return next(
+                button for button, _menu, label in surface._menu_groups
+                if label == title
+            )
+
+        # 归并后「显示与立绘」不在根层了：先开「设置与数据」，级联往下多一层。
+        settings = group_button(window, "设置与数据")
+        settings.click()
         QApplication.processEvents()
         self.assertEqual(window.height(), root_height)
         self.assertEqual(len(window._submenu_panels), 1)
 
-        size_button = next(
-            button
-            for button, _menu, title in window._groups
-            if title == "窗口大小 · 100%"
-        )
-        size_button.click()
+        display = group_button(window._submenu_panels[0], "显示与立绘")
+        display.click()
         QApplication.processEvents()
         self.assertEqual(window.height(), root_height)
         self.assertEqual(len(window._submenu_panels), 2)
@@ -2244,16 +2304,19 @@ class UiRefactorTests(unittest.TestCase):
         self.assertEqual(second.parent_surface, first)
         self.assertEqual(second.placement_side, first.placement_side)
 
-        # 同层切换目录时复用级联深度，不累积已经关闭的面板。
-        vision_button = next(
-            button
-            for button, _menu, title in window._menu_groups
-            if title == "识图与观察"
-        )
-        vision_button.click()
+        size = group_button(second, "窗口大小 · 100%")
+        size.click()
         QApplication.processEvents()
-        self.assertEqual(len(window._submenu_panels), 1)
-        self.assertEqual(window._submenu_panels[0]._title, "识图与观察")
+        self.assertEqual(window.height(), root_height)
+        self.assertEqual(len(window._submenu_panels), 3)
+        self.assertEqual(window._submenu_panels[2].parent_surface, second)
+
+        # 同层切换目录时复用级联深度，不累积已经关闭的面板。
+        vision = group_button(first, "识图与观察")
+        vision.click()
+        QApplication.processEvents()
+        self.assertEqual(len(window._submenu_panels), 2)
+        self.assertEqual(window._submenu_panels[1]._title, "识图与观察")
         self.assertEqual(window.height(), root_height)
 
     def test_context_menu_side_panel_chooses_screen_safe_direction(self) -> None:

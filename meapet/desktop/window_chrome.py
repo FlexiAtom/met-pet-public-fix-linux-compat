@@ -345,6 +345,14 @@ class PetWindowChromeMixin:
         menu.addAction(snap_action)
         menu.addSeparator()
 
+        # 「设置与数据」先建出来：凡是要写 self.config 的项都挂它下面，根层只留高频动作
+        # （人工 2026-10-06 点的形状：根＝养成状态·看看我在干嘛·切换表情·设置与数据▸·关于·版本·退出）。
+        settings_menu = QMenu("设置与数据", self)
+        settings_menu.setIcon(standard_icon("settings"))
+        settings_menu.setObjectName("SettingsAndDataMenu")
+        apply_named_style(settings_menu, "MENU_STYLE")
+        settings_menu.setAccessibleName("设置与数据")
+
         expr_menu = QMenu("切换表情", self)
         expr_menu.setIcon(standard_icon("expression"))
         expr_menu.setObjectName("ExpressionMenu")
@@ -422,7 +430,7 @@ class PetWindowChromeMixin:
         standby_action = QAction(standby_text, self)
         standby_action.triggered.connect(self._toggle_standby)
         vision_menu.addAction(standby_action)
-        menu.addMenu(vision_menu)
+        settings_menu.addMenu(vision_menu)
 
         voice_enabled = self.config.get("voice_input", {}).get("enabled", False)
         voice_text = (
@@ -433,8 +441,7 @@ class PetWindowChromeMixin:
         voice_action = QAction(voice_text, self)
         voice_action.setToolTip("开启后输入框出现麦克风按钮，点击录音转文字（本地离线）")
         voice_action.triggered.connect(self._toggle_voice_input)
-        menu.addAction(voice_action)
-        menu.addSeparator()
+        settings_menu.addAction(voice_action)
 
         display_menu = QMenu("显示与立绘", self)
         display_menu.setIcon(standard_icon("display"))
@@ -473,7 +480,7 @@ class PetWindowChromeMixin:
         size_action.triggered.connect(self._open_size_dialog)
         size_menu.addAction(size_action)
         display_menu.addMenu(size_menu)
-        menu.addMenu(display_menu)
+        settings_menu.addMenu(display_menu)
 
         # 穿透是写侧（我们告诉系统怎么对待指针）、定位是读侧（我们想知道系统把我们
         # 安置在哪），同属"surface 与合成器之间的那层合同"，故并为一个子菜单。
@@ -494,13 +501,8 @@ class PetWindowChromeMixin:
         )
         fidus_action.triggered.connect(self._toggle_fidus_enabled)
         locate_menu.addAction(fidus_action)
-        menu.addMenu(locate_menu)
+        settings_menu.addMenu(locate_menu)
 
-        settings_menu = QMenu("设置与数据", self)
-        settings_menu.setIcon(standard_icon("settings"))
-        settings_menu.setObjectName("SettingsAndDataMenu")
-        apply_named_style(settings_menu, "MENU_STYLE")
-        settings_menu.setAccessibleName("设置与数据")
         auto_started = self._is_auto_start()
         auto_action = QAction("开机自启", self)
         auto_action.setCheckable(True)
@@ -554,6 +556,9 @@ class PetWindowChromeMixin:
         reset_action.setIcon(standard_icon("reset"))
         reset_action.triggered.connect(self._reset_memory)
         settings_menu.addAction(reset_action)
+        if getattr(self, "_dev_unlocked", False):
+            # 未解锁时这一支压根不存在（不是禁用摆在那儿）
+            settings_menu.addMenu(self._dev_build_menu())
         menu.addMenu(settings_menu)
 
         menu.addSeparator()
@@ -561,6 +566,8 @@ class PetWindowChromeMixin:
         about_action.setIcon(standard_icon("about"))
         about_action.triggered.connect(self._show_about)
         menu.addAction(about_action)
+
+        menu.addAction(self._dev_build_version_action())
 
         quit_action = QAction("退出", self)
         quit_action.setIcon(standard_icon("quit"))

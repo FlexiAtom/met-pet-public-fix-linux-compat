@@ -65,6 +65,7 @@ from meapet.desktop.chat_flow import PetChatFlowMixin
 from meapet.desktop.control_bridge import PetControlBridgeMixin
 from meapet.desktop.interaction import PetInteractionMixin
 from meapet.desktop.window_chrome import PetWindowChromeMixin
+from meapet.desktop.dev_options import PetDevOptionsMixin
 from meapet.desktop.render_host import PetRenderHostMixin, calculate_drag_position
 from meapet.desktop.config_bridge import PetConfigBridgeMixin
 from meapet.desktop.voice_mixin import PetVoiceMixin
@@ -130,6 +131,7 @@ class MeaPet(
     PetWindowChromeMixin,
     PetRenderHostMixin,
     PetConfigBridgeMixin,
+    PetDevOptionsMixin,
     QWidget,
 ):
     """梅尔桌宠主窗口"""

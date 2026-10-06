@@ -992,12 +992,13 @@ class TestConfigAndWiring(unittest.TestCase):
     def test_menu_leaf_defaults_unchecked_and_follows_config(self):
         from PyQt5.QtWidgets import QApplication, QWidget
 
+        from meapet.desktop.dev_options import PetDevOptionsMixin
         from meapet.desktop.window_chrome import PetWindowChromeMixin
 
         app = QApplication.instance() or QApplication(sys.argv)
         del app
 
-        class Host(QWidget, PetWindowChromeMixin):
+        class Host(QWidget, PetWindowChromeMixin, PetDevOptionsMixin):
             # 菜单上还连着十几个别的手势，本用例只管「定位与穿透」那一片：
             # 其余按名给空实现，没点名的照常 AttributeError。
             _NOOP = (
@@ -1025,13 +1026,24 @@ class TestConfigAndWiring(unittest.TestCase):
             def _show_bubble(self, *_a, **_k):
                 pass
 
+        def find_menu(menu, title):
+            """归并后「定位与穿透」嵌在「设置与数据」里，根层直取找不到。"""
+            for act in menu.actions():
+                sub = act.menu()
+                if sub is None:
+                    continue
+                if sub.title() == title:
+                    return sub
+                hit = find_menu(sub, title)
+                if hit is not None:
+                    return hit
+            return None
+
         for enabled in (False, True):
             host = Host(enabled)
-            action = next(
-                a for a in host._build_context_menu().actions()
-                if a.menu() is not None and a.menu().title() == "定位与穿透"
-            )
-            leaf = action.menu().actions()[0]
+            locate = find_menu(host._build_context_menu(), "定位与穿透")
+            self.assertIsNotNone(locate, "归并后这一支还在菜单树里")
+            leaf = locate.actions()[0]
             self.assertEqual(leaf.text(), "启用fidus")
             self.assertTrue(leaf.isCheckable())
             self.assertEqual(leaf.isChecked(), enabled)

@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from meapet.desktop.dev_options import VERSION_ACTION_NAME
 from meapet.desktop.screen_geometry import available_geometry_for, clamp_position
 from meapet.desktop.theme import PET_MENU_WINDOW_STYLE
 from meapet.ui_theme import ensure_application_fonts, apply_named_style
@@ -538,6 +539,10 @@ class PetMenuWindow(QWidget):
 
     def _activate(self, action) -> None:
         if not action.isEnabled():
+            return
+        if action.objectName() == VERSION_ACTION_NAME:
+            # 版本号是"原地连点 5 次"的解锁入口：关窗会把每次点击都变成"重开一遍菜单"。
+            action.trigger()
             return
         self.close()
         # 让整组菜单窗口先收起，再执行动作（部分动作会弹出模态对话框）。
