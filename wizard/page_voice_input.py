@@ -43,6 +43,11 @@ from meapet.ui_theme import apply_named_style
 from wizard.widgets import WheelSafeComboBox
 
 
+# 设备下拉的不可用标注：产品录音固定按 (VOICE_INPUT_SAMPLE_RATE, 单声道) 开流，
+# 实测同一批设备会分别栽在采样率（Errno -9997）与通道数（-9998）上，所以按整组格式写。
+# 提示语引用的那串字与列表里显示的标签必须同源。
+_UNSUPPORTED_TAG = f"不支持 {VOICE_INPUT_SAMPLE_RATE // 1000}kHz 单声道"
+
 # 档位文案：体积与加载差是本机实测（2026-10-05，两档各真下真载过一次），
 # 落在磁盘上的模型文件本身仍以 meapet.paths.VOICE_ASR_MODEL_FILES 为唯一真值。
 # fp32 的**精度优势没有证据**（三条样本读得反而更短更糊），所以文案只报代价。
@@ -200,8 +205,7 @@ class VoiceInputPage(QFrame):
         self.settings_layout.addWidget(self.device_combo)
         mic_note = QLabel(
             "自动按系统默认选路。录到的声音不对（虚拟麦克风、静音设备）时改成你那台。\n"
-            f"标了「不支持 {VOICE_INPUT_SAMPLE_RATE // 1000}kHz」的设备选了也不会生效，"
-            "运行时会回落自动选路。"
+            f"标了「{_UNSUPPORTED_TAG}」的设备选了也不会生效，运行时会回落自动选路。"
         )
         mic_note.setObjectName("HelperText")
         mic_note.setWordWrap(True)
@@ -286,10 +290,9 @@ class VoiceInputPage(QFrame):
         self.device_combo.clear()
         self.device_combo.addItem("自动（推荐）", None)
         known: list[int] = []
-        rate_khz = VOICE_INPUT_SAMPLE_RATE // 1000
         for index, name, channels, supported in list_input_devices():
             known.append(index)
-            unsupported = "" if supported else f" · 不支持 {rate_khz}kHz"
+            unsupported = "" if supported else f" · {_UNSUPPORTED_TAG}"
             self.device_combo.addItem(
                 f"{name}（{channels} 声道 · index {index}{unsupported}）", index
             )

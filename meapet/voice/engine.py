@@ -208,9 +208,9 @@ class VoiceEngine(QThread):
     def _pick_mic_index(self, p_audio) -> int:
         """用户指定的设备优先；那台不可用时回落自动选路（出声，不闷掉）。
 
-        "不可用"有两种，实测都撞到过，日志须分开点名：
-        设备压根枚举不到/没有输入通道，或设备在但开不了 ``sample_rate``（hw 固定 48k
-        的内置麦就是这一类，真开流报 Errno -9997）。
+        "不可用"有两种，实测都撞到过，日志须分开点名：设备压根枚举不到/没有输入通道，
+        或设备在但开不了这个格式——真开流按 (16000 Hz, 单声道) 试过，同一批设备分别报
+        Errno -9997（采样率）与 -9998（通道数），所以理由按整组格式写，别只指采样率。
         """
         if self._input_device_index is None:
             return self._find_mic_device(p_audio)
@@ -226,7 +226,7 @@ class VoiceEngine(QThread):
         elif not _device_supports_input(
             p_audio, self._input_device_index, self._sample_rate, self._channels
         ):
-            reason = f"不支持 {self._sample_rate} Hz 输入"
+            reason = f"不支持 {self._sample_rate} Hz/{self._channels} 声道输入"
 
         if not reason:
             return self._input_device_index
