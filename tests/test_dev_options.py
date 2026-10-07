@@ -172,13 +172,82 @@ class VoiceTestTests(unittest.TestCase):
         self.assertEqual(idle.toggles, 0, "没在录就别再 toggle 一次")
 
 
+class FakeTTS:
+    """真 MeaTTS 的那几个读数字段：本 mixin 只问它们，不问合成本身。"""
+
+    def __init__(self, *, enabled=True, healthy=True, voice_lang="jp"):
+        self.enabled = enabled
+        self.engine = "gpt_sovits"
+        self.voice_lang = voice_lang
+        self.python_exe = "/home/x/GPT-SoVITS-v2pro/runtime/bin/python"
+        self.output_dir = "/tmp/cache"
+        self.gpt_path = "models/GPT_weights/a.ckpt"
+        self.sovits_path = "models/SoVITS_weights/a.pth"
+        self._healthy = healthy
+
+    def health_check(self):
+        return self._healthy
+
+    def _normalize_voice_lang(self, lang=""):
+        return lang or self.voice_lang
+
+
 class SpeechTestTests(unittest.TestCase):
     def test_it_reuses_the_real_speak_chain(self) -> None:
         host = DevHost()
+        host.tts = FakeTTS(voice_lang="jp")
         host._dev_speech_test()
         text, duration, _mood = host.spoken[0]
-        self.assertIn("开发者选项测试", text)
+        self.assertIn("テスト", text, "jp 声线该拿到 jp 那句")
         self.assertGreaterEqual(duration, 2000)
+
+    def test_the_sentence_follows_the_configured_voice_language(self) -> None:
+        """写死中文句配 jp 声线会被 speak() 里的语言闸门跳过 ⇒ 测试词跟着 voice_lang 走。"""
+        from meapet.desktop.dev_options import dev_test_sentence
+
+        self.assertIn("開発者", dev_test_sentence("jp"))
+        self.assertIn("开发者选项测试", dev_test_sentence("zh"))
+        self.assertIn("Developer", dev_test_sentence("en"))
+        # 认不出的语言（含空/`auto`）回到中文那句，而不是抛
+        self.assertIn("开发者选项测试", dev_test_sentence("auto"))
+        self.assertIn("开发者选项测试", dev_test_sentence(""))
+
+    def test_every_test_sentence_passes_the_language_gate(self) -> None:
+        """闸门与测试词是两处代码，这里钉住它们不打架。"""
+        from meapet.desktop.dev_options import DEV_TEST_SENTENCES
+        from meapet.tts.language_policy import should_skip_tts_due_to_language_mismatch
+
+        for lang, sentence in DEV_TEST_SENTENCES.items():
+            with self.subTest(lang=lang):
+                self.assertFalse(
+                    should_skip_tts_due_to_language_mismatch(sentence, lang),
+                    f"{lang} 的测试词被自己的语言闸门跳过了",
+                )
+
+    def test_broken_prerequisites_say_which_one_instead_of_looking_like_success(self) -> None:
+        """前置不齐时那条链回退成文字气泡，与"成功但没配音"同形——必须把判据写进气泡。"""
+        host = DevHost()
+        host.tts = FakeTTS(healthy=False)
+        host._dev_speech_test()
+        self.assertEqual(host.spoken, [], "前置不齐不该把活交给注定回退的那条链")
+        bubble = " ".join(host.bubbles)
+        self.assertIn("朗读不会出声", bubble)
+        self.assertIn("engine=gpt_sovits", bubble)
+        self.assertIn("python=python", bubble)
+        self.assertIn("前置=不齐", bubble)
+
+    def test_disabled_tts_also_reports_instead_of_falling_back(self) -> None:
+        host = DevHost()
+        host.tts = FakeTTS(enabled=False)
+        host._dev_speech_test()
+        self.assertEqual(host.spoken, [])
+        self.assertIn("enabled=False", " ".join(host.bubbles))
+
+    def test_missing_tts_object_does_not_raise(self) -> None:
+        host = DevHost()  # 没有 .tts
+        host._dev_speech_test()
+        self.assertEqual(host.spoken, [])
+        self.assertIn("朗读不会出声", " ".join(host.bubbles))
 
 
 class ScreenInfoTests(unittest.TestCase):

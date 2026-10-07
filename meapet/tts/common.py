@@ -406,6 +406,11 @@ def _get_import_name(pkg_name: str) -> str:
 
 
 # GPT-SoVITS-CPUFast 推理所需的基础 Python 包
+# 清单的口径是"推理子进程 gsv_infer.py 的 import 闭包"，不是整合包 requirements.txt：
+# av / gradio 曾列在这里，但整合包全树 `import gradio` 只出现在 webui 侧
+# （webui.py、inference_webui.py、inference_webui_fast.py、tools/my_utils.py、subfix_webui.py），
+# `import av` 零命中；实测把这两项从闸门里去掉后，缺它们的 runtime 直跑 gsv_infer.py 照常出 wav
+# （25.9s 合成 3.86s 音频）。留着它们等于**把可用的 env 判死**——闸门说不可用、推理说可用。
 GSV_REQUIRED_PACKAGES = [
     "torch",
     "torchaudio",
@@ -415,13 +420,11 @@ GSV_REQUIRED_PACKAGES = [
     "PyYAML",
     "tqdm",
     "pypinyin",
-    "av",
     "fast_langdetect>=0.3.1",
     "split-lang",
     "wordsegment",
     "tokenizers",
     "transformers",
-    "gradio",
     "pydantic<=2.10.6",
     "jieba",
 ]

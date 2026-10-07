@@ -94,6 +94,17 @@ def gsv_python_candidates(
         candidates.append(
             Path(prefix_python(home_path / directory / "runtime"))
         )
+        # 整合包的 zip 解出来通常带一层版本/日期目录
+        # （~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime），只写上一层会漏这一档，
+        # 漏了以后候选表下一格正好命中 ~/miniconda3 那种没装依赖的解释器。
+        # 只在那一个目录里 glob 一层，不扫盘。
+        try:
+            candidates.extend(
+                Path(prefix_python(entry))
+                for entry in sorted((home_path / directory).glob("*/runtime"))
+            )
+        except OSError:
+            pass
 
     for root_key in ("ProgramFiles", "ProgramData", "LOCALAPPDATA"):
         root = str(env.get(root_key) or "").strip()

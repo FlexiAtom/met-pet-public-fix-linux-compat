@@ -28,7 +28,24 @@ DEV_UNLOCK_CLICKS = 5
 DEV_UNLOCK_WINDOW_S = 10.0
 #: 导出落点（相对数据目录）——与日志同侧，不往用户没预期的地方写。
 EXPORTS_DIR = "exports"
-DEV_TEST_SENTENCE = "开发者选项测试：你好，我是梅尔。"
+#: 朗读测试的测试词跟着 tts 的目标语言走：`speak()` 在合成前有一道语言闸门
+#: （`language_policy.should_skip_tts_due_to_language_mismatch`），非目标语言的文本直接跳过不出声。
+#: 写死一句中文去测 voice_lang=jp 的机器，永远只能得到"跳过"——那是这句不合格，不是朗读坏了。
+DEV_TEST_SENTENCES = {
+    "jp": "開発者オプションのテスト。こんにちは、メールです。",
+    "zh": "开发者选项测试：你好，我是梅尔。",
+    "en": "Developer options test. Hello, I am Mea.",
+}
+
+
+def dev_test_sentence(lang: object = "") -> str:
+    from meapet.config.normalizers import canonical_tts_language
+
+    return (
+        DEV_TEST_SENTENCES.get(canonical_tts_language(lang) or "zh")
+        or DEV_TEST_SENTENCES["zh"]
+    )
+
 DEV_VOICE_SECONDS = 4
 DEV_UNLOCKED_HINT = "开发者选项已解锁（本次运行有效）"
 # 日志导出里除了 LOG_DIR，还想要这几个（同属数据目录，散在旁边）
@@ -152,13 +169,28 @@ class PetDevOptionsMixin:
     # ---------------------------------------------------------------- ② 朗读
     def _dev_speech_test(self) -> None:
         tts = getattr(self, "tts", None)
-        log.info(
-            f"[dev] tts.enabled={getattr(tts, 'enabled', None)} "
+        health = bool(tts.health_check()) if tts is not None else False
+        facts = (
+            f"enabled={getattr(tts, 'enabled', None)} "
             f"engine={getattr(tts, 'engine', None)} "
-            f"output_dir={getattr(tts, 'output_dir', None)}"
+            f"python={os.path.basename(str(getattr(tts, 'python_exe', '') or '')) or '未设'} "
+            f"前置={'齐' if health else '不齐'}"
         )
-        # 复用正式那条链：合成失败/未启用会回退成文字气泡，正好看见是哪一档
-        self._speak_and_show(DEV_TEST_SENTENCE, 2500)
+        log.info(
+            f"[dev] 朗读测试 {facts} "
+            f"output_dir={getattr(tts, 'output_dir', None)} "
+            f"GPT={getattr(tts, 'gpt_path', None)} "
+            f"SoVITS={getattr(tts, 'sovits_path', None)}"
+        )
+        if tts is None or not getattr(tts, "enabled", False) or not health:
+            # 这条链在前置不齐时回退成文字气泡，而那形状与"成功但这条没配音"完全一样，
+            # 看不出坏在哪一格——开发者选项存在的意义就是把那一格写出来。
+            self._dev_say(f"朗读不会出声：{facts}")
+            return
+        # 测试词用 speak() 自己那格算出来的目标语言（同一个 `_normalize_voice_lang`，
+        # 不在这里另立一份语言真值）：合成前有语言闸门，中文句配 jp 声线必被跳过。
+        sentence = dev_test_sentence(tts._normalize_voice_lang())
+        self._speak_and_show(sentence, 2500)
 
     # -------------------------------------------------------- ③ fidus 屏幕信息
     def _dev_print_screen_info(self) -> None:

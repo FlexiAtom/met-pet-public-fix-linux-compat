@@ -98,6 +98,40 @@ def test_gsv_python_candidates_cover_the_native_layout(tmp_path):
     assert str(foreign) not in candidates, "另一平台的形状不该出现在候选里"
 
 
+def test_gsv_python_candidates_include_the_extracted_layer(tmp_path):
+    """整合包解出来通常带一层版本/日期目录，候选表必须认这一档。
+
+    出处：Athena 件 meapet/tts-speech-false-missing-deps。从前只写到
+    ``~/GPT-SoVITS-v2pro/runtime``，而实际解压形状是
+    ``~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime``。上面那格落空后，
+    候选表往后走正好命中 ``~/miniconda3`` 那种没装依赖的解释器——闸门报
+    「缺少 14 个依赖」，而带 runtime 的那台机器其实能合成。
+    """
+    from meapet.tts.common import prefix_python
+    from meapet.tts.service import gsv_python_candidates
+
+    home = tmp_path / "home"
+    bundled = home / "GPT-SoVITS-v2pro" / "GPT-SoVITS-v2pro-bundle" / "runtime"
+    (bundled / "bin").mkdir(parents=True)
+    (bundled / "bin" / "python").write_text("", encoding="utf-8")
+    conda_base = home / "miniconda3"
+    (conda_base / "bin").mkdir(parents=True)
+    (conda_base / "bin" / "python").write_text("", encoding="utf-8")
+
+    candidates = list(
+        gsv_python_candidates(
+            home=home, environ={}, executable=tmp_path / "python", frozen=True
+        )
+    )
+
+    # 名字里带什么日期不重要——所以判据是"多一层也能认"，不是把某个包名枚举进代码。
+    nested = str(Path(prefix_python(bundled)))
+    assert nested in candidates, "解压带一层版本/日期目录时必须进候选"
+    assert nested in candidates[: candidates.index(str(Path(prefix_python(conda_base))))], (
+        "真装了依赖的那个 runtime 得排在裸 conda base 前面"
+    )
+
+
 def test_windows_shapes_are_only_built_by_the_helper():
     """改一处就够：向导/服务里再出现 Windows 形状的字面量，POSIX 分支必然漏掉。"""
     offenders = []
