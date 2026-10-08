@@ -29,15 +29,19 @@ if str(ROOT) not in sys.path:
 from meapet import doctor  # noqa: E402
 from meapet.tts.diagnostics import speech_facts, tts_for_engine  # noqa: E402
 
+#: 默认那一臂（`--skip-tts`）的项序，逐格与 `doctor.collect` 对齐；layer 那一格就在 backend 之后。
 BASE_ITEMS = [
     "runtime",
     "paths",
     "config",
+    "llm",
     "display_env",
     "backend",
+    "layer_shim",
     "fidus",
     "audio",
     "input_devices",
+    "asr",
     "screens",
     "log_tail",
 ]
@@ -58,12 +62,12 @@ class ItemShapeTest(unittest.TestCase):
 
     def test_default_has_layer_and_no_tts_when_skipped(self) -> None:
         names = [item.name for item in self._items(skip_tts=True)]
-        self.assertEqual(names, BASE_ITEMS[:5] + ["layer_shim"] + BASE_ITEMS[5:])
+        self.assertEqual(names, BASE_ITEMS)
 
     def test_skip_layer_drops_the_one_that_actually_inits(self) -> None:
         names = [item.name for item in self._items(skip_tts=True, skip_layer=True)]
         self.assertNotIn("layer_shim", names)
-        self.assertEqual(names, BASE_ITEMS)
+        self.assertEqual(names, [n for n in BASE_ITEMS if n != "layer_shim"])
 
     def test_both_tts_engines_get_their_own_row(self) -> None:
         """engine 那格在配置里只能是一个值，而两路的坏法完全不同：合起来看只会互相遮蔽。"""
@@ -141,6 +145,27 @@ class ReadOnlyTest(unittest.TestCase):
         ]
         self.assertEqual(bad, [], f"这些键名字像凭据，不该进白名单：{bad}")
 
+    def test_llm_row_prints_no_credential_and_no_raw_endpoint(self) -> None:
+        """新加的 `llm` 那格是**唯一一处会碰凭据的探测**，所以它的红线单独钉：
+        值不印、`api_base` 原文也不印（有人把 token 写在查询串里），只印归族结果与在场布尔。"""
+        config = {"llm": {"api_key": "sk-doctor-never-print",
+                          "api_base": "https://api.deepseek.com/v1?token=leak-me",
+                          "model": "deepseek-chat"}}
+        row = doctor._llm(config)
+        self.assertNotIn("sk-doctor-never-print", row)
+        self.assertNotIn("deepseek.com", row)
+        self.assertNotIn("leak-me", row)
+        self.assertIn("direct/HTTP key=在场(来源=配置)", row)
+
+    def test_llm_row_states_its_own_scope(self) -> None:
+        """这格测不到 agent 链接那一路的凭据——不写明就会把"缺席"读成"这台机器没配任何东西"。"""
+        from meapet.doctor import collect
+
+        row = next(item for item in collect({}, skip_tts=True, skip_layer=True)
+                   if item.name == "llm")
+        self.assertIn("只覆盖 direct/HTTP", row.judge)
+        self.assertIn("direct/HTTP", row.value)
+
     def test_json_format_reports_the_whitelist_only(self) -> None:
         """第二道：即便有人放宽了白名单，`scrub_secrets` 也在打印之前——报告里不该出现凭据值。"""
         with tempfile.TemporaryDirectory() as td:
@@ -159,7 +184,7 @@ class ReadOnlyTest(unittest.TestCase):
             payload = json.loads(out.getvalue())  # stdout 必须只有 JSON
             self.assertNotIn("sk-doctor-should-not-print", out.getvalue())
             self.assertNotIn("sk-tts-key", out.getvalue())
-            self.assertEqual(len(payload["items"]), len(BASE_ITEMS) + 1)
+            self.assertEqual(len(payload["items"]), len(BASE_ITEMS))
 
     def test_product_prints_are_moved_off_stdout(self) -> None:
         """`wayland_layer.is_available()` 那一类会直接 print；混进报告就没法整块贴回来。"""
@@ -182,6 +207,27 @@ class SharedTruthTest(unittest.TestCase):
         expected = speech_facts("vits", tts_for_engine(config, "vits"))
         self.assertIn("前置=不齐", row)
         self.assertIn(expected, row)
+
+    def test_doctor_llm_row_carries_the_product_family_verdict(self) -> None:
+        """`family=` 必须是 `llm_endpoint_family()` 那个归族结果，不是 doctor 自己认字符串。"""
+        from meapet.config.store import llm_endpoint_family
+
+        config = {"llm": {"api_base": "https://api.deepseek.com/v1", "model": "deepseek-chat"}}
+        row = doctor._llm(config)
+        self.assertIn(llm_endpoint_family(config["llm"]), row)
+        self.assertIn("model=deepseek-chat", row)
+
+    def test_doctor_asr_row_asks_both_precisions_of_the_product_table(self) -> None:
+        """档位表与目录发现都用 `meapet.paths` 那一个真值；两档分开报是"下错档"那种坏法的判据。"""
+        from meapet.paths import VOICE_ASR_MODEL_FILES
+
+        config = {"voice_input": {"enabled": True, "precision": "fp32"}}
+        row = doctor._asr(config)
+        for precision in VOICE_ASR_MODEL_FILES:
+            self.assertIn(precision, row)
+        self.assertIn("配置档=fp32", row)
+        self.assertIn("fp32(配置档)", row)
+        self.assertIn("int8(另一档)", row)
 
 
 class EntryRoutingTest(unittest.TestCase):

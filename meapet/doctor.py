@@ -126,6 +126,63 @@ def _config_summary(config: dict) -> str:
     return f"读自 {config_path()} · " + " ".join(parts)
 
 
+def _llm(config: dict) -> str:
+    """对话 HTTP 那一路的只读判据：端点归族 + 模型名 + 密钥在场与否（**永不印值**）。
+
+    `api_base` 原文不印：有人把 token 写在查询串里，打出来就是外送。产品侧
+    `llm_endpoint_family()` 已经把"连的是哪一家"归成族名，够用且不携密。
+
+    这格**只覆盖 direct/HTTP 那一路**。agent 链接那一路的凭据在 `meapet/agent/factory.py:20`
+    的私有 `_resolve_secret` 加三张各不相同的 env 表里，doctor 复制它就是第二套真值——
+    所以读数里明写范围，别让"key=缺席"被读成"这台机器没配任何凭据"。
+    """
+    from meapet.config.store import llm_endpoint_family, resolve_direct_api_key
+
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    direct = llm.get("direct") if isinstance(llm.get("direct"), dict) else {}
+    agent = llm.get("agent") if isinstance(llm.get("agent"), dict) else {}
+    family = llm_endpoint_family(llm) or "未识别"
+    model = str(llm.get("model") or direct.get("model") or "").strip() or "未设"
+    in_file = any(
+        str(block.get("api_key") or "").strip() for block in (llm, direct, agent)
+    )
+    resolved = bool(resolve_direct_api_key(llm))
+    source = "配置" if in_file else ("环境变量" if resolved else "无")
+    return (
+        f"family={family} model={model} "
+        f"direct/HTTP key={'在场' if resolved else '缺席'}(来源={source})"
+    )
+
+
+def _asr(config: dict) -> str:
+    """语音输入的模型在场：按**两档**各问一次产品侧那一个真值。
+
+    分档报是因为产品自己那张表就写着这一怕（`meapet/paths.py` 注释：「下了 fp32 却仍读
+    int8」）。只报配置那一档的话，这种坏法读数上看起来"模型没下载"，实际是下错了档。
+    """
+    from meapet.paths import (
+        VOICE_ASR_MODEL_FILES,
+        find_voice_asr_model_dir,
+        normalize_voice_asr_precision,
+        project_path,
+        voice_asr_cache_dir,
+    )
+
+    vi = config.get("voice_input") if isinstance(config.get("voice_input"), dict) else {}
+    chosen = normalize_voice_asr_precision(vi.get("precision"))
+    roots = f"{voice_asr_cache_dir()} 与 {project_path('models', 'voice_asr')}"
+    parts = []
+    for precision in VOICE_ASR_MODEL_FILES:
+        found = find_voice_asr_model_dir(precision)
+        tag = "配置档" if precision == chosen else "另一档"
+        parts.append(f"{precision}({tag})={'在场' if found else '缺席'}")
+    return (
+        f"enabled={vi.get('enabled')} 配置档={chosen} "
+        + " ".join(parts)
+        + f" · 找过={roots}"
+    )
+
+
 def _display_env() -> str:
     def _flag(name: str) -> str:
         value = os.environ.get(name)
@@ -249,6 +306,13 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             lambda: _config_summary(config),
         ),
         _probe(
+            "llm",
+            "只覆盖 direct/HTTP 那一路：family 由产品侧 llm_endpoint_family() 归族，api_base 原文不印"
+            "（有人把 token 写在查询串里），key 只报在场/缺席与来源；agent 链接那一路的凭据在 "
+            "meapet/agent/factory.py 内部，doctor 不复制它，所以本格为缺席不代表整机无凭据",
+            lambda: _llm(config),
+        ),
+        _probe(
             "display_env",
             "环境变量只是线索：XDG_SESSION_TYPE=wayland 而 Qt 用 xcb 时窗口其实在 XWayland 上",
             _display_env,
@@ -257,6 +321,11 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             "backend",
             "产品自己算出的后端；只有 wayland 那一档才有 layer-shell 这条路",
             _backend,
+        ),
+        _probe(
+            "layer_shim",
+            "文件不在=打包没带上（找 MeaPet.spec）；文件在场但 init 非 0=这台机器的环境或库问题（找 runtime）",
+            _layer,
         ),
         _probe(
             "fidus",
@@ -274,6 +343,12 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             lambda: _input_devices(config),
         ),
         _probe(
+            "asr",
+            "两档各问一次是因为产品自己那张表就写着「下了 fp32 却仍读 int8」这一怕；"
+            "配置档=缺席 而另一档=在场 ⇒ 不是没下载，是下错了档。模型路径与档位表都取自 meapet.paths 那一个真值",
+            lambda: _asr(config),
+        ),
+        _probe(
             "screens",
             "屏幕几何只有建了 Qt 应用才取得到；platformName=offscreen 时这些数不是真桌面",
             lambda: _screens(with_gui),
@@ -284,15 +359,8 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             _log_tail,
         ),
     ]
-    if not skip_layer:
-        items.insert(
-            5,
-            _probe(
-                "layer_shim",
-                "文件不在=打包没带上（找 MeaPet.spec）；文件在场但 init 非 0=这台机器的环境或库问题（找 runtime）",
-                _layer,
-            ),
-        )
+    if skip_layer:
+        items = [item for item in items if item.name != "layer_shim"]
     if not skip_tts:
         # 两路各探一次：engine 那格在配置里只能是一个值，而两路的坏法完全不同
         # （GSV 坏在解释器与依赖，VITS 坏在权重水化），合起来看只会互相遮蔽。
