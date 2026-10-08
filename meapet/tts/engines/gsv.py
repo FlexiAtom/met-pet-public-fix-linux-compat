@@ -91,7 +91,7 @@ class TtsGsvMixin:
                 cmd,
                 input=payload_json.encode("utf-8"),
                 capture_output=True,
-                timeout=self.timeout,
+                timeout=self.gsv_timeout,
                 cwd=project_root(),
                 **hidden_subprocess_kwargs(),
             )
@@ -136,7 +136,12 @@ class TtsGsvMixin:
             return output_wav, result_lang
 
         except subprocess.TimeoutExpired:
-            log.error(f"TTS timeout ({self.timeout}s)")
+            # 超时的形状是"子进程还在干活"，不是"它坏了"：进度停在 audio_cache/_gsv_infer.log，
+            # 那句话是这次量到的最远一步，别把它跟"启动即失败"混成同一条日志。
+            log.error(
+                f"TTS timeout ({self.gsv_timeout}s)——推理子进程仍在运行被截停，"
+                f"走到哪一步看 audio_cache/_gsv_infer.log；句子更长或机器更慢就调 tts.timeout"
+            )
             return None, ""
         except json.JSONDecodeError as e:
             log.error(f"TTS JSON parse error: {type(e).__name__}")

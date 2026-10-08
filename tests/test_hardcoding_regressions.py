@@ -139,19 +139,22 @@ def test_chat_engine_has_no_dead_http_bridge_parameter():
 def test_gsv_runtime_discovery_has_no_developer_machine_or_dated_paths(
     tmp_path,
 ):
-    from meapet.tts.service import MeaTTS, gsv_python_candidates
+    from meapet.tts.service import MeaTTS, gsv_python_choices
 
     source = inspect.getsource(MeaTTS.__init__)
     assert "20250604" not in source
     assert not any(f"{drive}:" in source for drive in "CDE")
 
     conda_prefix = tmp_path / "conda-env"
-    candidates = gsv_python_candidates(
-        home=tmp_path / "home",
-        environ={"CONDA_PREFIX": str(conda_prefix)},
-        executable=tmp_path / "python",
-        frozen=False,
-    )
+    candidates = [
+        path
+        for path, _root in gsv_python_choices(
+            home=tmp_path / "home",
+            environ={"CONDA_PREFIX": str(conda_prefix)},
+            executable=tmp_path / "python",
+            frozen=False,
+        )
+    ]
 
     assert str(conda_prefix / "python.exe") in candidates
     assert all("20250604" not in candidate for candidate in candidates)

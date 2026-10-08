@@ -190,6 +190,10 @@ class PetDevOptionsMixin:
         # 测试词用 speak() 自己那格算出来的目标语言（同一个 `_normalize_voice_lang`，
         # 不在这里另立一份语言真值）：合成前有语言闸门，中文句配 jp 声线必被跳过。
         sentence = dev_test_sentence(tts._normalize_voice_lang())
+        # 气泡要等音频就绪才显示，而本地推理每句话都要重付一次冷启动（2026-10-08 本机
+        # 实测：25 字符整句 115.24s，其中 import+模型加载 64.6s）。不先说一声，点下去
+        # 就是一两分钟"没反应"——那形状和没修一模一样。
+        self._dev_say(f"开始朗读测试（本地冷启动约 1–2 分钟，不是卡死）：{facts}")
         self._speak_and_show(sentence, 2500)
 
     # -------------------------------------------------------- ③ fidus 屏幕信息

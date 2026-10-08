@@ -74,7 +74,7 @@ def test_gsv_python_candidates_cover_the_native_layout(tmp_path):
     平台上问的是两件不同的事。改法不是放宽成"任一即可"，而是正向钉本平台那侧、
     反向钉对面那侧（两台机器的形状都铺在磁盘上，才看得出有没有串味）。
     """
-    from meapet.tts.service import gsv_python_candidates
+    from meapet.tts.service import gsv_python_choices
 
     home = tmp_path / "home"
     runtime = home / "GPT-SoVITS" / "runtime"
@@ -84,12 +84,14 @@ def test_gsv_python_candidates_cover_the_native_layout(tmp_path):
     posix.write_text("", encoding="utf-8")
     windows.write_text("", encoding="utf-8")
 
-    candidates = gsv_python_candidates(
-        home=home,
-        environ={},
-        executable=tmp_path / "python",
-        frozen=True,
-    )
+    candidates = [
+        path for path, _root in gsv_python_choices(
+            home=home,
+            environ={},
+            executable=tmp_path / "python",
+            frozen=True,
+        )
+    ]
 
     native, foreign = (
         (windows, posix) if os.name == "nt" else (posix, windows)
@@ -108,7 +110,7 @@ def test_gsv_python_candidates_include_the_extracted_layer(tmp_path):
     「缺少 14 个依赖」，而带 runtime 的那台机器其实能合成。
     """
     from meapet.tts.common import prefix_python
-    from meapet.tts.service import gsv_python_candidates
+    from meapet.tts.service import gsv_python_choices
 
     home = tmp_path / "home"
     bundled = home / "GPT-SoVITS-v2pro" / "GPT-SoVITS-v2pro-bundle" / "runtime"
@@ -118,18 +120,50 @@ def test_gsv_python_candidates_include_the_extracted_layer(tmp_path):
     (conda_base / "bin").mkdir(parents=True)
     (conda_base / "bin" / "python").write_text("", encoding="utf-8")
 
-    candidates = list(
-        gsv_python_candidates(
+    choices = list(
+        gsv_python_choices(
             home=home, environ={}, executable=tmp_path / "python", frozen=True
         )
     )
+    candidates = [path for path, _root in choices]
 
     # 名字里带什么日期不重要——所以判据是"多一层也能认"，不是把某个包名枚举进代码。
     nested = str(Path(prefix_python(bundled)))
     assert nested in candidates, "解压带一层版本/日期目录时必须进候选"
-    assert nested in candidates[: candidates.index(str(Path(prefix_python(conda_base))))], (
+    conda = str(Path(prefix_python(conda_base)))
+    assert nested in candidates[: candidates.index(conda)], (
         "真装了依赖的那个 runtime 得排在裸 conda base 前面"
     )
+    # 布局根必须跟着这一格出来，且是含 runtime 的那一层——选路就靠它排序
+    assert dict(choices)[nested] == str(bundled.parent)
+
+
+def test_selection_prefers_an_interpreter_that_names_its_layout(tmp_path):
+    """`.venv` 排在表头，但它旁边没有整合包 ⇒ 子进程报 GSV root not found。
+
+    出处：2026-10-08 08:36 现场——依赖被装进产品自己的 venv 后闸门放行，
+    选路只看"解释器在不在"，于是选了说不出布局根的那一格，子进程 0.1s 失败。
+    """
+    from meapet.tts.service import select_gsv_python
+
+    venv = str(tmp_path / ".venv" / "bin" / "python")
+    runtime = str(tmp_path / "GPT-SoVITS-v2pro" / "bundle" / "runtime" / "bin" / "python")
+    choices = [(venv, ""), (runtime, str(tmp_path / "GPT-SoVITS-v2pro" / "bundle"))]
+
+    assert select_gsv_python(choices, exists=lambda _p: True) == (runtime, choices[1][1])
+
+
+def test_selection_falls_back_when_no_candidate_names_a_layout():
+    """没有整合包布局时**不改变**既有行为：仍选第一个存在的（conda/venv 装法照旧）。"""
+    from meapet.tts.service import select_gsv_python
+
+    conda = "/home/x/miniconda3/envs/GPTSoVits/bin/python"
+    other = "/home/x/miniconda3/bin/python"
+    picked = select_gsv_python([(conda, ""), (other, "")], exists=lambda _p: True)
+    assert picked == (conda, "")
+
+    assert select_gsv_python([], exists=lambda _p: True) == ("", "")
+    assert select_gsv_python([(conda, "")], exists=lambda _p: False) == ("", "")
 
 
 def test_windows_shapes_are_only_built_by_the_helper():

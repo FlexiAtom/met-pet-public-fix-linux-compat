@@ -12,7 +12,7 @@ import shutil
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Iterable, Mapping, Optional
 
 from meapet.config.defaults import (
     DEFAULT_GSV_GPT_MODEL,
@@ -33,6 +33,7 @@ from meapet.tts.common import (
     DEFAULT_VITS_CONFIG_NAME,
     DEFAULT_VITS_MODEL_NAME,
     DEFAULT_VITS_SPEAKER,
+    GSV_INFER_TIMEOUT_FLOOR_S,
     auto_install_gsv_deps,
     is_git_lfs_pointer,
     is_model_artifact_ready,
@@ -60,30 +61,31 @@ from meapet.tts.language_policy import (
 from meapet.tts.translation import TranslationService
 
 
-def gsv_python_candidates(
+def _gsv_python_with_layout(
     *,
     home: str | os.PathLike[str] | None = None,
     environ: Mapping[str, str] | None = None,
     executable: str | os.PathLike[str] | None = None,
     frozen: bool | None = None,
-) -> tuple[str, ...]:
-    """返回可移植的 GPT-SoVITS Python 候选路径。
+) -> tuple[tuple[Path, str], ...]:
+    """候选解释器 + 它是**从哪套整合包布局**推出来的（推不出就给空串）。
 
-    不扫描整块磁盘，也不假设开发者盘符或某个发布日期。环境变量、当前用户
-    目录和 Conda 的标准目录足以覆盖向导安装与手工解压场景；源码模式最后才
-    回落到当前解释器。
+    第二个值只参与排序，不会被当成根路径交给子进程——"根到底在哪"仍由
+    ``gsv_infer.py`` 按 ``GPT_SoVITS/TTS_infer_pack`` 标记上溯，那是唯一判据
+    （这里不能复用它的判定：`gsv_infer.py:13` 明写子进程里绝不能 import meapet.*）。
     """
     env = dict(os.environ if environ is None else environ)
     home_path = Path(home or os.path.expanduser("~"))
     current_executable = Path(executable or sys.executable)
     is_frozen = _is_frozen() if frozen is None else bool(frozen)
 
-    candidates: list[Path] = []
+    # (解释器, 整合包布局根) —— 空串表示"这格候选说不出根"
+    candidates: list[tuple[Path, str]] = []
     for key in ("CONDA_PREFIX", "VIRTUAL_ENV"):
         prefix = str(env.get(key) or "").strip()
         if prefix:
             candidates.extend(
-                (Path(prefix) / "python.exe", Path(prefix) / "bin" / "python")
+                [(Path(prefix) / "python.exe", ""), (Path(prefix) / "bin" / "python", "")]
             )
 
     for directory in (
@@ -91,8 +93,9 @@ def gsv_python_candidates(
         "GPT-SoVITS-v2pro",
         "GPT_SoVITS",
     ):
+        layout_root = home_path / directory
         candidates.append(
-            Path(prefix_python(home_path / directory / "runtime"))
+            (Path(prefix_python(layout_root / "runtime")), str(layout_root))
         )
         # 整合包的 zip 解出来通常带一层版本/日期目录
         # （~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime），只写上一层会漏这一档，
@@ -100,8 +103,8 @@ def gsv_python_candidates(
         # 只在那一个目录里 glob 一层，不扫盘。
         try:
             candidates.extend(
-                Path(prefix_python(entry))
-                for entry in sorted((home_path / directory).glob("*/runtime"))
+                (Path(prefix_python(entry)), str(entry.parent))
+                for entry in sorted(layout_root.glob("*/runtime"))
             )
         except OSError:
             pass
@@ -109,8 +112,9 @@ def gsv_python_candidates(
     for root_key in ("ProgramFiles", "ProgramData", "LOCALAPPDATA"):
         root = str(env.get(root_key) or "").strip()
         if root:
+            layout_root = Path(root) / "GPT-SoVITS"
             candidates.append(
-                Path(prefix_python(Path(root) / "GPT-SoVITS" / "runtime"))
+                (Path(prefix_python(layout_root / "runtime")), str(layout_root))
             )
 
     for conda_root in (
@@ -119,29 +123,75 @@ def gsv_python_candidates(
     ):
         candidates.extend(
             (
-                Path(prefix_python(conda_root / "envs" / "GPTSoVits")),
-                Path(prefix_python(conda_root / "envs" / "gpt-sovits")),
-                Path(prefix_python(conda_root)),
+                (Path(prefix_python(conda_root / "envs" / "GPTSoVits")), ""),
+                (Path(prefix_python(conda_root / "envs" / "gpt-sovits")), ""),
+                (Path(prefix_python(conda_root)), ""),
             )
         )
 
     if not is_frozen:
-        candidates.append(current_executable)
+        candidates.append((current_executable, ""))
         for command in ("python", "python3"):
             found = shutil.which(command)
             if found:
-                candidates.append(Path(found))
+                candidates.append((Path(found), ""))
 
-    result: list[str] = []
+    result: list[tuple[Path, str]] = []
     seen: set[str] = set()
-    for candidate in candidates:
+    for candidate, layout_root in candidates:
         value = str(candidate)
         key = os.path.normcase(os.path.abspath(value))
         if key in seen:
             continue
         seen.add(key)
-        result.append(value)
+        result.append((candidate, layout_root))
     return tuple(result)
+
+
+def gsv_python_choices(
+    *,
+    home: str | os.PathLike[str] | None = None,
+    environ: Mapping[str, str] | None = None,
+    executable: str | os.PathLike[str] | None = None,
+    frozen: bool | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """候选表的可读视野： ``(解释器, 它来自的整合包布局根或空串)``。
+
+    不扫描整块磁盘，也不假设开发者盘符或某个发布日期。环境变量、当前用户
+    目录和 Conda 的标准目录足以覆盖向导安装与手工解压场景；源码模式最后才
+    回落到当前解释器。
+    """
+    return tuple(
+        (str(path), root)
+        for path, root in _gsv_python_with_layout(
+            home=home, environ=environ, executable=executable, frozen=frozen
+        )
+    )
+
+
+def select_gsv_python(
+    choices: Iterable[tuple[str, str]],
+    *,
+    exists=Path.is_file,
+) -> tuple[str, str]:
+    """从候选表挑解释器：先挑「自己说得出整合包布局」那格，再退回第一个存在的。
+
+    只看"解释器在不在"会选中产品自己的 venv——``VIRTUAL_ENV`` 排在表头，而依赖一旦
+    也装进那个 venv，闸门放行、子进程却在它旁边找不到 ``GPT_SoVITS`` 树，0.1s 就报
+    ``GSV root not found``（2026-10-08 08:36 实测）。布局是构造候选时就知道的事实，
+    所以这里拿它当**排序信号**，不新建"根在哪"的第二份真值——根仍由子进程按标记上溯。
+
+    返回 ``(解释器, 布局根或空串)``；一格都没有返回 ``("", "")``。
+    """
+    fallback = ""
+    for path, layout_root in choices:
+        if not path or is_pet_executable(path) or not exists(Path(path)):
+            continue
+        if layout_root:
+            return path, layout_root
+        if not fallback:
+            fallback = path
+    return (fallback, "") if fallback else ("", "")
 
 
 class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
@@ -162,18 +212,19 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
 
         if not self.python_exe:
-            # 去重 + 按存在过滤；跳过 pet exe
-            _seen = set()
-            for _p in gsv_python_candidates():
-                if is_pet_executable(_p) or not os.path.isfile(_p):
-                    continue
-                _rp = os.path.realpath(_p)
-                if _rp in _seen:
-                    continue
-                _seen.add(_rp)
-                self.python_exe = _p
-                log.info(f"Detected GPT-SoVITS: {_p}")
-                break
+            _picked, _layout_root = select_gsv_python(gsv_python_choices())
+            if _picked:
+                self.python_exe = _picked
+                if _layout_root:
+                    log.info(f"Detected GPT-SoVITS: {_picked} (整合包布局: {_layout_root})")
+                else:
+                    # 说不出布局根的解释器不是不能用，而是根得由子进程上溯或用户配置——
+                    # 上一条实测就是栽在这里：依赖齐了、旁边没树，子进程 0.1s 失败。
+                    log.warning(
+                        f"Detected GPT-SoVITS: {_picked}——旁边没有整合包布局，"
+                        "子进程将按 GPT_SoVITS/TTS_infer_pack 标记自行上溯找根；"
+                        "报 GSV root not found 就配 tts.gsv_root"
+                    )
             if not self.python_exe:
                 if _is_frozen():
                     log.warning(
@@ -286,6 +337,10 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
 
         # 子进程超时（秒）
         self.timeout = tts_cfg.get("timeout", 60)
+        # GSV 那份单列一格：本地推理每句话都要重付一次冷启动，实测下界比上面的默认值
+        # 大（读数见 common.GSV_INFER_TIMEOUT_FLOOR_S）。取 max 让显式配大的 tts.timeout
+        # 继续生效；云端 mimo 与 vits 不读这格——网络等待不该跟着推理机的冷启动一起涨。
+        self.gsv_timeout = max(float(self.timeout), GSV_INFER_TIMEOUT_FLOOR_S)
 
         # 翻译用于目标语朗读校正和"不受支持语言"兜底，不参与模型故障回退。
         self.translate_enabled = bool(tts_cfg.get("translate_to_jp", False))
