@@ -1515,10 +1515,14 @@ class PetChatFlowMixin:
             self._chat_worker = None
         self._complete_turn_context(context)
 
-    def _speak_and_show(self, text: str, duration_ms: int, mood: str = "neutral"):
-        """互动语音准备好后再同时显示气泡和播放；失败则回退文字。"""
+    def _speak_and_show(self, text: str, duration_ms: int, mood: str = "neutral", tts=None):
+        """互动语音准备好后再同时显示气泡和播放；失败则回退文字。
+
+        `tts` 传对象是给开发者选项用的：那两个测试键各自钉一个引擎，但不能为此去改
+        产品那格 `self.tts`（改了没人还原——气泡等音频的那一两分钟里没有安全还原点）。
+        """
         try:
-            tts = getattr(self, "tts", None)
+            tts = tts if tts is not None else getattr(self, "tts", None)
             if (
                 tts is None
                 or not getattr(tts, "enabled", False)

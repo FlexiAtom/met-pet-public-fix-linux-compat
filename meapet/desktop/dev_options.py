@@ -3,8 +3,11 @@
 三条口径写在这里，别处不复述：
 - 解锁**不跨启动保留、也不落配置键**：彩蛋的语义就是"每次启动重新解锁"，
   新增配置键等于把一次性的手势变成长期状态。
-- 五项全部**本地**：只读盘、只写盘、只用已有的录音/合成链路，不新增任何运行时外发。
+- 各项全部**本地**：只读盘、只写盘、只用已有的录音/合成链路，不新增任何运行时外发。
 - 未解锁时「开发者选项」这一支**压根不存在**（不是禁用摆在那儿）。
+
+五项里的「朗读测试」在人工 2026-10-08 的要求下按引擎拆成两个键（GSV / VITS 各自一条
+前置与选路，共用一个键就只能测到配置当前选中的那一个），菜单因此是六条。
 """
 from __future__ import annotations
 
@@ -48,12 +51,22 @@ def dev_test_sentence(lang: object = "") -> str:
 
 DEV_VOICE_SECONDS = 4
 DEV_UNLOCKED_HINT = "开发者选项已解锁（本次运行有效）"
+#: 点下去到出声之间的等待说明。本地引擎的气泡要等音频就绪才显示，不先说一声就是
+#: 一两分钟"没反应"——那形状和坏了同形。GSV 那条是本机量到的：10:02 暖缓存 58.75s，
+#: 早上冷启动那次整句 115.24s（其中 import+模型加载 64.6s），所以给人一个"分钟级"的区间。
+#: VITS 那支不带秒数：本机 2026-10-08 那一路连前置都没过（权重仍是 LFS 指针），
+#: 没量到的数字不写上屏幕。
+DEV_SPEECH_WAIT_NOTES = {
+    "gpt_sovits": "本地冷启动约 1–2 分钟，不是卡死",
+    "vits": "本地合成，可能要等模型加载，不是卡死",
+}
 # 日志导出里除了 LOG_DIR，还想要这几个（同属数据目录，散在旁边）
 DATA_LOG_FILES = ("chat_errors.log", "meapet_boot.log", "meapet_fault.log")
-#: 解锁后「设置与数据」里那一支的五项，顺序即菜单顺序（测试按它断言）。
+#: 解锁后「设置与数据」里那一支的六项，顺序即菜单顺序（测试按它断言）。
 DEV_MENU_LABELS = (
     f"语音输入测试（录 {DEV_VOICE_SECONDS} 秒）",
-    "朗读测试",
+    "朗读测试（GPT-SoVITS）",
+    "朗读测试（VITS）",
     "打印 fidus 屏幕信息",
     "导出日志（zip）",
     "导出配置（去密钥）",
@@ -67,6 +80,20 @@ def version_label_text() -> str:
 
 def dev_unlock_hint(left: int) -> str:
     return f"再点 {left} 次解锁开发者选项"
+
+
+def dev_artifact_label(path: object) -> str:
+    """权重路径后面跟一句它到底缺成什么样。
+
+    "前置=不齐"分不出**没水化**和**文件坏了**这两种，而这两种的处置完全不同（前者
+    `git lfs pull`，后者重装）。用的还是引擎自己那把判据 `is_git_lfs_pointer`，不另立。
+    """
+    from meapet.tts.common import is_git_lfs_pointer
+
+    text = str(path or "")
+    if text and is_git_lfs_pointer(text):
+        return f"{text}（Git LFS 指针，未水化）"
+    return text
 
 
 class PetDevOptionsMixin:
@@ -116,7 +143,10 @@ class PetDevOptionsMixin:
             DEV_MENU_LABELS,
             (
                 self._dev_voice_input_test,
-                self._dev_speech_test,
+                # 两个引擎各一条：共用一个键就只测到配置当前选中的那一路，另一路的
+                # 前置坏在哪一格永远看不见（人工 2026-10-08 点定拆成两个键）。
+                lambda: self._dev_speech_test("gpt_sovits"),
+                lambda: self._dev_speech_test("vits"),
                 self._dev_print_screen_info,
                 self._dev_export_logs,
                 self._dev_export_config,
@@ -167,34 +197,68 @@ class PetDevOptionsMixin:
             engine.toggle()
 
     # ---------------------------------------------------------------- ② 朗读
-    def _dev_speech_test(self) -> None:
-        tts = getattr(self, "tts", None)
-        health = bool(tts.health_check()) if tts is not None else False
+    def _dev_tts_for_engine(self, engine: str):
+        """按要测的那一个引擎，用当前配置另建一份只给这次测试用的 TTS。
+
+        不动 `self.tts`：产品那一格是配置说了算，点一下调试键就把朗读引擎改了是越权。
+        也不能"临时改完再改回来"——气泡要等音频就绪才显示，那一两分钟里根本没有安全的
+        还原点（期间正常对话会被测到一半的引擎带走）。所以这里传对象给既有链路。
+        """
+        from meapet.tts.service import MeaTTS
+
+        tts_cfg = dict((self.config or {}).get("tts") or {})
+        tts_cfg["engine"] = engine
+        if engine != "vits":
+            # `MeaTTS` 里 vits 那一路是 `engine == "vits" or tts_cfg["vits_mode"]`，
+            # 旧键单独也能把朗读领去 VITS ⇒ 只换 engine 换不掉，两个键都得钉。
+            tts_cfg.pop("vits_mode", None)
+        return MeaTTS({**(self.config or {}), "tts": tts_cfg})
+
+    @staticmethod
+    def _dev_speech_facts(engine: str, tts) -> str:
+        """每个引擎把它自己的前置事实写出来——都读引擎真正会用的那些方法，不另立判据。"""
+        if engine == "vits":
+            model, config, _speaker = tts._vits_knobs()
+            return (
+                f"{tts._vits_route().describe()} "
+                f"model={dev_artifact_label(model)} config={config}"
+            )
+        return (
+            f"python={os.path.basename(str(getattr(tts, 'python_exe', '') or '')) or '未设'} "
+            f"GPT={dev_artifact_label(getattr(tts, 'gpt_path', None))} "
+            f"SoVITS={dev_artifact_label(getattr(tts, 'sovits_path', None))}"
+        )
+
+    def _dev_speech_test(self, engine: str) -> None:
+        try:
+            tts = self._dev_tts_for_engine(engine)
+        except Exception as exc:
+            # 建不出测试对象本身也是一种坏法：报出来比让它后面某处 AttributeError 强。
+            log.error(f"[dev] {engine} 的 TTS 建不出来: {type(exc).__name__}: {exc}")
+            self._dev_say(
+                f"朗读不会出声：{engine} 的 TTS 建不出来 {type(exc).__name__}: {exc}"
+            )
+            return
+        health = bool(tts.health_check())
         facts = (
             f"enabled={getattr(tts, 'enabled', None)} "
             f"engine={getattr(tts, 'engine', None)} "
-            f"python={os.path.basename(str(getattr(tts, 'python_exe', '') or '')) or '未设'} "
             f"前置={'齐' if health else '不齐'}"
         )
-        log.info(
-            f"[dev] 朗读测试 {facts} "
-            f"output_dir={getattr(tts, 'output_dir', None)} "
-            f"GPT={getattr(tts, 'gpt_path', None)} "
-            f"SoVITS={getattr(tts, 'sovits_path', None)}"
-        )
-        if tts is None or not getattr(tts, "enabled", False) or not health:
+        detail = self._dev_speech_facts(engine, tts)
+        log.info(f"[dev] 朗读测试 {facts} {detail}")
+        if not getattr(tts, "enabled", False) or not health:
             # 这条链在前置不齐时回退成文字气泡，而那形状与"成功但这条没配音"完全一样，
             # 看不出坏在哪一格——开发者选项存在的意义就是把那一格写出来。
-            self._dev_say(f"朗读不会出声：{facts}")
+            self._dev_say(f"朗读不会出声：{facts} {detail}")
             return
         # 测试词用 speak() 自己那格算出来的目标语言（同一个 `_normalize_voice_lang`，
         # 不在这里另立一份语言真值）：合成前有语言闸门，中文句配 jp 声线必被跳过。
         sentence = dev_test_sentence(tts._normalize_voice_lang())
-        # 气泡要等音频就绪才显示，而本地推理每句话都要重付一次冷启动（2026-10-08 本机
-        # 实测：25 字符整句 115.24s，其中 import+模型加载 64.6s）。不先说一声，点下去
-        # 就是一两分钟"没反应"——那形状和没修一模一样。
-        self._dev_say(f"开始朗读测试（本地冷启动约 1–2 分钟，不是卡死）：{facts}")
-        self._speak_and_show(sentence, 2500)
+        note = DEV_SPEECH_WAIT_NOTES.get(engine, "本地合成，不是卡死")
+        # 不先说一声，点下去就是一两分钟"没反应"——那形状和没修一模一样。
+        self._dev_say(f"开始朗读测试（{engine}，{note}）：{facts} {detail}")
+        self._speak_and_show(sentence, 2500, tts=tts)
 
     # -------------------------------------------------------- ③ fidus 屏幕信息
     def _dev_print_screen_info(self) -> None:

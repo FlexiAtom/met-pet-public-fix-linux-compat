@@ -47,6 +47,7 @@ class DevHost(QWidget, PetDevOptionsMixin):
         self.saved = []
         self.spoken = []
         self.started_voice_cfg = []
+        self.speech_forks = []
 
     def _show_bubble(self, text, mood=None, **_kw):
         self.bubbles.append(text)
@@ -54,8 +55,13 @@ class DevHost(QWidget, PetDevOptionsMixin):
     def _save_config(self, *_a, **_k):
         self.saved.append(True)
 
-    def _speak_and_show(self, text, duration_ms, mood="neutral"):
-        self.spoken.append((text, duration_ms, mood))
+    def _speak_and_show(self, text, duration_ms, mood="neutral", tts=None):
+        self.spoken.append((text, duration_ms, mood, tts))
+
+    def _dev_tts_for_engine(self, engine):
+        """真 MeaTTS 的构造不在这里验：把这一个边界顶成假对象，只看接线。"""
+        self.speech_forks.append(engine)
+        return getattr(self, "tts", None)
 
     def _start_voice_engine(self, cfg=None):
         self.started_voice_cfg.append(cfg)
@@ -125,7 +131,7 @@ class UnlockTests(unittest.TestCase):
             host._dev_note_version_click()
         self.assertEqual(host._dev_note_version_click(), DEV_UNLOCKED_HINT)
 
-    def test_menu_lists_the_five_entries(self) -> None:
+    def test_menu_lists_the_six_entries(self) -> None:
         host = DevHost()
         menu = host._dev_build_menu()
         self.assertEqual(menu.objectName(), "DevOptionsMenu")
@@ -172,12 +178,19 @@ class VoiceTestTests(unittest.TestCase):
         self.assertEqual(idle.toggles, 0, "没在录就别再 toggle 一次")
 
 
+class FakeRoute:
+    def describe(self):
+        return "mode=inprocess reason=configured python=python"
+
+
 class FakeTTS:
     """真 MeaTTS 的那几个读数字段：本 mixin 只问它们，不问合成本身。"""
 
-    def __init__(self, *, enabled=True, healthy=True, voice_lang="jp"):
+    def __init__(
+        self, *, enabled=True, healthy=True, voice_lang="jp", engine="gpt_sovits"
+    ):
         self.enabled = enabled
-        self.engine = "gpt_sovits"
+        self.engine = engine
         self.voice_lang = voice_lang
         self.python_exe = "/home/x/GPT-SoVITS-v2pro/runtime/bin/python"
         self.output_dir = "/tmp/cache"
@@ -191,15 +204,73 @@ class FakeTTS:
     def _normalize_voice_lang(self, lang=""):
         return lang or self.voice_lang
 
+    def _vits_route(self):
+        return FakeRoute()
+
+    def _vits_knobs(self):
+        return ("vits_models/G_latest.pth", "vits_models/finetune_speaker.json", "mea")
+
 
 class SpeechTestTests(unittest.TestCase):
+    def test_the_two_buttons_fork_to_the_two_engines(self) -> None:
+        """人工 2026-10-08：朗读测试按引擎拆两个键——共用一键就只测到配置选中的那一路。"""
+        host = DevHost()
+        host.tts = FakeTTS()
+        menu = host._dev_build_menu()
+        labels = [action.text() for action in menu.actions()]
+        speech_actions = [
+            action for action in menu.actions() if action.text().startswith("朗读测试")
+        ]
+        self.assertEqual(
+            labels[1:3],
+            ["朗读测试（GPT-SoVITS）", "朗读测试（VITS）"],
+            f"两个朗读测试键该按这个顺序排在第 2、3 位，实际菜单是 {labels}",
+        )
+        self.assertEqual(len(speech_actions), 2)
+        for action in speech_actions:
+            action.trigger()
+        self.assertEqual(host.speech_forks, ["gpt_sovits", "vits"])
+
     def test_it_reuses_the_real_speak_chain(self) -> None:
         host = DevHost()
         host.tts = FakeTTS(voice_lang="jp")
-        host._dev_speech_test()
-        text, duration, _mood = host.spoken[0]
+        host._dev_speech_test("gpt_sovits")
+        text, duration, _mood, spoken_tts = host.spoken[0]
         self.assertIn("テスト", text, "jp 声线该拿到 jp 那句")
         self.assertGreaterEqual(duration, 2000)
+        self.assertIs(spoken_tts, host.tts, "该把测试那份对象交给既有链路")
+
+    def test_product_tts_object_is_not_the_one_used(self) -> None:
+        """红线：测试不许顺手改产品那格——交给链路的是 fork 出来的对象。"""
+        host = DevHost()
+        product = FakeTTS(engine="gpt_sovits")
+        forked = FakeTTS(engine="vits")
+        host.tts = product
+        host._dev_tts_for_engine = lambda engine: forked
+        host._dev_speech_test("vits")
+        self.assertIs(host.spoken[0][3], forked)
+        self.assertEqual(product.engine, "gpt_sovits", "产品那格不该被改动")
+
+    def test_the_fork_pins_the_engine_and_clears_the_legacy_vits_flag(self) -> None:
+        """旧键 `tts.vits_mode` 单独也能把朗读领去 VITS ⇒ 测 GSV 那个键必须把它一起钉掉。"""
+        from meapet.desktop.dev_options import PetDevOptionsMixin
+
+        host = DevHost(
+            config={
+                "tts": {
+                    "enabled": True,
+                    "engine": "vits",
+                    "vits_mode": True,
+                    "voice_lang": "jp",
+                }
+            }
+        )
+        with mock.patch("meapet.tts.service.MeaTTS") as built:
+            PetDevOptionsMixin._dev_tts_for_engine(host, "gpt_sovits")
+        cfg = built.call_args[0][0]
+        self.assertEqual(cfg["tts"]["engine"], "gpt_sovits")
+        self.assertNotIn("vits_mode", cfg["tts"], "旧键得一起清掉")
+        self.assertEqual(cfg["tts"]["voice_lang"], "jp", "其余配置该原样带过去")
 
     def test_the_sentence_follows_the_configured_voice_language(self) -> None:
         """写死中文句配 jp 声线会被 speak() 里的语言闸门跳过 ⇒ 测试词跟着 voice_lang 走。"""
@@ -228,26 +299,63 @@ class SpeechTestTests(unittest.TestCase):
         """前置不齐时那条链回退成文字气泡，与"成功但没配音"同形——必须把判据写进气泡。"""
         host = DevHost()
         host.tts = FakeTTS(healthy=False)
-        host._dev_speech_test()
+        host._dev_speech_test("gpt_sovits")
         self.assertEqual(host.spoken, [], "前置不齐不该把活交给注定回退的那条链")
         bubble = " ".join(host.bubbles)
         self.assertIn("朗读不会出声", bubble)
         self.assertIn("engine=gpt_sovits", bubble)
         self.assertIn("python=python", bubble)
+        self.assertIn("GPT=models/GPT_weights/a.ckpt", bubble)
         self.assertIn("前置=不齐", bubble)
+
+    def test_vits_button_reports_the_vits_prerequisites_not_gsv_ones(self) -> None:
+        """测 VITS 时打 GPT/SoVITS 那两条权重路径是把人往错的闸门上引——各自的判据各自写。"""
+        host = DevHost()
+        host.tts = FakeTTS(healthy=False, engine="vits")
+        host._dev_speech_test("vits")
+        bubble = " ".join(host.bubbles)
+        self.assertIn("mode=inprocess", bubble)
+        self.assertIn("model=vits_models/G_latest.pth", bubble)
+        self.assertNotIn("GPT=models/GPT_weights", bubble)
+        self.assertNotIn("SoVITS=", bubble)
+
+    def test_a_pointer_weight_is_named_as_a_pointer(self) -> None:
+        """"前置=不齐"分不出**没水化**和**文件坏了**——两种处置不同，判据要写出来。"""
+        from meapet.desktop.dev_options import dev_artifact_label
+
+        with tempfile.TemporaryDirectory() as td:
+            pointer = Path(td) / "G_latest.pth"
+            pointer.write_bytes(
+                b"version https://git-lfs.github.com/spec/v1\n"
+                b"oid sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
+                b"size 123\n"
+            )
+            self.assertIn("Git LFS 指针，未水化", dev_artifact_label(str(pointer)))
+            real = Path(td) / "ok.pth"
+            real.write_bytes(b"not a pointer at all")
+            self.assertEqual(dev_artifact_label(str(real)), str(real))
+            self.assertEqual(dev_artifact_label(""), "", "空路径不该被写成指针")
 
     def test_disabled_tts_also_reports_instead_of_falling_back(self) -> None:
         host = DevHost()
         host.tts = FakeTTS(enabled=False)
-        host._dev_speech_test()
+        host._dev_speech_test("gpt_sovits")
         self.assertEqual(host.spoken, [])
         self.assertIn("enabled=False", " ".join(host.bubbles))
 
-    def test_missing_tts_object_does_not_raise(self) -> None:
-        host = DevHost()  # 没有 .tts
-        host._dev_speech_test()
+    def test_a_tts_that_cannot_be_built_says_so_instead_of_raising(self) -> None:
+        """建不出测试对象也是一种坏法：写出来，别让人对着一个没反应的菜单项猜。"""
+        host = DevHost()
+
+        def boom(_engine):
+            raise RuntimeError("配置坏在这格")
+
+        host._dev_tts_for_engine = boom
+        host._dev_speech_test("gpt_sovits")
         self.assertEqual(host.spoken, [])
-        self.assertIn("朗读不会出声", " ".join(host.bubbles))
+        bubble = " ".join(host.bubbles)
+        self.assertIn("朗读不会出声", bubble)
+        self.assertIn("RuntimeError", bubble)
 
 
 class ScreenInfoTests(unittest.TestCase):
