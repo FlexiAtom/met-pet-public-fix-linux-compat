@@ -13,6 +13,15 @@ if _ROOT not in sys.path:
 def main():
     """先用纯标准库检查依赖，再导入 PyQt5 桌面应用。"""
 
+    from meapet.doctor import doctor_requested
+
+    # 拦在 ensure_pet_dependencies 之前：来取证的那台机器往往就是依赖坏的那台，
+    # 而装依赖是写侧动作——doctor 承诺只读，就不能先动它再问它。
+    if doctor_requested(sys.argv):
+        from meapet.doctor import main as doctor_main
+
+        return doctor_main(sys.argv[1:])
+
     from meapet.bootstrap import ensure_pet_dependencies
 
     if not ensure_pet_dependencies(_ROOT):

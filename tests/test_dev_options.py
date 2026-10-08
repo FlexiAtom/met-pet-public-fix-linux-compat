@@ -321,7 +321,7 @@ class SpeechTestTests(unittest.TestCase):
 
     def test_a_pointer_weight_is_named_as_a_pointer(self) -> None:
         """"前置=不齐"分不出**没水化**和**文件坏了**——两种处置不同，判据要写出来。"""
-        from meapet.desktop.dev_options import dev_artifact_label
+        from meapet.tts.diagnostics import artifact_label
 
         with tempfile.TemporaryDirectory() as td:
             pointer = Path(td) / "G_latest.pth"
@@ -330,11 +330,11 @@ class SpeechTestTests(unittest.TestCase):
                 b"oid sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
                 b"size 123\n"
             )
-            self.assertIn("Git LFS 指针，未水化", dev_artifact_label(str(pointer)))
+            self.assertIn("Git LFS 指针，未水化", artifact_label(str(pointer)))
             real = Path(td) / "ok.pth"
             real.write_bytes(b"not a pointer at all")
-            self.assertEqual(dev_artifact_label(str(real)), str(real))
-            self.assertEqual(dev_artifact_label(""), "", "空路径不该被写成指针")
+            self.assertEqual(artifact_label(str(real)), str(real))
+            self.assertEqual(artifact_label(""), "", "空路径不该被写成指针")
 
     def test_disabled_tts_also_reports_instead_of_falling_back(self) -> None:
         host = DevHost()
