@@ -555,6 +555,35 @@ SOURCE_SNIPPET_CHARS = 80
 SOURCE_PROBE_FAMILY_BIND = {"ipv4": "0.0.0.0", "ipv6": "::"}
 #: 请求体印进读数时截多长：那一发的"用什么查询打出来的"要过目，但不是把整份 body 搬回来。
 SOURCE_PROBE_BODY_CHARS = 160
+#: 失败相位的三张表。判据只有一句：**读数里那句「这一发连上了」只许出现在真连得上的那一档**。
+#: 2026-10-09 我实测踩到自己这条——`UnsupportedProtocol`（URL 少了协议段）被 `else` 归进"读段"，
+#: 读数于是印出「这一发连上了却没在预算内吐完」：一个包都没发出去的请求被写成连上了，那是假证。
+SOURCE_PROBE_CONNECT_PHASE = ("Connect", "Proxy")
+SOURCE_PROBE_TRANSFER_PHASE = ("Read", "Write")
+SOURCE_PROBE_NOT_SENT_PHASE = (
+    "UnsupportedProtocol",
+    "InvalidURL",
+    "LocalProtocolError",
+    "PoolTimeout",
+)
+
+
+def _failure_phase(error: str) -> str:
+    """把失败读数按异常名归相位：`connect` / `transfer` / `capped` / `not-sent` / `unknown`。
+
+    `capped` 是这一层自己造的（端到端上限到点掐），它**不知道**卡在哪一段——把它当"读段"就是替
+    没测到的事下结论。分不开的一律走 `unknown`，宁可只报"不可判"。
+    """
+    name = error.split(":", 1)[0].strip()
+    if name.startswith(SOURCE_PROBE_CONNECT_PHASE):
+        return "connect"
+    if name.startswith(SOURCE_PROBE_TRANSFER_PHASE):
+        return "transfer"
+    if name == "TotalTimeout":
+        return "capped"
+    if name in SOURCE_PROBE_NOT_SENT_PHASE:
+        return "not-sent"
+    return "unknown"
 
 
 def _printable_url(url: str) -> str:
@@ -768,16 +797,29 @@ def _source_probe(
     verdict = "" if elapsed <= SOURCE_PROBE_BUDGET_SECONDS else f" · **超 {SOURCE_PROBE_BUDGET_SECONDS}s 预算**"
     if error:
         #: 挂在哪一段决定下一步测什么：**连接段**才轮到地址栈的怀疑（这台机器 IPv6 出口不稳，
-        #: auto 那档把 v6 挂写成"这源连不上"就是假证）；**读段**（ReadTimeout/TotalTimeout）与
-        #: 栈无关，劝人分族重测是把人往错方向支——那是源站慢，不是路不通。
-        if error.startswith("Connect"):
+        #: auto 那档把 v6 挂写成"这源连不上"就是假证）；**收发段**与栈无关，劝人分族重测是把人
+        #: 往错方向支；而**根本没发出去**那一档，两句都不能说。
+        name = error.split(":", 1)[0].strip()
+        phase = _failure_phase(error)
+        if phase == "connect":
             tail = (
                 "（双栈由系统挑 → **未定**：分族重测 `--probe-family ipv4` 与 `ipv6` 各跑一遍才判得了这源死活）"
                 if family == "auto"
                 else f"（{family} 那一条自己挂的，与另一族无关）"
             )
+        elif phase == "transfer":
+            tail = "（挂在**收发**那一面：连上了才有这一挂，与地址栈无关，分族重测治不了它）"
+        elif phase == "capped":
+            tail = (
+                "（端到端上限掐的，**相位未知**：可能卡在连也可能卡在读——要断言就把每次操作预算压到上限"
+                "之下，看它先挂哪一段）"
+            )
+        elif phase == "not-sent":
+            tail = (
+                f"（**一个包都没发出去**：{name} 是探测自己拒的，与源站死活、与地址栈都无关——先修 URL/参数）"
+            )
         else:
-            tail = "（挂在**读**那一面，与地址栈无关：这一发连上了却没在预算内吐完，分族重测治不了它）"
+            tail = f"（相位不可判：{name} 不在已知分类里，别按地址家族下结论）"
         return (
             f"{label} · 失败：{error}（{elapsed:.2f}s；每次操作预算 "
             f"{SOURCE_PROBE_BUDGET_SECONDS}s / 端到端上限 {SOURCE_PROBE_HARD_CAP_SECONDS}s）"
@@ -944,8 +986,10 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                 "查询串不进读数（有人把 token 写在那儿），头只认写法不印值；POST 的体印出来——延迟几秒"
                 "必须连着「用什么查询打出来的」才读得出。"
                 "**家族那一格是本案要的**：这台机器 IPv6 出口不稳，auto 那档**连接段**挂的读数只判"
-                "「未定」，要 `--probe-family ipv4`/`ipv6` 各跑一遍才敢说这源死活（读段挂的不算，"
-                "那是源站慢）；成功那档印实连对端地址。"
+                "「未定」，要 `--probe-family ipv4`/`ipv6` 各跑一遍才敢说这源死活；**收发段**挂的不算"
+                "（那是源站慢，不是路不通）；被**端到端上限**掐掉的那一句只说「相位未知」，不替它猜卡在哪；"
+                "而**没发出去**那一档（URL 写法/协议被探测自己拒了）连「连上了」三个字都不许出现。"
+                "成功那档印实连对端地址。"
                 "**默认只连回路**，非回路要显式 --allow-egress，那一步是新增外联、须人工点头；"
                 "真站候选清单未定时这条格跑不了，不猜 URL 也不猜端点",
                 lambda m=method, u=url: _source_probe(

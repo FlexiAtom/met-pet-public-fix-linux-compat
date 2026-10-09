@@ -461,6 +461,9 @@ class SourceProbeTest(unittest.TestCase):
             elapsed = time.perf_counter() - started
         self.assertIn("TotalTimeout", text, f"端到端上限没生效：{text}")
         self.assertLess(elapsed, 1.5, f"掐太晚（{elapsed:.2f}s），上限没按 0.5s 走")
+        #: 这一发是被**我们这层**掐的，不是网络报的——所以它不知道卡在哪一段，读数只许说"相位未知"。
+        self.assertIn("相位未知", text, f"端到端那一发要如实说相位不可判：{text}")
+        self.assertNotIn("连上了", text, "上限掐掉的那一发不能替它断言连上了")
 
     def test_non_2xx_and_404_are_readings_not_crashes(self) -> None:
         self.assertIn("status=500", doctor._source_probe(self._url("/boom"), allow_egress=False))
@@ -568,6 +571,29 @@ class SourceProbeTest(unittest.TestCase):
         self.assertIn("与地址栈无关", text)
         self.assertNotIn("--probe-family", text)
         self.assertNotIn("未定", text)
+
+    def test_phase_table_names_each_bucket_once(self) -> None:
+        """相位分类是**一张表**，不是就地 `startswith("Connect")` 加一个 `else`。
+
+        那个 `else` 就是上一版的坑：它把"根本没发出去"和"读段慢"读成同一档。
+        """
+        self.assertEqual(doctor._failure_phase("ConnectTimeout: "), "connect")
+        self.assertEqual(doctor._failure_phase("ReadTimeout: x"), "transfer")
+        self.assertEqual(doctor._failure_phase("TotalTimeout: 端到端 8.0s 用完"), "capped")
+        self.assertEqual(doctor._failure_phase("UnsupportedProtocol: 少协议段"), "not-sent")
+        self.assertEqual(doctor._failure_phase("WhoKnowsError: ?"), "unknown")
+
+    def test_a_request_that_never_left_does_not_claim_a_connection(self) -> None:
+        """没发出去的那一发，读数里连「连上了」三个字都不许出现。
+
+        2026-10-09 我实测踩到自己这条：shell 里 URL 少写引号被 `&` 截断 → `UnsupportedProtocol`，
+        旧那版 `else` 把它归进读段，读数于是印「这一发连上了却没在预算内吐完」——**一个包都没发的
+        请求被写成连上了**。这一条钉住那一档只说"探测自己拒的"。
+        """
+        text = doctor._source_probe("ftp://127.0.0.1:1/x", allow_egress=False)
+        self.assertIn("一个包都没发出去", text, text)
+        for phrase in ("连上了", "收发", "--probe-family", "未定"):
+            self.assertNotIn(phrase, text, f"没发出去的那一发冒充了网络相位：{phrase}")
 
     def test_collect_numbers_get_then_post_slots_continuously(self) -> None:
         """GET 槽在前、POST 槽接续编号：两份清单合成一条 `source.N` 序列，报告里数得完。"""
