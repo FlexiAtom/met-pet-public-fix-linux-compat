@@ -503,10 +503,18 @@ def _agent_channel(config: dict) -> str:
     return f"{label} · 在场：{_capabilities_summary(caps)}（{AGENT_PROBE_BUDGET_SECONDS}s 内握手完成）"
 
 
-#: 内容源探针的逐请求超时（秒）。这一格存在的理由就是**覆盖**客户端那个默认值
-#: （`http_async.py:29` 的 `Timeout(120.0, connect=10.0)`）——点击反馈那条链的口径是"逐请求秒级"，
-#: 不显式压它，一次挂站的检索页就能把整份取证摁住两分钟。
+#: 内容源探针的**每次操作**超时（秒），同时兼**延迟判定线**——判定线只判不切：超了照样把成功
+#: 读数报出来，人要知道的是"这源能用但要 3.2 s"，不是"它在 3.0 s 被我弄死了"（后者会把可用源
+#: 误读成不可用）。这一格存在的理由就是**覆盖**客户端那个默认值
+#: （`http_async.py:29` 的 `Timeout(120.0, connect=10.0)`）——不显式压它，一次挂站的检索页
+#: 就能把整份取证摁住两分钟。
 SOURCE_PROBE_BUDGET_SECONDS = 3.0
+#: httpx 的 `timeout` 管的是**每次操作**（连接 / 每一读），不是端到端——每秒滴一口的响应
+#: 每一读都不超线、整条链却能跑满 7 s 以上仍报 200（`tests/test_doctor.py` 的
+#: `test_trickling_response_is_measured_not_killed` 把这个形状钉成了可复跑的凭据）。
+#: 所以上面那枚压不住"点一下等多久"，这一枚才是**端到端硬上限**。
+SOURCE_PROBE_HARD_CAP_SECONDS = 8.0
+#: "首个可见文本"截多长：够人过目认出是不是想要那句即可，不是把整页正文搬进报告。
 SOURCE_SNIPPET_CHARS = 80
 
 
@@ -570,7 +578,10 @@ def _first_strings(data: object, limit: int = 3) -> list[tuple[str, str]]:
 
 async def _fetch_one(url: str) -> tuple:
     """一发 GET。走 `http_async` 那个共享客户端（TLS/UA/重定向都跟产品同源），
-    但**逐请求把超时压到秒级**——默认那 120 s 是给长任务用的，不是给点击反馈用的。"""
+    但**不把默认那 120 s 递给调用方**——那是给长任务用的，不是给点击反馈用的。
+
+    两层各管一件事：`timeout` 是 httpx 的**每次操作**预算（连不上/不再吐字节要多久才放手），
+    `wait_for` 才是**端到端**上限（滴流式慢响应也能掐住）。"""
     from meapet import http_async
 
     try:
@@ -582,6 +593,14 @@ async def _fetch_one(url: str) -> tuple:
         await http_async.aclose_client()
 
 
+async def _fetch_capped(url: str) -> tuple:
+    """端到端兜底：超 `SOURCE_PROBE_HARD_CAP_SECONDS` 就掐，报成 TotalTimeout 而不是把挂起递给调用方。"""
+    try:
+        return await asyncio.wait_for(_fetch_one(url), SOURCE_PROBE_HARD_CAP_SECONDS)
+    except asyncio.TimeoutError:
+        return None, "", b"", f"TotalTimeout: 端到端 {SOURCE_PROBE_HARD_CAP_SECONDS}s 用完"
+
+
 def _source_probe(url: str, allow_egress: bool) -> str:
     host = urlsplit(url).hostname or ""
     label = _printable_url(url)
@@ -591,16 +610,19 @@ def _source_probe(url: str, allow_egress: bool) -> str:
             "而新增外联须人工明确点头——这一格默认不发任何一个包"
         )
     started = time.perf_counter()
-    status, content_type, body, error = asyncio.run(_fetch_one(url))
+    status, content_type, body, error = asyncio.run(_fetch_capped(url))
     elapsed = time.perf_counter() - started
+    #: 延迟判定与读数同屏：超线的成功仍是成功，但要让人一眼看出它超了点击反馈那条预算线。
+    verdict = "" if elapsed <= SOURCE_PROBE_BUDGET_SECONDS else f" · **超 {SOURCE_PROBE_BUDGET_SECONDS}s 预算**"
     if error:
         return (
-            f"{label} · 失败：{error}（{elapsed:.2f}s，逐请求预算 {SOURCE_PROBE_BUDGET_SECONDS}s）"
+            f"{label} · 失败：{error}（{elapsed:.2f}s；每次操作预算 "
+            f"{SOURCE_PROBE_BUDGET_SECONDS}s / 端到端上限 {SOURCE_PROBE_HARD_CAP_SECONDS}s）"
         )
     snippet = _visible_text(body, content_type)[:SOURCE_SNIPPET_CHARS]
     return (
         f"{label} · status={status} ct={content_type or '未声明'} bytes={len(body)} "
-        f"耗时={elapsed:.2f}s · 首个可见文本=「{snippet}」"
+        f"耗时={elapsed:.2f}s{verdict} · 首个可见文本=「{snippet}」"
     )
 
 
@@ -743,8 +765,11 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
         items.append(
             _probe(
                 f"source.{index}",
-                "点击反馈那两个新内容源（关键词检索 / 古诗 API）的**设施取证**：逐请求超时压到 "
-                f"{SOURCE_PROBE_BUDGET_SECONDS}s（不压就吃 `http_async.py:29` 那个 120s 默认），"
+                "点击反馈那两个新内容源（关键词检索 / 古诗 API）的**设施取证**：**耗时是端到端实测**，"
+                f"不是某个超时参数的转述——两层预算各管一头：每次操作 {SOURCE_PROBE_BUDGET_SECONDS}s"
+                f"（连不上/不再吐字节多久放手，不压就吃 `http_async.py:29` 那个 120s 默认）＋ 端到端上限 "
+                f"{SOURCE_PROBE_HARD_CAP_SECONDS}s。超判定线 {SOURCE_PROBE_BUDGET_SECONDS}s 的成功照样报成功，"
+                "只多挂一句「超预算」——把可用源掐死会把它误读成不可用。"
                 "只印状态/字节/首个可见文本片段——200 与一堆字节不说明取回了内容，片段给人过目才说明。"
                 "查询串不进读数（有人把 token 写在那儿）。**默认只连回路**，非回路要显式 --allow-egress，"
                 "那一步是新增外联、须人工点头；真站候选清单未定时这条格跑不了，不猜 URL",

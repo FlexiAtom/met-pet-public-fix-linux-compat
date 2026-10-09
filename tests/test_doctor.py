@@ -321,7 +321,7 @@ class SourceProbeTest(unittest.TestCase):
     """`--probe-source` 那一档：拿**本机回环上的假 HTTP 服务器**自证四条路径。
 
     提案 §2 里爬虫与古诗源那两行还闭不了合，卡的是"候选清单未定 + 真跑属新增外联须人工点头"，
-    **不是没有工具**。所以这里先把工具钉死——取文 / 逐请求超时 / 解析 / 脱敏各一发，
+    **不是没有工具**。所以这里先把工具钉死——取文 / 两层超时各管一头 / 解析 / 脱敏各一发，
     一个包都不出这台机器（`ThreadingHTTPServer` bind 在 127.0.0.1）。
     """
 
@@ -359,6 +359,17 @@ class SourceProbeTest(unittest.TestCase):
                             ensure_ascii=False,
                         ).encode("utf-8"),
                     )
+                elif self.path.startswith("/drip"):
+                    #: 一口一口滴：每一读都远不到预算，但**总耗时**过线——真站实测踩过（必应 3.21s、
+                    #: 360 4.12s 都 200），所以这一档单独钉住"每次操作"与"端到端"不是一回事。
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", "60")
+                    self.end_headers()
+                    for index in range(6):
+                        self.wfile.write(f"<p>{index}</p>".encode("utf-8").ljust(10, b" "))
+                        self.wfile.flush()
+                        time.sleep(0.15)
                 elif self.path.startswith("/slow"):
                     time.sleep(5)  # 比 3s 的逐请求预算长、比客户端那个 120s 默认短
                     self._send(200, "text/plain", "太晚了，这发不该等到".encode("utf-8"))
@@ -399,6 +410,39 @@ class SourceProbeTest(unittest.TestCase):
         elapsed = time.perf_counter() - started
         self.assertIn("Timeout", text)
         self.assertLess(elapsed, 6.0, f"逐请求预算没生效：真等了 {elapsed:.1f}s")
+
+    def test_trickling_response_is_measured_not_killed(self) -> None:
+        """httpx 的 `timeout` 管**每次操作**，不管端到端——滴流响应每一读都不超线，总额却过线。
+
+        真站踩过这一条（必应 3.21 s / 360 4.12 s 都返回 200），所以这里钉两件事：
+        ① 超判定线的成功**仍报成功**（掐掉会把可用源误读成不可用）；
+        ② 读数里那句「超预算」是真的按端到端耗时判出来的，不是抄超时参数。
+        """
+        with (
+            mock.patch.object(doctor, "SOURCE_PROBE_BUDGET_SECONDS", 0.4),
+            mock.patch.object(doctor, "SOURCE_PROBE_HARD_CAP_SECONDS", 30.0),
+        ):
+            started = time.perf_counter()
+            text = doctor._source_probe(self._url("/drip"), allow_egress=False)
+            elapsed = time.perf_counter() - started
+        self.assertIn("status=200", text, f"滴流被误杀了：{text}")
+        self.assertIn("超 0.4s 预算", text)
+        self.assertGreater(elapsed, 0.4, "耗时没到判定线，这条测试证不了'超线仍成功'")
+
+    def test_end_to_end_cap_cuts_what_per_read_timeout_cannot(self) -> None:
+        """端到端上限是**另一层**：把硬上限压到滴流总时长之下，它必须真把这一发掐掉。
+
+        没有这一层，一个每 2 s 吐一个字节的源可以把取证拖到客户端默认的 120 s。
+        """
+        with (
+            mock.patch.object(doctor, "SOURCE_PROBE_BUDGET_SECONDS", 30.0),
+            mock.patch.object(doctor, "SOURCE_PROBE_HARD_CAP_SECONDS", 0.5),
+        ):
+            started = time.perf_counter()
+            text = doctor._source_probe(self._url("/drip"), allow_egress=False)
+            elapsed = time.perf_counter() - started
+        self.assertIn("TotalTimeout", text, f"端到端上限没生效：{text}")
+        self.assertLess(elapsed, 1.5, f"掐太晚（{elapsed:.2f}s），上限没按 0.5s 走")
 
     def test_non_2xx_and_404_are_readings_not_crashes(self) -> None:
         self.assertIn("status=500", doctor._source_probe(self._url("/boom"), allow_egress=False))
