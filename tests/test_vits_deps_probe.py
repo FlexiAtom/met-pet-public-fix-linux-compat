@@ -37,11 +37,13 @@ def test_probe_says_ok_only_on_the_scripts_own_sentinel(tmp_path):
 def test_probe_maps_missing_module_to_missing_with_the_name(tmp_path):
     from meapet.tts.common import probe_vits_deps
 
-    script = _write_stub(tmp_path, "import unidecode  # noqa: F401\n")
+    # 模块名要**不存在**，不能挑一个"本机恰好没装"的真包：`.venv` 装了 unidecode
+    # 之后，原来那条就变成 rc=0 而判 unknown，测的是本机安装历史而不是探针逻辑。
+    script = _write_stub(tmp_path, "import meapet_no_such_dep_xyz  # noqa: F401\n")
     verdict, detail = probe_vits_deps(sys.executable, script)
     assert verdict == "missing"
     # detail 直接进日志/向导文案：得说清缺哪个，不能只回一个布尔
-    assert "unidecode" in detail
+    assert "meapet_no_such_dep_xyz" in detail
 
 
 def test_probe_detail_picks_the_real_cause_over_an_error_looking_admonition(tmp_path):
