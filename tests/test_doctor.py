@@ -82,6 +82,51 @@ class ItemShapeTest(unittest.TestCase):
             self.assertTrue(item.name and item.judge, f"{item.name} 缺判据")
 
 
+class SpeechLatencyRowTest(unittest.TestCase):
+    """`--speech-latency` 是本入口**唯一的写侧**（真起推理子进程 + 落 wav），默认一档都不许跑。
+
+    这一组全部把真健康检查遮成"不齐"：既快又顺带钉住那条顺序——前置不齐时延迟格自己写"未测"，
+    不会烧掉一发十几秒到两分钟的合成去换一个失败读数。
+    """
+
+    def test_default_run_never_enters_the_synth(self) -> None:
+        with mock.patch(
+            "meapet.tts.diagnostics.speech_latency", side_effect=AssertionError("默认档不该起合成")
+        ):
+            names = [item.name for item in doctor.collect({}, skip_tts=False, skip_layer=True)]
+        self.assertFalse([n for n in names if n.startswith("tts.latency.")], names)
+
+    def test_the_flag_adds_one_row_per_engine_after_the_prerequisites(self) -> None:
+        with mock.patch("meapet.tts.service.MeaTTS.health_check", lambda self: False):
+            items = doctor.collect({}, skip_tts=False, skip_layer=True, measure_speech=True)
+        self.assertEqual(
+            [item.name for item in items if item.name.startswith("tts.")],
+            ["tts.gpt_sovits", "tts.vits", "tts.latency.gpt_sovits", "tts.latency.vits"],
+            "延迟格排在两格前置之后：前面任何一格炸了都不该先付两分钟的合成钱",
+        )
+        for item in items:
+            if item.name.startswith("tts.latency."):
+                self.assertTrue(item.judge, f"{item.name} 缺判据")
+                self.assertIn("未测：前置不齐", item.value)
+
+    def test_skip_tts_skips_the_slowest_rows_too(self) -> None:
+        """`--skip-tts` 存在的理由就是"那两格最慢"，写侧的延迟格更该跟着跳。"""
+        with mock.patch(
+            "meapet.tts.diagnostics.speech_latency", side_effect=AssertionError("skip 了就不该起")
+        ):
+            names = [item.name for item in doctor.collect({}, skip_tts=True, measure_speech=True)]
+        self.assertFalse([n for n in names if n.startswith("tts.")], names)
+
+    def test_the_cli_flag_reaches_the_collector(self) -> None:
+        self.assertTrue(doctor._parse_args(["--doctor", "--speech-latency"]).speech_latency)
+        self.assertFalse(doctor._parse_args(["--doctor"]).speech_latency)
+        with mock.patch.object(doctor, "collect", return_value=[]) as collect, mock.patch(
+            "meapet.config.store.load_config", return_value={}
+        ):
+            self.assertEqual(doctor.main(["--doctor", "--speech-latency"]), 0)
+        self.assertTrue(collect.call_args.kwargs["measure_speech"])
+
+
 class ProbeFailureTest(unittest.TestCase):
     def test_a_raising_probe_becomes_a_row_not_a_traceback(self) -> None:
         def boom():

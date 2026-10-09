@@ -24,7 +24,12 @@ from PyQt5.QtWidgets import QAction, QMenu
 
 from meapet import __version__
 from meapet.log import get_color_logger
-from meapet.tts.diagnostics import SPEECH_WAIT_NOTES, speech_facts, tts_for_engine
+from meapet.tts.diagnostics import (
+    SPEECH_WAIT_NOTES,
+    speech_facts,
+    speech_test_sentence,
+    tts_for_engine,
+)
 
 log = get_color_logger("dev")
 
@@ -32,23 +37,6 @@ DEV_UNLOCK_CLICKS = 5
 DEV_UNLOCK_WINDOW_S = 10.0
 #: 导出落点（相对数据目录）——与日志同侧，不往用户没预期的地方写。
 EXPORTS_DIR = "exports"
-#: 朗读测试的测试词跟着 tts 的目标语言走：`speak()` 在合成前有一道语言闸门
-#: （`language_policy.should_skip_tts_due_to_language_mismatch`），非目标语言的文本直接跳过不出声。
-#: 写死一句中文去测 voice_lang=jp 的机器，永远只能得到"跳过"——那是这句不合格，不是朗读坏了。
-DEV_TEST_SENTENCES = {
-    "jp": "開発者オプションのテスト。こんにちは、メールです。",
-    "zh": "开发者选项测试：你好，我是梅尔。",
-    "en": "Developer options test. Hello, I am Mea.",
-}
-
-
-def dev_test_sentence(lang: object = "") -> str:
-    from meapet.config.normalizers import canonical_tts_language
-
-    return (
-        DEV_TEST_SENTENCES.get(canonical_tts_language(lang) or "zh")
-        or DEV_TEST_SENTENCES["zh"]
-    )
 
 DEV_VOICE_SECONDS = 4
 DEV_UNLOCKED_HINT = "开发者选项已解锁（本次运行有效）"
@@ -204,7 +192,7 @@ class PetDevOptionsMixin:
             return
         # 测试词用 speak() 自己那格算出来的目标语言（同一个 `_normalize_voice_lang`，
         # 不在这里另立一份语言真值）：合成前有语言闸门，中文句配 jp 声线必被跳过。
-        sentence = dev_test_sentence(tts._normalize_voice_lang())
+        sentence = speech_test_sentence(tts._normalize_voice_lang())
         note = SPEECH_WAIT_NOTES.get(engine, "本地合成，不是卡死")
         # 不先说一声，点下去就是一两分钟"没反应"——那形状和没修一模一样。
         self._dev_say(f"开始朗读测试（{engine}，{note}）：{facts} {detail}")

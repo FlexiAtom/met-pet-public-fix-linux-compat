@@ -5,6 +5,8 @@
 - **只读**：不写 config、不装东西、不挂载 surface、不建窗口。唯一的外设是读日志尾部与只读的
   import/模块规格探测。（`--with-gui` 会建一个 Qt 应用对象去取屏幕几何——那是显式 opt-in，
   默认关着：无显示服务时建 Qt 应用不是抛异常，是 abort，catch 不到。）
+  唯一的**写侧**例外是 `--speech-latency`：它真起推理子进程并往 `tts.output_dir` 落 wav
+  （合成不播放，所以不出声）。默认档一条都不跑，因为那一发按引擎是十几秒到两分钟。
 - **每一项后面直接跟判据**（这条在说什么 / 什么算坏）。否则"这台机器没有 layer-shell"和
   "我们的桥接层没编进包"会被读成同一句话——那正是本入口要消灭的形状。
 - **探测项一律调产品侧那一个函数**，这里不重算。重算就是第二套真值，doctor 会开始自证。
@@ -77,6 +79,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-layer", action="store_true", help="跳过 layer 桥接层探测（它会真去 init 一次）"
+    )
+    parser.add_argument(
+        "--speech-latency",
+        action="store_true",
+        help="每路引擎再各真合成两发并报逐发秒数（本入口唯一的写侧：起推理子进程 + 落 wav，不播放）",
     )
     return parser.parse_args(argv)
 
@@ -279,6 +286,12 @@ def _tts(config: dict, engine: str) -> str:
     )
 
 
+def _tts_latency(config: dict, engine: str) -> str:
+    from meapet.tts.diagnostics import speech_latency, tts_for_engine
+
+    return speech_latency(engine, tts_for_engine(config, engine))
+
+
 def _log_tail(lines: int = 5) -> str:
     from meapet.paths import data_path
 
@@ -291,7 +304,7 @@ def _log_tail(lines: int = 5) -> str:
 
 
 def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
-            skip_layer: bool = False) -> list[Item]:
+            skip_layer: bool = False, measure_speech: bool = False) -> list[Item]:
     """跑一遍全部探测，返回逐项读数（任何一项坏都会变成一行文本，不抛）。"""
     items = [
         _probe(
@@ -372,6 +385,20 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                     lambda eng=engine: _tts(config, eng),
                 )
             )
+        if measure_speech:
+            # 延迟那一档跟在两格前置之后：前置不齐时 `speech_latency` 自己写「未测」，
+            # 不会把一发注定失败的读数当成延迟报出去。它排在最后是因为最慢——
+            # 前面任何一格炸了都不该先付两分钟的合成钱。
+            for engine in ("gpt_sovits", "vits"):
+                items.append(
+                    _probe(
+                        f"tts.latency.{engine}",
+                        "本入口唯一的写侧：真起推理子进程并往 tts.output_dir 落 wav（不播放，所以不出声）。"
+                        "每发都含模型加载（两引擎都是每句新起进程），第二发暖的只是页缓存；"
+                        "秒数必须与同一串里的配置一起读，换个选路/权重/CPU 或 GPU 这数就翻几倍",
+                        lambda eng=engine: _tts_latency(config, eng),
+                    )
+                )
     return items
 
 
@@ -397,7 +424,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     with contextlib.redirect_stdout(sys.stderr):
         items = collect(
-            config, with_gui=args.with_gui, skip_tts=args.skip_tts, skip_layer=args.skip_layer
+            config, with_gui=args.with_gui, skip_tts=args.skip_tts, skip_layer=args.skip_layer,
+            measure_speech=args.speech_latency,
         )
     elapsed = time.monotonic() - started
     if args.doctor_format == "json":

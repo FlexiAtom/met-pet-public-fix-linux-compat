@@ -272,29 +272,6 @@ class SpeechTestTests(unittest.TestCase):
         self.assertNotIn("vits_mode", cfg["tts"], "旧键得一起清掉")
         self.assertEqual(cfg["tts"]["voice_lang"], "jp", "其余配置该原样带过去")
 
-    def test_the_sentence_follows_the_configured_voice_language(self) -> None:
-        """写死中文句配 jp 声线会被 speak() 里的语言闸门跳过 ⇒ 测试词跟着 voice_lang 走。"""
-        from meapet.desktop.dev_options import dev_test_sentence
-
-        self.assertIn("開発者", dev_test_sentence("jp"))
-        self.assertIn("开发者选项测试", dev_test_sentence("zh"))
-        self.assertIn("Developer", dev_test_sentence("en"))
-        # 认不出的语言（含空/`auto`）回到中文那句，而不是抛
-        self.assertIn("开发者选项测试", dev_test_sentence("auto"))
-        self.assertIn("开发者选项测试", dev_test_sentence(""))
-
-    def test_every_test_sentence_passes_the_language_gate(self) -> None:
-        """闸门与测试词是两处代码，这里钉住它们不打架。"""
-        from meapet.desktop.dev_options import DEV_TEST_SENTENCES
-        from meapet.tts.language_policy import should_skip_tts_due_to_language_mismatch
-
-        for lang, sentence in DEV_TEST_SENTENCES.items():
-            with self.subTest(lang=lang):
-                self.assertFalse(
-                    should_skip_tts_due_to_language_mismatch(sentence, lang),
-                    f"{lang} 的测试词被自己的语言闸门跳过了",
-                )
-
     def test_broken_prerequisites_say_which_one_instead_of_looking_like_success(self) -> None:
         """前置不齐时那条链回退成文字气泡，与"成功但没配音"同形——必须把判据写进气泡。"""
         host = DevHost()

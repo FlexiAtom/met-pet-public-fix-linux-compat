@@ -1,12 +1,14 @@
-"""语音这条链的**只读**判据——开发者选项与 `meapet --doctor` 共用的一份。
+"""语音这条链的判据——开发者选项与 `meapet --doctor` 共用的一份。
 
 放在 tts 侧而不是菜单侧：`--doctor` 不经 Qt，判据若留在 `desktop.dev_options` 里，
-无头取证就得去 import 一个建菜单的模块，那是给自己造第二条路。三枚都只读盘，
-不写 config、不改 `engine`、不建窗口。
+无头取证就得去 import 一个建菜单的模块，那是给自己造第二条路。前四枚只读盘，
+不写 config、不改 `engine`、不建窗口；`speech_latency` 那枚**不是只读**（它真起推理
+子进程并落一个 wav），所以调用方必须显式要到才跑，见 `meapet/doctor.py` 的 `--speech-latency`。
 """
 from __future__ import annotations
 
 import os
+import time
 
 from meapet.tts.common import is_git_lfs_pointer
 
@@ -63,4 +65,64 @@ def speech_facts(engine: str, tts) -> str:
         f"python={os.path.basename(str(getattr(tts, 'python_exe', '') or '')) or '未设'} "
         f"GPT={artifact_label(getattr(tts, 'gpt_path', None))} "
         f"SoVITS={artifact_label(getattr(tts, 'sovits_path', None))}"
+    )
+
+
+#: 朗读测试词跟着 tts 的目标语言走：`speak()` 在合成前有一道语言闸门
+#: （`language_policy.should_skip_tts_due_to_language_mismatch`），非目标语言的文本直接跳过不出声。
+#: 写死一句中文去测 voice_lang=jp 的机器，永远只能得到"跳过"——那是这句不合格，不是朗读坏了。
+#: 2026-10-09 从 `desktop.dev_options` 搬来：`--doctor` 要用同一句，留在菜单侧就得让无头取证
+#: 去 import 建菜单的模块，那是本模块存在时要消灭的第二条路。
+SPEECH_TEST_SENTENCES = {
+    "jp": "開発者オプションのテスト。こんにちは、メールです。",
+    "zh": "开发者选项测试：你好，我是梅尔。",
+    "en": "Developer options test. Hello, I am Mea.",
+}
+
+
+def speech_test_sentence(lang: object = "") -> str:
+    from meapet.config.normalizers import canonical_tts_language
+
+    return (
+        SPEECH_TEST_SENTENCES.get(canonical_tts_language(lang) or "zh")
+        or SPEECH_TEST_SENTENCES["zh"]
+    )
+
+
+#: 延迟那格每引擎烧几发。写两发不是为了取平均，是为了把"模型加载"和"页缓存暖了"这两笔
+#: 成本分开看——见 `speech_latency` 的说明。
+SPEECH_LATENCY_RUNS = 2
+
+
+def speech_latency(engine: str, tts) -> str:
+    """真合成 `SPEECH_LATENCY_RUNS` 发，逐发报墙钟耗时，并把**这次用的是哪份配置**贴在同一个读数里。
+
+    两发是为了分开两种成本：两个引擎都每句新起推理子进程（`engines/gsv.py:90`、
+    `engines/vits.py:181`），所以第二发暖的只是操作系统页缓存，模型那一笔每发都要重付——
+    读成一个数就会把"点一下等多久"算错一半。秒数脱离配置没有意义（换选路、换权重、
+    换 CPU/GPU 都翻几倍），所以 `speech_facts` 那份事实串跟读数同行，不留到隔壁那格。
+    """
+    if not getattr(tts, "enabled", False) or not tts.health_check():
+        return "未测：前置不齐（那一发只会得到失败读数，不是延迟）"
+    lang = tts._normalize_voice_lang()
+    sentence = speech_test_sentence(lang)
+    rows = []
+    for index in range(1, SPEECH_LATENCY_RUNS + 1):
+        started = time.monotonic()
+        try:
+            result = tts.speak(sentence)
+        except Exception as exc:  # noqa: BLE001 - 取证面不往外递异常
+            rows.append(f"发{index}={time.monotonic() - started:.2f}s 探测自身失败 {type(exc).__name__}")
+            continue
+        elapsed = time.monotonic() - started
+        path = result[0] if isinstance(result, tuple) and result else None
+        if path and os.path.isfile(path):
+            rows.append(f"发{index}={elapsed:.2f}s→{os.path.basename(path)}({os.path.getsize(path)}B)")
+        else:
+            rows.append(f"发{index}={elapsed:.2f}s→未产出")
+    return (
+        " ".join(rows)
+        + f" · 配置: 文本={lang}:{len(sentence)}字"
+        + f" timeout={getattr(tts, 'timeout', None)}/{getattr(tts, 'gsv_timeout', '—')}"
+        + f" · {speech_facts(engine, tts)}"
     )
