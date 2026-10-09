@@ -3,10 +3,13 @@
 人工 2026-10-08 放行这句：「无头模式是给AI用的」「目的是测试，不论是否打包」。三条口径写在这里，
 别处不复述：
 - **只读**：不写 config、不装东西、不挂载 surface、不建窗口。唯一的外设是读日志尾部与只读的
-  import/模块规格探测。（`--with-gui` 会建一个 Qt 应用对象去取屏幕几何——那是显式 opt-in，
-  默认关着：无显示服务时建 Qt 应用不是抛异常，是 abort，catch 不到。）
+  import/模块规格探测。（`--with-gui` 会建一个 Qt 应用对象去取屏幕几何与输入阈值那两格——那是显式
+  opt-in，默认关着：无显示服务时建 Qt 应用不是抛异常，是 abort，catch 不到。）
   唯一的**写侧**例外是 `--speech-latency`：它真起推理子进程并往 `tts.output_dir` 落 wav
   （合成不播放，所以不出声）。默认档一条都不跑，因为那一发按引擎是十几秒到两分钟。
+  另有一档**外设**例外是 `--probe-agent`：它先问一次 TCP 端口在不在听，在听才真开一次 WebSocket
+  去问 gateway 在不在场，且**只连回路**（127.0.0.1/::1/localhost），非回路端点报"未连接"而不去连——
+  往外发请求不在这个入口的授权里。默认档同样一次都不发。
 - **每一项后面直接跟判据**（这条在说什么 / 什么算坏）。否则"这台机器没有 layer-shell"和
   "我们的桥接层没编进包"会被读成同一句话——那正是本入口要消灭的形状。
 - **探测项一律调产品侧那一个函数**，这里不重算。重算就是第二套真值，doctor 会开始自证。
@@ -17,13 +20,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
+import copy
+import ipaddress
 import json
 import os
 import platform
 import sys
 import time
 from dataclasses import asdict, dataclass
+from urllib.parse import urlsplit
 
 DOCTOR_FLAG = "--doctor"
 
@@ -84,6 +91,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--speech-latency",
         action="store_true",
         help="每路引擎再各真合成两发并报逐发秒数（本入口唯一的写侧：起推理子进程 + 落 wav，不播放）",
+    )
+    parser.add_argument(
+        "--probe-agent",
+        action="store_true",
+        help="额外探一次 agent 通道（gateway）在场性：先问 TCP 再真连 WebSocket，**只连回路**，非回路端点不连",
     )
     return parser.parse_args(argv)
 
@@ -229,18 +241,27 @@ def _fidus() -> str:
     return f"have_engine={have_engine()}"
 
 
+def _qt_app():
+    """建（或复用）一个 Qt 应用对象——屏幕几何与输入阈值那两格共用同一份引导。
+
+    这一句是全入口唯一会碰显示服务的地方，所以它只在 `--with-gui` 后面走：无显示服务时
+    建 Qt 应用**不是抛异常，是 abort**，`_probe` 那道兜底接不住。
+    """
+    from PyQt5.QtCore import QCoreApplication
+    from PyQt5.QtGui import QGuiApplication
+
+    if QCoreApplication.instance() is None:
+        QCoreApplication([])
+    return QGuiApplication.instance() or QGuiApplication(["meapet-doctor"])
+
+
 def _screens(with_gui: bool) -> str:
     if not with_gui:
         return ("未取（默认不建 Qt 应用：无显示服务时那一下是 abort，不是异常）。"
                 "要这份读数就加 --with-gui")
-    from PyQt5.QtCore import QCoreApplication
-    from PyQt5.QtGui import QGuiApplication
-
     from meapet.desktop.screen_geometry import available_geometry_for
 
-    if QCoreApplication.instance() is None:
-        QCoreApplication([])
-    app = QGuiApplication.instance() or QGuiApplication(["meapet-doctor"])
+    app = _qt_app()
     lines = [f"Qt platformName={app.platformName()}"]
     for screen in app.screens():
         geo = screen.geometry()
@@ -253,6 +274,33 @@ def _screens(with_gui: bool) -> str:
         f"  可用区={None if usable is None else (usable.width(), usable.height(), usable.x(), usable.y())}"
     )
     return " | ".join(lines)
+
+
+def _input_thresholds(with_gui: bool) -> str:
+    """点击链上那两道**门槛**的数：Qt 系统给的和产品自己写死的，并排印出来。
+
+    分成两组是有原因的：「点一下没反应」有两种完全不同的坏法——拖窗标志先立起
+    （`startDragDistance` 通常远小于分区门票那 35 px），或者双击的第二次 release 在去抖窗口内
+    就已经把反馈发出去了（去抖窗口要跟的是**系统值**，不是提案里那个 300 ms 参考值）。
+    读数不带这两组数就分不出是哪种，所以两边各印各的，不合成一个"看起来正常"。
+    """
+    if not with_gui:
+        return "未取（要建 Qt 应用，与 screens 同档：加 --with-gui）"
+
+    from meapet.desktop.live2d_widget import (
+        ZONE_CLICK_MAX_DISTANCE_PX,
+        ZONE_CLICK_MAX_HOLD_SECONDS,
+    )
+
+    app = _qt_app()
+    hints = app.styleHints()
+    return (
+        f"Qt platformName={app.platformName()} "
+        f"doubleClickInterval={hints.mouseDoubleClickInterval()}ms "
+        f"startDragDistance={hints.startDragDistance()}px · "
+        f"产品门票={ZONE_CLICK_MAX_DISTANCE_PX}px/{ZONE_CLICK_MAX_HOLD_SECONDS}s"
+        "（那两个数读自 live2d_widget 的名字，不是这里抄的）"
+    )
 
 
 def _audio_import() -> str:
@@ -292,6 +340,155 @@ def _tts_latency(config: dict, engine: str) -> str:
     return speech_latency(engine, tts_for_engine(config, engine))
 
 
+#: `--probe-agent` 那一发的总预算（秒）。三家适配器自己的 `timeout_seconds` 是内层闸，
+#: 这一道是**外层**的：无头取证里任何一格都不该被一个挂住的端点摁住——挂住的读数和"坏"的
+#: 读数在调用方那边长得一模一样，那就等于本入口最想说的那句话（什么算坏）没了。
+AGENT_PROBE_BUDGET_SECONDS = 8.0
+
+
+def _is_loopback(host: str) -> bool:
+    """这台端点是不是**回路**：只有回路的才允许真连。
+
+    `localhost` 按名字放行（三家出厂地址都是 `127.0.0.1`）；其余一律不连——doctor 的授权里
+    没有"替这台机器往外发请求"这一项，新增外联要人工明确点头。
+    """
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _capabilities_summary(caps: object) -> str:
+    """能力对象里挑几枚**不携密**的键印出来；三家字段名不同，所以按在场拼，不猜结构。"""
+    safe_keys = (
+        "platform",
+        "protocol",
+        "protocol_version",
+        "agent_name",
+        "server_version",
+        "streaming",
+    )
+    parts = [f"{key}={getattr(caps, key)}" for key in safe_keys if getattr(caps, key, None) is not None]
+    return f"{type(caps).__name__} " + " ".join(parts)
+
+
+async def _probe_and_close(adapter) -> object:
+    try:
+        return await asyncio.wait_for(adapter.probe(), timeout=AGENT_PROBE_BUDGET_SECONDS)
+    finally:
+        await adapter.close()
+
+
+def _port_open(host: str, port: int, budget: float = 2.0) -> bool:
+    """那个端口在不在听——**这一道是给 WebSocket 那一发当地闸的**。
+
+    `hermes.py:349` 的 `_ensure_connected` 第一件事是查 token，没配凭据时抛的是
+    `ValueError("Hermes WebSocket token is required…")`，而 `probe()` 末尾那个
+    `except Exception` 把它归进「握手失败」那一句——于是"这台机器没配 agent 凭据"和
+    "gateway 挂了"在读数里长得一模一样。端口先问一句就把这两支分开了：没在听 = 真不在场，
+    在听而 probe 抛 = 凭据或协议那一档的坏。
+    """
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return False
+    for family, socktype, proto, _, address in infos:
+        with socket.socket(family, socktype, proto) as sock:
+            sock.settimeout(budget)
+            if sock.connect_ex(address) == 0:
+                return True
+    return False
+
+
+DEFAULT_PORTS = {"ws": 80, "wss": 443, "http": 80, "https": 443}
+
+
+def _endpoint_port(url: str) -> int | None:
+    """地址里那个端口——**没写出来时按 scheme 兜**，不在这里猜出厂默认端口。
+
+    出厂地址（`config/defaults.py:17`）自带端口，所以绝大多数情况走的是 `split.port`；
+    兜底那三行只为"用户自己填了个不带端口的 ws://localhost"这种形状兜着，宁可报
+    "按 ws→80 试的"也不假装知道他要连的是哪一格。
+    """
+    split = urlsplit(url)
+    try:
+        port = split.port
+    except ValueError:
+        return None  # 端口那一栏写坏了（字母、超范围）
+    if port is not None:
+        return port
+    return DEFAULT_PORTS.get((split.scheme or "").lower())
+
+
+def _failure_chain(exc: BaseException) -> str:
+    """把 `raise X from Y` 那条链读全——**产品侧把真因藏在 `__cause__` 里**。
+
+    `hermes.py:596` 是 `raise ValueError("…握手失败") from exc`：外层那句永远一样，
+    而底下那层才是"没配 token"还是"对端拒连"。读数只印外层就等于把两支又捏回一支，
+    所以这里顺着 `__cause__/__context__` 再走一层（只一层，链再长就截断，防环与刷屏）。
+    """
+    parts = [f"{type(exc).__name__}: {exc}"]
+    cause = exc.__cause__ or exc.__context__
+    if cause is not None and cause is not exc:
+        parts.append(f"← {type(cause).__name__}: {str(cause)[:180]}")
+    return " ".join(parts)
+
+
+def _agent_channel(config: dict) -> str:
+    """agent 链接那一路的在场性——**复用产品侧工厂**，不在这里重算凭据、地址或 kind 默认值。
+
+    凭据解析在 `meapet/agent/factory.py` 的私有 `_resolve_secret` 加三张各不相同的 env 表里，
+    doctor 抄它就是第二套真值（`llm` 那格的判据里已经写过这一怕）。所以这一格走的是
+    `create_agent_adapter_from_config()` + `probe()`：产品怎么连，我就怎么连。
+    """
+    from meapet.agent.factory import create_agent_adapter_from_config
+
+    # 工厂会往传进去的那份 dict 里塞 session_id/device_id（`_ensure_local_session`），
+    # 而 doctor 的只读承诺是对着调用方那份 config 立的——喂它一份副本。
+    probe_config = copy.deepcopy(config or {})
+    configured = ((probe_config.get("llm") or {}).get("agent") or {}).get("kind")
+    kind = f"配置={configured if configured not in (None, '') else '未设(工厂按 hermes)'}"
+
+    try:
+        adapter = create_agent_adapter_from_config(probe_config)
+    except Exception as exc:  # noqa: BLE001 - 构造坏也是读数，不是 traceback
+        return f"{kind} 适配器构造失败 {type(exc).__name__}: {exc}"
+
+    base_url = str(getattr(adapter.config, "base_url", "") or "")
+    split = urlsplit(base_url)
+    host = split.hostname or ""
+    port = _endpoint_port(base_url)
+    label = (
+        f"{kind} adapter={type(adapter).__name__} "
+        f"host={host or '解析不出'} port={port if port is not None else '解析不出'}"
+    )
+    if not _is_loopback(host):
+        return (
+            f"{label} · **未连接**：端点不在回路上。"
+            "doctor 不替这台机器往外发请求（新增外联须人工明确点头）"
+        )
+    if port is None:
+        return f"{label} · 不在场：地址里取不出端口（未发 WebSocket）"
+
+    # 先问 TCP，再决定要不要发那一发 WebSocket——未在听就不发。这一道闸把
+    # "这台机器没配 agent 凭据"与"gateway 挂了"分开（见 `_port_open` 里那段），
+    # 顺带省下对一个死端口做 WS 握手的整预算。
+    if not _port_open(host, port):
+        return f"{label} · 不在场：tcp={host}:{port} 未监听（未发 WebSocket）"
+
+    try:
+        caps = asyncio.run(_probe_and_close(adapter))
+    except Exception as exc:  # noqa: BLE001 - 不在场是本案要的那条判据，不是异常
+        return f"{label} · 不在场：{_failure_chain(exc)}（预算 {AGENT_PROBE_BUDGET_SECONDS}s）"
+    return f"{label} · 在场：{_capabilities_summary(caps)}（{AGENT_PROBE_BUDGET_SECONDS}s 内握手完成）"
+
+
 def _log_tail(lines: int = 5) -> str:
     from meapet.paths import data_path
 
@@ -304,8 +501,13 @@ def _log_tail(lines: int = 5) -> str:
 
 
 def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
-            skip_layer: bool = False, measure_speech: bool = False) -> list[Item]:
-    """跑一遍全部探测，返回逐项读数（任何一项坏都会变成一行文本，不抛）。"""
+            skip_layer: bool = False, measure_speech: bool = False,
+            probe_agent: bool = False) -> list[Item]:
+    """跑一遍探测，返回逐项读数（任何一项坏都会变成一行文本，不抛）。
+
+    带 `measure_speech` / `probe_agent` 那两档时才跑会动手的格（起子进程落 wav / 真开一次
+    WebSocket）；默认两档都是 False，一格不动。
+    """
     items = [
         _probe(
             "runtime",
@@ -367,6 +569,13 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             lambda: _screens(with_gui),
         ),
         _probe(
+            "input_thresholds",
+            "去抖/分区那两道门槛的数：doubleClickInterval 是**系统给的**，提案里那个 300 ms 只是下限参考——"
+            "固定值小于这一格的读数就拦不住双击；startDragDistance 若小于产品门票那 35 px，"
+            "手抖一下这次点击就被当拖窗吃掉。platformName=offscreen 时读到的是 Qt 默认值，不是这台桌面的设定",
+            lambda: _input_thresholds(with_gui),
+        ),
+        _probe(
             "log_tail",
             "落盘前已过产品侧 redact_text；这里再打一道是防着旧文件里那句没打码的",
             _log_tail,
@@ -399,6 +608,20 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                         lambda eng=engine: _tts_latency(config, eng),
                     )
                 )
+    if probe_agent:
+        items.append(
+            _probe(
+                "agent_channel",
+                "真连一次 WebSocket，**只连回路**（127.0.0.1/::1/localhost）：非回路端点这一格报"
+                "「未连接」而不是去连——替这台机器往外发请求不在 doctor 的授权里。连之前先问 TCP："
+                "端口没在听就报 `tcp=… 未监听` 且**不发那一发**，这样「这台机器没配 agent 凭据」"
+                "与「gateway 挂了」不会同形（产品侧 `hermes.py:596` 把两者都归成「握手失败」，"
+                "真因只在 `__cause__` 里，所以那一发跑了之后这里也顺着把真因印出来）。"
+                "凭据与地址都走产品侧 factory，doctor 不复制一份；不在场是本案回退链的**预期输入**，"
+                "它不等于朗读/点击反馈坏了",
+                lambda: _agent_channel(config),
+            )
+        )
     return items
 
 
@@ -425,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
     with contextlib.redirect_stdout(sys.stderr):
         items = collect(
             config, with_gui=args.with_gui, skip_tts=args.skip_tts, skip_layer=args.skip_layer,
-            measure_speech=args.speech_latency,
+            measure_speech=args.speech_latency, probe_agent=args.probe_agent,
         )
     elapsed = time.monotonic() - started
     if args.doctor_format == "json":

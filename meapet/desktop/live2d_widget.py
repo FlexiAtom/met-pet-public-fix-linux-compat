@@ -27,6 +27,13 @@ from meapet.log import get_color_logger
 
 log = get_color_logger("live2d_widget")
 
+#: 进分区判定那两条门票（单位 px / 秒）。名字与数值都放在**这里**而不是内联在 `mouseReleaseEvent`
+#: 里，是因为 `meapet --doctor` 要把它们和 Qt 自己的 `startDragDistance()`/`doubleClickInterval()`
+#: 并排印出来——「点一下为什么没反应」判的就是这两组数谁先立起（拖窗标志的门槛通常远小于 35 px）。
+#: doctor 读这两个名字，不在它那边重抄一遍数字：抄了就是第二套真值，改一处漏一处。
+ZONE_CLICK_MAX_DISTANCE_PX = 35
+ZONE_CLICK_MAX_HOLD_SECONDS = 0.4
+
 
 class Live2DModel:
     """Live2D 模型控制器，提供与 SpriteRenderer 兼容的接口"""
@@ -518,7 +525,10 @@ class Live2DWidget(QOpenGLWidget):
                 dist = math.sqrt((event.x() - px)**2 + (event.y() - py)**2)
                 press_duration = time.time() - self._press_time
 
-                if dist < 35 and press_duration < 0.4:
+                if (
+                    dist < ZONE_CLICK_MAX_DISTANCE_PX
+                    and press_duration < ZONE_CLICK_MAX_HOLD_SECONDS
+                ):
                     w, h = self.width(), self.height()
                     if w <= 0 or h <= 0:
                         self._press_pos = None
