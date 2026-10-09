@@ -19,6 +19,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import types
 import unittest
 from contextlib import redirect_stdout
@@ -314,6 +315,141 @@ class AgentChannelProbeTest(unittest.TestCase):
         ):
             self.assertEqual(doctor.main(["--doctor", "--probe-agent"]), 0)
         self.assertTrue(collect.call_args.kwargs["probe_agent"])
+
+
+class SourceProbeTest(unittest.TestCase):
+    """`--probe-source` 那一档：拿**本机回环上的假 HTTP 服务器**自证四条路径。
+
+    提案 §2 里爬虫与古诗源那两行还闭不了合，卡的是"候选清单未定 + 真跑属新增外联须人工点头"，
+    **不是没有工具**。所以这里先把工具钉死——取文 / 逐请求超时 / 解析 / 脱敏各一发，
+    一个包都不出这台机器（`ThreadingHTTPServer` bind 在 127.0.0.1）。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args) -> None:  # 别把访问日志喷进测试输出
+                pass
+
+            def _send(self, code: int, ctype: str, body: bytes) -> None:
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:
+                if self.path.startswith("/search"):
+                    self._send(
+                        200,
+                        "text/html; charset=utf-8",
+                        "<html><head><title>导航</title>"
+                        "<script>var hint = '标签里的东西不该出现在可见文本里';</script>"
+                        "<body><div class='result'>床前明月光，疑是地上霜</div></body></html>".encode("utf-8"),
+                    )
+                elif self.path.startswith("/poem"):
+                    self._send(
+                        200,
+                        "application/json",
+                        json.dumps(
+                            {"data": [{"text": "春眠不觉晓", "author": "孟浩然"}]},
+                            ensure_ascii=False,
+                        ).encode("utf-8"),
+                    )
+                elif self.path.startswith("/slow"):
+                    time.sleep(5)  # 比 3s 的逐请求预算长、比客户端那个 120s 默认短
+                    self._send(200, "text/plain", "太晚了，这发不该等到".encode("utf-8"))
+                elif self.path.startswith("/boom"):
+                    self._send(500, "text/plain", b"upstream broke")
+                else:
+                    self._send(404, "text/plain", b"nope")
+
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.addClassCleanup(cls.server.shutdown)
+        cls.addClassCleanup(cls.server.server_close)
+
+    def _url(self, path: str) -> str:
+        return f"{self.base}{path}"
+
+    def test_html_gives_visible_text_without_markup_or_script(self) -> None:
+        text = doctor._source_probe(self._url("/search"), allow_egress=False)
+        self.assertIn("status=200", text)
+        self.assertIn("床前明月光", text, "取回了 HTML 却没提出可见文本——那一发等于没证明取到内容")
+        self.assertNotIn("标签里的东西不该出现在可见文本里", text)
+        for noise in ("<html>", "<div", "class="):
+            self.assertNotIn(noise, text, f"markup 漏进读数了：{noise}")
+
+    def test_json_gives_keyed_values_not_a_blob(self) -> None:
+        text = doctor._source_probe(self._url("/poem"), allow_egress=False)
+        self.assertIn("text=春眠不觉晓", text)
+        self.assertIn("author=孟浩然", text)
+
+    def test_per_request_timeout_beats_the_client_default(self) -> None:
+        """这一条是本案**逐请求秒级超时**那句约束的真凭据：默认值是 120 s（`http_async.py:29`），
+        不显式压它，一个挂站的检索页就能把整份取证摁住两分钟。
+        """
+        started = time.perf_counter()
+        text = doctor._source_probe(self._url("/slow"), allow_egress=False)
+        elapsed = time.perf_counter() - started
+        self.assertIn("Timeout", text)
+        self.assertLess(elapsed, 6.0, f"逐请求预算没生效：真等了 {elapsed:.1f}s")
+
+    def test_non_2xx_and_404_are_readings_not_crashes(self) -> None:
+        self.assertIn("status=500", doctor._source_probe(self._url("/boom"), allow_egress=False))
+        self.assertIn("status=404", doctor._source_probe(self._url("/gone"), allow_egress=False))
+
+    def test_query_string_never_prints(self) -> None:
+        """有人把 token 写在查询串里（`llm` 那格同样的怕）——**整条查询丢掉**，只留 host+path。"""
+        text = doctor._source_probe(self._url("/poem?token=sekret-9"), allow_egress=False)
+        self.assertIn("/poem", text)
+        self.assertNotIn("sekret-9", text)
+        self.assertNotIn("token=", text)
+
+    def test_non_loopback_is_refused_before_any_packet(self) -> None:
+        """默认档连 DNS 都不问、一个包不发：`--allow-egress` 是**另一道显式闸**，
+        因为真往外发属"新增外联"，按台账口径须人工明确点头。
+        """
+        with mock.patch(
+            "meapet.http_async.get_json", side_effect=AssertionError("不该发这一个包")
+        ):
+            text = doctor._source_probe("https://gateway.example.com/search", allow_egress=False)
+        self.assertIn("未请求", text)
+        self.assertIn("--allow-egress", text)
+
+    def test_collect_adds_one_row_per_url_and_none_by_default(self) -> None:
+        with mock.patch.object(doctor, "_source_probe", return_value="读数"):
+            default = [item.name for item in doctor.collect({}, skip_tts=True)]
+            self.assertFalse([n for n in default if n.startswith("source.")], default)
+            items = doctor.collect(
+                {}, skip_tts=True, probe_sources=(self._url("/poem"), self._url("/search"))
+            )
+        self.assertEqual([item.name for item in items[-2:]], ["source.1", "source.2"])
+        for item in items[-2:]:
+            self.assertTrue(item.judge)
+            self.assertIn("只连回路", item.judge)
+
+    def test_the_cli_flags_reach_the_collector(self) -> None:
+        args = doctor._parse_args(
+            ["--doctor", "--probe-source", "http://127.0.0.1:1/a", "--probe-source", "http://1/a",
+             "--allow-egress"]
+        )
+        self.assertEqual(args.probe_source, ["http://127.0.0.1:1/a", "http://1/a"])
+        self.assertTrue(args.allow_egress)
+        self.assertEqual(doctor._parse_args(["--doctor"]).probe_source, [])
+        with mock.patch.object(doctor, "collect", return_value=[]) as collect, mock.patch(
+            "meapet.config.store.load_config", return_value={}
+        ):
+            self.assertEqual(
+                doctor.main(["--doctor", "--probe-source", "http://127.0.0.1:1/a"]), 0
+            )
+        self.assertEqual(collect.call_args.kwargs["probe_sources"], ("http://127.0.0.1:1/a",))
+        self.assertFalse(collect.call_args.kwargs["allow_egress"])
 
 
 class ProbeFailureTest(unittest.TestCase):

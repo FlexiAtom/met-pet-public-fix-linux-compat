@@ -10,6 +10,8 @@
   另有一档**外设**例外是 `--probe-agent`：它先问一次 TCP 端口在不在听，在听才真开一次 WebSocket
   去问 gateway 在不在场，且**只连回路**（127.0.0.1/::1/localhost），非回路端点报"未连接"而不去连——
   往外发请求不在这个入口的授权里。默认档同样一次都不发。
+  第三档是 `--probe-source URL`（探候选内容源）：真发一次 GET，但同样**默认只连回路**，
+  往回路外发须再显式带 `--allow-egress`——新增外联要人工明确点头，这一档就是为那句留的闸。
 - **每一项后面直接跟判据**（这条在说什么 / 什么算坏）。否则"这台机器没有 layer-shell"和
   "我们的桥接层没编进包"会被读成同一句话——那正是本入口要消灭的形状。
 - **探测项一律调产品侧那一个函数**，这里不重算。重算就是第二套真值，doctor 会开始自证。
@@ -96,6 +98,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--probe-agent",
         action="store_true",
         help="额外探一次 agent 通道（gateway）在场性：先问 TCP 再真连 WebSocket，**只连回路**，非回路端点不连",
+    )
+    parser.add_argument(
+        "--probe-source",
+        action="append",
+        default=[],
+        metavar="URL",
+        help="探一个候选内容源（点击反馈那两行的取证）：逐请求秒级超时，只印状态/字节/首个可见文本片段；可重复",
+    )
+    parser.add_argument(
+        "--allow-egress",
+        action="store_true",
+        help="配合 --probe-source：允许真往回路外发请求。**新增外联**，须人工明确点头后才带这个",
     )
     return parser.parse_args(argv)
 
@@ -489,6 +503,107 @@ def _agent_channel(config: dict) -> str:
     return f"{label} · 在场：{_capabilities_summary(caps)}（{AGENT_PROBE_BUDGET_SECONDS}s 内握手完成）"
 
 
+#: 内容源探针的逐请求超时（秒）。这一格存在的理由就是**覆盖**客户端那个默认值
+#: （`http_async.py:29` 的 `Timeout(120.0, connect=10.0)`）——点击反馈那条链的口径是"逐请求秒级"，
+#: 不显式压它，一次挂站的检索页就能把整份取证摁住两分钟。
+SOURCE_PROBE_BUDGET_SECONDS = 3.0
+SOURCE_SNIPPET_CHARS = 80
+
+
+def _printable_url(url: str) -> str:
+    """印出来用的地址：**查询串整条丢掉**——有人把 token 写在查询里（`llm` 那格同样的怕）。"""
+    try:
+        split = urlsplit(url)
+        port = split.port
+    except ValueError:
+        return "<地址写法不合法>"
+    host = split.hostname or ""
+    netloc = f"{host}:{port}" if port is not None else host
+    return f"{split.scheme}://{netloc}{split.path}"
+
+
+def _visible_text(body: bytes, content_type: str) -> str:
+    """从响应体里取**一段人能看的文字**——三档解析各走各的，取不到就如实说取不到。
+
+    这一格判的是提案 §2 那两行的"可解析"那半条：状态 200 与一堆字节本身不说明取回了内容，
+    所以要把首个可见片段印出来给人过目。失败不抛——"解析不出"就是那条源该被划掉的证据。
+    """
+    if not body:
+        return "<空响应体>"
+    lowered = (content_type or "").lower()
+    try:
+        if "json" in lowered:
+            data = json.loads(body.decode("utf-8", errors="replace"))
+            pairs = _first_strings(data)
+            return " ".join(f"{key}={val}" for key, val in pairs) or "<JSON 里没有字符串字段>"
+        if "html" in lowered or "xml" in lowered:
+            from lxml import html as lxml_html
+
+            tree = lxml_html.fromstring(body.decode("utf-8", errors="replace"))
+            for dead in tree.xpath("//script | //style | //noscript"):
+                dead.getparent().remove(dead)
+            return " ".join(tree.text_content().split())
+        return body.decode("utf-8", errors="replace").strip()
+    except Exception as exc:  # noqa: BLE001 - 解析不出是读数，不是 traceback
+        return f"<解析失败 {type(exc).__name__}: {str(exc)[:60]}>"
+
+
+def _first_strings(data: object, limit: int = 3) -> list[tuple[str, str]]:
+    """JSON 里前几枚字符串值，**带键名**——古诗源返的是结构，光有值认不出哪句是句。"""
+    found: list[tuple[str, str]] = []
+
+    def walk(node: object, key: str = "") -> None:
+        if len(found) >= limit:
+            return
+        if isinstance(node, dict):
+            for name, value in node.items():
+                walk(value, str(name))
+        elif isinstance(node, list):
+            for value in node:
+                walk(value, key)
+        elif isinstance(node, str) and node.strip():
+            found.append((key or "?", " ".join(node.split())[:40]))
+
+    walk(data)
+    return found
+
+
+async def _fetch_one(url: str) -> tuple:
+    """一发 GET。走 `http_async` 那个共享客户端（TLS/UA/重定向都跟产品同源），
+    但**逐请求把超时压到秒级**——默认那 120 s 是给长任务用的，不是给点击反馈用的。"""
+    from meapet import http_async
+
+    try:
+        response = await http_async.get_json(url, timeout=SOURCE_PROBE_BUDGET_SECONDS)
+        return response.status_code, response.headers.get("content-type", ""), response.content, ""
+    except Exception as exc:  # noqa: BLE001 - 挂/拒/超时都是取证要的那条判据
+        return None, "", b"", f"{type(exc).__name__}: {str(exc)[:120]}"
+    finally:
+        await http_async.aclose_client()
+
+
+def _source_probe(url: str, allow_egress: bool) -> str:
+    host = urlsplit(url).hostname or ""
+    label = _printable_url(url)
+    if not allow_egress and not _is_loopback(host):
+        return (
+            f"{label} · **未请求**：端点不在回路上。带 --allow-egress 才会真往外发，"
+            "而新增外联须人工明确点头——这一格默认不发任何一个包"
+        )
+    started = time.perf_counter()
+    status, content_type, body, error = asyncio.run(_fetch_one(url))
+    elapsed = time.perf_counter() - started
+    if error:
+        return (
+            f"{label} · 失败：{error}（{elapsed:.2f}s，逐请求预算 {SOURCE_PROBE_BUDGET_SECONDS}s）"
+        )
+    snippet = _visible_text(body, content_type)[:SOURCE_SNIPPET_CHARS]
+    return (
+        f"{label} · status={status} ct={content_type or '未声明'} bytes={len(body)} "
+        f"耗时={elapsed:.2f}s · 首个可见文本=「{snippet}」"
+    )
+
+
 def _log_tail(lines: int = 5) -> str:
     from meapet.paths import data_path
 
@@ -502,11 +617,13 @@ def _log_tail(lines: int = 5) -> str:
 
 def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             skip_layer: bool = False, measure_speech: bool = False,
-            probe_agent: bool = False) -> list[Item]:
+            probe_agent: bool = False, probe_sources: tuple[str, ...] = (),
+            allow_egress: bool = False) -> list[Item]:
     """跑一遍探测，返回逐项读数（任何一项坏都会变成一行文本，不抛）。
 
-    带 `measure_speech` / `probe_agent` 那两档时才跑会动手的格（起子进程落 wav / 真开一次
-    WebSocket）；默认两档都是 False，一格不动。
+    带 `measure_speech` / `probe_agent` / `probe_sources` 那三档时才跑会动手的格（起子进程落 wav /
+    真开一次 WebSocket / 真发一次 GET）；默认三档都不动，一格不碰、一个包不发。
+    `probe_sources` 只连回路，除非同时显式带 `allow_egress`（那是"新增外联"，须人工点头）。
     """
     items = [
         _probe(
@@ -622,6 +739,18 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                 lambda: _agent_channel(config),
             )
         )
+    for index, url in enumerate(probe_sources, start=1):
+        items.append(
+            _probe(
+                f"source.{index}",
+                "点击反馈那两个新内容源（关键词检索 / 古诗 API）的**设施取证**：逐请求超时压到 "
+                f"{SOURCE_PROBE_BUDGET_SECONDS}s（不压就吃 `http_async.py:29` 那个 120s 默认），"
+                "只印状态/字节/首个可见文本片段——200 与一堆字节不说明取回了内容，片段给人过目才说明。"
+                "查询串不进读数（有人把 token 写在那儿）。**默认只连回路**，非回路要显式 --allow-egress，"
+                "那一步是新增外联、须人工点头；真站候选清单未定时这条格跑不了，不猜 URL",
+                lambda u=url, eg=allow_egress: _source_probe(u, eg),
+            )
+        )
     return items
 
 
@@ -649,6 +778,7 @@ def main(argv: list[str] | None = None) -> int:
         items = collect(
             config, with_gui=args.with_gui, skip_tts=args.skip_tts, skip_layer=args.skip_layer,
             measure_speech=args.speech_latency, probe_agent=args.probe_agent,
+            probe_sources=tuple(args.probe_source), allow_egress=args.allow_egress,
         )
     elapsed = time.monotonic() - started
     if args.doctor_format == "json":
