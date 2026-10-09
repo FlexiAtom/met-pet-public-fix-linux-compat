@@ -331,6 +331,10 @@ class SourceProbeTest(unittest.TestCase):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
         class Handler(BaseHTTPRequestHandler):
+            #: HTTP/1.1 + Content-Length 才有 keep-alive——`_peer_note` 取实连对端地址靠的是
+            #: 响应还没关连接那一刻（1.0 一答一关，那时 socket 已经没了）。
+            protocol_version = "HTTP/1.1"
+
             def log_message(self, *args) -> None:  # 别把访问日志喷进测试输出
                 pass
 
@@ -340,6 +344,20 @@ class SourceProbeTest(unittest.TestCase):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def do_POST(self) -> None:
+                """把**收到的体与头**回显成 JSON：证"那发真按 POST 打出去了"，不证服务器内容。"""
+                raw = self.rfile.read(int(self.headers.get("Content-Length", "0") or 0))
+                try:
+                    payload = json.loads(raw.decode("utf-8"))
+                except Exception:  # noqa: BLE001 - 体读不出来就是这一发要过目的东西
+                    payload = {}
+                echo = {
+                    "query": str(payload.get("query", "<体里没有 query>")),
+                    "auth": "Bearer 在场" if self.headers.get("Authorization") else "Authorization 缺席",
+                    "mode": "Access-Mode 在场" if self.headers.get("X-Tavily-Access-Mode") else "Access-Mode 缺席",
+                }
+                self._send(200, "application/json", json.dumps(echo, ensure_ascii=False).encode("utf-8"))
 
             def do_GET(self) -> None:
                 if self.path.startswith("/search"):
@@ -455,6 +473,56 @@ class SourceProbeTest(unittest.TestCase):
         self.assertNotIn("sekret-9", text)
         self.assertNotIn("token=", text)
 
+    def test_post_echoes_the_body_because_latency_needs_its_config(self) -> None:
+        """POST 那一发的**查询体跟着读数印出来**：没有它，"4.06 s" 只是个数，不知道拿什么打出来的。
+
+        这一条同时钉"体真到了服务器"（回显回来的 query）——只印客户端以为自己发了什么，
+        等于没证明编码形状对得上（Tavily 收的是 JSON 对象）。
+        """
+        text = doctor._source_probe(
+            self._url("/search"), allow_egress=False, method="POST",
+            body_json='{"query":"床前明月光","max_results":3}',
+        )
+        self.assertIn("POST ", text, f"读数里认不出这是 POST：{text}")
+        self.assertIn("status=200", text)
+        self.assertIn('体={"query":"床前明月光"', text)
+        self.assertIn("query=床前明月光", text, "体没真到服务器：回显里没有那句 query")
+
+    def test_post_without_body_refuses_before_any_packet(self) -> None:
+        """没给体就一个包不发：猜一份查询打出来的延迟判不了案，也不许拿它去闭合提案里那一行。"""
+        with mock.patch("meapet.http_async.post_json", side_effect=AssertionError("不该发这一个包")):
+            text = doctor._source_probe(self._url("/search"), allow_egress=False, method="POST")
+        self.assertIn("未请求", text)
+        self.assertIn("--probe-body", text)
+
+    def test_post_body_must_be_a_json_object(self) -> None:
+        """体写法不对也**不发**：字符串/数组不是这一族 API 的形状，发出去只得到一句 4xx。"""
+        for raw in ("不是 JSON", '"just a string"', "[1,2]"):
+            text = doctor._source_probe(
+                self._url("/search"), allow_egress=False, method="POST", body_json=raw
+            )
+            self.assertIn("未请求", text, f"这发本该被挡下：{raw} → {text}")
+
+    def test_header_values_never_print_but_do_reach_the_wire(self) -> None:
+        """头**只认在场、不印值**（Bearer token 与 keyless 档位都算凭据面），但得证明它真发出去了。"""
+        text = doctor._source_probe(
+            self._url("/search"), allow_egress=False, method="POST",
+            body_json='{"query":"x"}',
+            headers=("Authorization: Bearer tvly-SEKRET-9", "X-Tavily-Access-Mode: keyless"),
+        )
+        self.assertIn("status=200", text)
+        self.assertNotIn("tvly-SEKRET-9", text)
+        self.assertIn("Bearer 在场", text, "头没到服务器，那一发的档位就是没测过")
+        self.assertIn("Access-Mode 在场", text)
+
+    def test_malformed_header_sends_no_packet(self) -> None:
+        """`K:V` 写法不对就停下——把「没有冒号的那一枚」整条当名字发出去，是替人猜意图。"""
+        with mock.patch("meapet.http_async.get_json", side_effect=AssertionError("不该发这一个包")):
+            text = doctor._source_probe(
+                self._url("/poem"), allow_egress=False, headers=("没有冒号的那一枚",)
+            )
+        self.assertIn("未请求", text)
+
     def test_non_loopback_is_refused_before_any_packet(self) -> None:
         """默认档连 DNS 都不问、一个包不发：`--allow-egress` 是**另一道显式闸**，
         因为真往外发属"新增外联"，按台账口径须人工明确点头。
@@ -465,6 +533,72 @@ class SourceProbeTest(unittest.TestCase):
             text = doctor._source_probe("https://gateway.example.com/search", allow_egress=False)
         self.assertIn("未请求", text)
         self.assertIn("--allow-egress", text)
+
+    def test_family_pin_is_a_real_pin_not_a_label(self) -> None:
+        """`--probe-family` 必须**真能换地址栈**：钉 ipv6 就该连不上这台只 bind 127.0.0.1 的假服务器。
+
+        印个标签而不换 socket 的话这一格就成了假证据源——本案要问的正是"那条 8 s 无响应到底是
+        源站挂了，还是本机 v6 出口挂了"，读数不真就等于没改探针。
+        """
+        pinned = doctor._source_probe(self._url("/poem"), allow_egress=False, family="ipv4")
+        self.assertIn("status=200", pinned)
+        self.assertIn("peer=127.0.0.1·ipv4", pinned, f"没印实连对端地址：{pinned}")
+        wrong = doctor._source_probe(self._url("/poem"), allow_egress=False, family="ipv6")
+        self.assertIn("失败", wrong)
+        self.assertNotIn("status=", wrong)
+        self.assertIn("家族=ipv6", wrong)
+
+    def test_auto_failure_is_marked_undecided(self) -> None:
+        """auto 那档的失败读数必须自带「未定」：双栈由系统挑，把挂写成"这源连不上"就是假证（本机踩过）。"""
+        text = doctor._source_probe("http://127.0.0.1:1/poem", allow_egress=False)
+        self.assertIn("失败", text)
+        self.assertIn("未定", text)
+        self.assertIn("--probe-family", text, "没给下一步动作，那句未定等于让人自己想起怎么测")
+        pinned = doctor._source_probe("http://127.0.0.1:1/poem", allow_egress=False, family="ipv4")
+        self.assertIn("与另一族无关", pinned)
+        self.assertNotIn("未定", pinned)
+
+    def test_read_phase_timeout_does_not_blame_the_address_family(self) -> None:
+        """挂在**读**那一面就不许劝人分族重测：那一发连上了，只是没在预算内吐完。
+
+        真站 8 发 Tavily 里踩过一发 `ReadTimeout`（3.56s），那时"换一族再试"是把人往错方向支。
+        """
+        text = doctor._source_probe(self._url("/slow"), allow_egress=False)
+        self.assertIn("Timeout", text)
+        self.assertIn("与地址栈无关", text)
+        self.assertNotIn("--probe-family", text)
+        self.assertNotIn("未定", text)
+
+    def test_collect_numbers_get_then_post_slots_continuously(self) -> None:
+        """GET 槽在前、POST 槽接续编号：两份清单合成一条 `source.N` 序列，报告里数得完。"""
+        with mock.patch.object(doctor, "_source_probe", return_value="读数"):
+            items = doctor.collect(
+                {}, skip_tts=True,
+                probe_sources=(self._url("/poem"),), probe_posts=(self._url("/search"),),
+            )
+        self.assertEqual([item.name for item in items[-2:]], ["source.1", "source.2"])
+
+    def test_the_new_probe_flags_reach_the_collector(self) -> None:
+        args = doctor._parse_args(
+            ["--doctor", "--probe-post", "https://api.tavily.com/search", "--probe-body", '{"query":"x"}',
+             "--probe-header", "X-Tavily-Access-Mode: keyless", "--probe-family", "ipv4"]
+        )
+        self.assertEqual(args.probe_post, ["https://api.tavily.com/search"])
+        self.assertEqual(args.probe_body, '{"query":"x"}')
+        self.assertEqual(args.probe_header, ["X-Tavily-Access-Mode: keyless"])
+        self.assertEqual(args.probe_family, "ipv4")
+        self.assertEqual(doctor._parse_args(["--doctor"]).probe_family, "auto")
+        self.assertEqual(doctor._parse_args(["--doctor"]).probe_post, [])
+        with mock.patch.object(doctor, "collect", return_value=[]) as collect, mock.patch(
+            "meapet.config.store.load_config", return_value={}
+        ):
+            self.assertEqual(
+                doctor.main(["--doctor", "--probe-post", "http://127.0.0.1:1/a",
+                             "--probe-body", '{"query":"x"}', "--probe-family", "ipv6"]), 0
+            )
+        self.assertEqual(collect.call_args.kwargs["probe_posts"], ("http://127.0.0.1:1/a",))
+        self.assertEqual(collect.call_args.kwargs["probe_family"], "ipv6")
+        self.assertEqual(collect.call_args.kwargs["probe_body"], '{"query":"x"}')
 
     def test_collect_adds_one_row_per_url_and_none_by_default(self) -> None:
         with mock.patch.object(doctor, "_source_probe", return_value="读数"):

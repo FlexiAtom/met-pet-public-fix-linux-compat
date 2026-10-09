@@ -10,8 +10,11 @@
   另有一档**外设**例外是 `--probe-agent`：它先问一次 TCP 端口在不在听，在听才真开一次 WebSocket
   去问 gateway 在不在场，且**只连回路**（127.0.0.1/::1/localhost），非回路端点报"未连接"而不去连——
   往外发请求不在这个入口的授权里。默认档同样一次都不发。
-  第三档是 `--probe-source URL`（探候选内容源）：真发一次 GET，但同样**默认只连回路**，
-  往回路外发须再显式带 `--allow-egress`——新增外联要人工明确点头，这一档就是为那句留的闸。
+  第三档是 `--probe-source URL` / `--probe-post URL --probe-body JSON`（探候选内容源）：真发一次
+  GET 或 POST，但同样**默认只连回路**，往回路外发须再显式带 `--allow-egress`——新增外联要人工
+  明确点头，这一档就是为那句留的闸。`--probe-family {auto,ipv4,ipv6}` 管那一发走哪一族地址栈，
+  读数里另印**实连的对端地址**：本机 IPv6 出口不稳，不分家族的"连不上"读数判不了案（见坑「网络
+  取证的"连不上"必须分 IP 家族重测」）。
 - **每一项后面直接跟判据**（这条在说什么 / 什么算坏）。否则"这台机器没有 layer-shell"和
   "我们的桥接层没编进包"会被读成同一句话——那正是本入口要消灭的形状。
 - **探测项一律调产品侧那一个函数**，这里不重算。重算就是第二套真值，doctor 会开始自证。
@@ -104,12 +107,41 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="append",
         default=[],
         metavar="URL",
-        help="探一个候选内容源（点击反馈那两行的取证）：逐请求秒级超时，只印状态/字节/首个可见文本片段；可重复",
+        help="探一个候选内容源（点击反馈那两行的取证）：GET，逐请求秒级超时，只印状态/字节/首个可见文本片段；可重复",
+    )
+    parser.add_argument(
+        "--probe-post",
+        action="append",
+        default=[],
+        metavar="URL",
+        help="同 --probe-source，但发 POST，请求体取 --probe-body（每一发 POST 共用那一份，要分别传就分次跑）；可重复",
+    )
+    parser.add_argument(
+        "--probe-body",
+        default="",
+        metavar="JSON",
+        help="配合 --probe-post：JSON 字符串。体原文会跟着读数一起印——延迟几秒必须连着"
+        "「用什么查询打出来的」才读得出（人工 2026-10-08 那句「标注使用的配置」）",
+    )
+    parser.add_argument(
+        "--probe-header",
+        action="append",
+        default=[],
+        metavar="K:V",
+        help="给内容源探针追加请求头（Tavily 的 X-Tavily-Access-Mode / Authorization 走这里）。"
+        "**值一律不进读数**；但它会出现在本进程的 argv 里，同机其他用户看得见——凭据用环境变量带进来",
+    )
+    parser.add_argument(
+        "--probe-family",
+        choices=("auto", "ipv4", "ipv6"),
+        default="auto",
+        help="内容源探针走哪一族地址栈：auto=与产品同路径（双栈由系统挑），ipv4/ipv6=强制那一族。"
+        "本机 IPv6 出口不稳，所以「连不上」这一档必须能分族重测才判得了案",
     )
     parser.add_argument(
         "--allow-egress",
         action="store_true",
-        help="配合 --probe-source：允许真往回路外发请求。**新增外联**，须人工明确点头后才带这个",
+        help="配合 --probe-source/--probe-post：允许真往回路外发请求。**新增外联**，须人工明确点头后才带这个",
     )
     return parser.parse_args(argv)
 
@@ -516,6 +548,13 @@ SOURCE_PROBE_BUDGET_SECONDS = 3.0
 SOURCE_PROBE_HARD_CAP_SECONDS = 8.0
 #: "首个可见文本"截多长：够人过目认出是不是想要那句即可，不是把整页正文搬进报告。
 SOURCE_SNIPPET_CHARS = 80
+#: `--probe-family` 到 httpcore `local_address` 的对照：`"0.0.0.0"` 让 socket 建成 AF_INET、
+#: `"::"` 建成 AF_INET6（httpcore 自己就这条逃生口写了这一句）。`auto` 不在表里——它走产品那个
+#: 共享客户端、由系统双栈挑，所以**auto 那档的失败读数判不了"这源连不上"**（本机 IPv6 出口不稳，
+#: 同一个域名 `-4` 200/2.06s、双栈 8s 无响应，是实测踩出来的）。
+SOURCE_PROBE_FAMILY_BIND = {"ipv4": "0.0.0.0", "ipv6": "::"}
+#: 请求体印进读数时截多长：那一发的"用什么查询打出来的"要过目，但不是把整份 body 搬回来。
+SOURCE_PROBE_BODY_CHARS = 160
 
 
 def _printable_url(url: str) -> str:
@@ -576,53 +615,180 @@ def _first_strings(data: object, limit: int = 3) -> list[tuple[str, str]]:
     return found
 
 
-async def _fetch_one(url: str) -> tuple:
-    """一发 GET。走 `http_async` 那个共享客户端（TLS/UA/重定向都跟产品同源），
-    但**不把默认那 120 s 递给调用方**——那是给长任务用的，不是给点击反馈用的。
+async def _fetch_one(method: str, url: str, body, headers, family: str) -> tuple:
+    """一发请求（GET 或 POST）。返回 `(status, content_type, 原始字节, 错误串, 对端注记)`。
 
-    两层各管一件事：`timeout` 是 httpx 的**每次操作**预算（连不上/不再吐字节要多久才放手），
-    `wait_for` 才是**端到端**上限（滴流式慢响应也能掐住）。"""
+    两档路径**有意**分开：`family="auto"` 走 `http_async` 那个共享客户端（TLS/UA/重定向/代理都跟
+    产品同源），钉了家族的那两档自起一个客户端——共享那一个没法按次换 transport。代价写在
+    `_pinned_client` 里（它绕开环境代理，否则钉的是到代理那一段的家族）。
+
+    两种情形都不把客户端那个默认超时递给调用方：`timeout` 是 httpx 的**每次操作**预算（连不上/
+    不再吐字节要多久才放手），`wait_for` 才是**端到端**上限（滴流式慢响应也能掐住）。"""
     from meapet import http_async
 
+    status, content_type, raw, error, peer = None, "", b"", "", ""
+    own_client = None
     try:
-        response = await http_async.get_json(url, timeout=SOURCE_PROBE_BUDGET_SECONDS)
-        return response.status_code, response.headers.get("content-type", ""), response.content, ""
+        kwargs: dict = {"timeout": SOURCE_PROBE_BUDGET_SECONDS}
+        if headers:
+            kwargs["headers"] = headers
+        if family == "auto":
+            if method == "POST":
+                response = await http_async.post_json(url, json=body, **kwargs)
+            else:
+                response = await http_async.get_json(url, **kwargs)
+        else:
+            own_client = _pinned_client(family)
+            response = await own_client.request(
+                method, url, json=body if method == "POST" else None, **kwargs
+            )
+        status = response.status_code
+        content_type = response.headers.get("content-type", "")
+        raw = response.content
+        #: 必须在关掉客户端之前取——连接一断底层 socket 就没了，那时再问抛 OSError。
+        peer = _peer_note(response)
     except Exception as exc:  # noqa: BLE001 - 挂/拒/超时都是取证要的那条判据
-        return None, "", b"", f"{type(exc).__name__}: {str(exc)[:120]}"
+        error = f"{type(exc).__name__}: {str(exc)[:120]}"
     finally:
-        await http_async.aclose_client()
+        if own_client is not None:
+            await own_client.aclose()
+        else:
+            await http_async.aclose_client()
+    return status, content_type, raw, error, peer
 
 
-async def _fetch_capped(url: str) -> tuple:
+async def _fetch_capped(method: str, url: str, body, headers, family: str) -> tuple:
     """端到端兜底：超 `SOURCE_PROBE_HARD_CAP_SECONDS` 就掐，报成 TotalTimeout 而不是把挂起递给调用方。"""
     try:
-        return await asyncio.wait_for(_fetch_one(url), SOURCE_PROBE_HARD_CAP_SECONDS)
+        return await asyncio.wait_for(
+            _fetch_one(method, url, body, headers, family), SOURCE_PROBE_HARD_CAP_SECONDS
+        )
     except asyncio.TimeoutError:
-        return None, "", b"", f"TotalTimeout: 端到端 {SOURCE_PROBE_HARD_CAP_SECONDS}s 用完"
+        return None, "", b"", f"TotalTimeout: 端到端 {SOURCE_PROBE_HARD_CAP_SECONDS}s 用完", ""
 
 
-def _source_probe(url: str, allow_egress: bool) -> str:
+def _pinned_client(family: str):
+    """按家族钉死的那一发用的独立客户端：TLS 上下文与 UA 照 `_new_client` 那一套，只多一枚 local_address。
+
+    两个刻意的偏离，读数里都看得见：① `trust_env=False`——环境里设了代理时 httpx 会连代理而非源站，
+    那时 `local_address` 钉的是"到代理那一段"的家族，读数会说 ipv4、实际源站走的是隧道，那一条假证
+    比没证更坏；② `verify` 得传给 **transport**（传给 client 会被 transport 参数整体忽略），
+    否则这条路径退回 certifi——产品那个共享客户端用 OS 证书store 正是为了绕开打包态 certifi 缺失。
+    """
+    import ssl
+
+    import httpx
+
+    from meapet import USER_AGENT
+
+    transport = httpx.AsyncHTTPTransport(
+        local_address=SOURCE_PROBE_FAMILY_BIND[family],
+        verify=ssl.create_default_context(),
+        trust_env=False,
+    )
+    return httpx.AsyncClient(
+        transport=transport,
+        timeout=httpx.Timeout(SOURCE_PROBE_BUDGET_SECONDS),
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    )
+
+
+def _peer_note(response) -> str:
+    """那一发**实际连到了哪个地址**——IP 家族之争只有靠这一格才断得清（`--probe-family auto` 时唯一的信息源）。
+
+    取的是 httpcore 挂在响应扩展里的 `network_stream`（`server_addr` = 对端）。取不到就如实说取不到，
+    **不猜**：猜来的地址等于没测。
+    """
+    try:
+        stream = response.extensions.get("network_stream")
+        peer = stream.get_extra_info("server_addr") if stream is not None else None
+        host = peer[0] if isinstance(peer, (tuple, list)) and peer else str(peer)
+    except Exception as exc:  # noqa: BLE001 - 对端取不到是读数缺一格，不是 traceback
+        return f"peer=未取到（{type(exc).__name__}）"
+    if not host or host == "None":
+        return "peer=未取到（连接已关或后端不提供）"
+    scope = host.split("%", 1)[0]
+    return f"peer={scope}·{'ipv6' if ':' in scope else 'ipv4'}"
+
+
+def _parse_probe_headers(raw: tuple[str, ...]) -> tuple[dict[str, str], str]:
+    """`--probe-header K:V` 收成字典；写法不对就返回一句错误，由调用方报"未请求"——**不猜哪半是名字**。"""
+    parsed: dict[str, str] = {}
+    for row in raw:
+        name, sep, value = row.partition(":")
+        if not sep or not name.strip():
+            return parsed, f"--probe-header 写法不对：「{row}」（要 K:V）"
+        parsed[name.strip()] = value.strip()
+    return parsed, ""
+
+
+def _source_probe(
+    url: str,
+    allow_egress: bool,
+    *,
+    method: str = "GET",
+    body_json: str = "",
+    headers: tuple[str, ...] = (),
+    family: str = "auto",
+) -> str:
     host = urlsplit(url).hostname or ""
     label = _printable_url(url)
+    if method == "POST":
+        label = f"POST {label}"
+    else:
+        method = "GET"
     if not allow_egress and not _is_loopback(host):
         return (
             f"{label} · **未请求**：端点不在回路上。带 --allow-egress 才会真往外发，"
             "而新增外联须人工明确点头——这一格默认不发任何一个包"
         )
+    header_map, header_error = _parse_probe_headers(tuple(headers))
+    if header_error:
+        return f"{label} · **未请求**：{header_error}（一个包没发）"
+    body = None
+    if method == "POST":
+        if not body_json.strip():
+            return (
+                f"{label} · **未请求**：POST 要配 --probe-body——体原文跟着读数一起印，"
+                "不替你猜一份查询（猜来的延迟判不了案）"
+            )
+        try:
+            body = json.loads(body_json)
+        except json.JSONDecodeError as exc:
+            return f"{label} · **未请求**：--probe-body 不是合法 JSON：{exc.msg} 位置 {exc.pos}（一个包没发）"
+        if not isinstance(body, dict):
+            return f"{label} · **未请求**：--probe-body 得是 JSON 对象（这一族 API 都收对象）"
     started = time.perf_counter()
-    status, content_type, body, error = asyncio.run(_fetch_capped(url))
+    status, content_type, raw_body, error, peer = asyncio.run(
+        _fetch_capped(method, url, body, header_map, family)
+    )
     elapsed = time.perf_counter() - started
     #: 延迟判定与读数同屏：超线的成功仍是成功，但要让人一眼看出它超了点击反馈那条预算线。
     verdict = "" if elapsed <= SOURCE_PROBE_BUDGET_SECONDS else f" · **超 {SOURCE_PROBE_BUDGET_SECONDS}s 预算**"
     if error:
+        #: 挂在哪一段决定下一步测什么：**连接段**才轮到地址栈的怀疑（这台机器 IPv6 出口不稳，
+        #: auto 那档把 v6 挂写成"这源连不上"就是假证）；**读段**（ReadTimeout/TotalTimeout）与
+        #: 栈无关，劝人分族重测是把人往错方向支——那是源站慢，不是路不通。
+        if error.startswith("Connect"):
+            tail = (
+                "（双栈由系统挑 → **未定**：分族重测 `--probe-family ipv4` 与 `ipv6` 各跑一遍才判得了这源死活）"
+                if family == "auto"
+                else f"（{family} 那一条自己挂的，与另一族无关）"
+            )
+        else:
+            tail = "（挂在**读**那一面，与地址栈无关：这一发连上了却没在预算内吐完，分族重测治不了它）"
         return (
             f"{label} · 失败：{error}（{elapsed:.2f}s；每次操作预算 "
             f"{SOURCE_PROBE_BUDGET_SECONDS}s / 端到端上限 {SOURCE_PROBE_HARD_CAP_SECONDS}s）"
+            f" · 家族={family}{tail}"
         )
-    snippet = _visible_text(body, content_type)[:SOURCE_SNIPPET_CHARS]
+    snippet = _visible_text(raw_body, content_type)[:SOURCE_SNIPPET_CHARS]
+    body_note = f" · 体={body_json[:SOURCE_PROBE_BODY_CHARS]}" if body is not None else ""
     return (
-        f"{label} · status={status} ct={content_type or '未声明'} bytes={len(body)} "
-        f"耗时={elapsed:.2f}s{verdict} · 首个可见文本=「{snippet}」"
+        f"{label} · status={status} ct={content_type or '未声明'} bytes={len(raw_body)} "
+        f"耗时={elapsed:.2f}s{verdict} · 家族={family} {peer}{body_note}"
+        f" · 首个可见文本=「{snippet}」"
     )
 
 
@@ -640,12 +806,15 @@ def _log_tail(lines: int = 5) -> str:
 def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             skip_layer: bool = False, measure_speech: bool = False,
             probe_agent: bool = False, probe_sources: tuple[str, ...] = (),
+            probe_posts: tuple[str, ...] = (), probe_body: str = "",
+            probe_headers: tuple[str, ...] = (), probe_family: str = "auto",
             allow_egress: bool = False) -> list[Item]:
     """跑一遍探测，返回逐项读数（任何一项坏都会变成一行文本，不抛）。
 
-    带 `measure_speech` / `probe_agent` / `probe_sources` 那三档时才跑会动手的格（起子进程落 wav /
-    真开一次 WebSocket / 真发一次 GET）；默认三档都不动，一格不碰、一个包不发。
-    `probe_sources` 只连回路，除非同时显式带 `allow_egress`（那是"新增外联"，须人工点头）。
+    带 `measure_speech` / `probe_agent` / `probe_sources`|`probe_posts` 那三档时才跑会动手的格
+    （起子进程落 wav / 真开一次 WebSocket / 真发一次 GET 或 POST）；默认三档都不动，一格不碰、
+    一个包不发。`probe_sources` 与 `probe_posts` 只连回路，除非同时显式带 `allow_egress`
+    （那是"新增外联"，须人工点头）。
     """
     items = [
         _probe(
@@ -761,7 +930,8 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                 lambda: _agent_channel(config),
             )
         )
-    for index, url in enumerate(probe_sources, start=1):
+    slots = [("GET", url) for url in probe_sources] + [("POST", url) for url in probe_posts]
+    for index, (method, url) in enumerate(slots, start=1):
         items.append(
             _probe(
                 f"source.{index}",
@@ -771,9 +941,21 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                 f"{SOURCE_PROBE_HARD_CAP_SECONDS}s。超判定线 {SOURCE_PROBE_BUDGET_SECONDS}s 的成功照样报成功，"
                 "只多挂一句「超预算」——把可用源掐死会把它误读成不可用。"
                 "只印状态/字节/首个可见文本片段——200 与一堆字节不说明取回了内容，片段给人过目才说明。"
-                "查询串不进读数（有人把 token 写在那儿）。**默认只连回路**，非回路要显式 --allow-egress，"
-                "那一步是新增外联、须人工点头；真站候选清单未定时这条格跑不了，不猜 URL",
-                lambda u=url, eg=allow_egress: _source_probe(u, eg),
+                "查询串不进读数（有人把 token 写在那儿），头只认写法不印值；POST 的体印出来——延迟几秒"
+                "必须连着「用什么查询打出来的」才读得出。"
+                "**家族那一格是本案要的**：这台机器 IPv6 出口不稳，auto 那档**连接段**挂的读数只判"
+                "「未定」，要 `--probe-family ipv4`/`ipv6` 各跑一遍才敢说这源死活（读段挂的不算，"
+                "那是源站慢）；成功那档印实连对端地址。"
+                "**默认只连回路**，非回路要显式 --allow-egress，那一步是新增外联、须人工点头；"
+                "真站候选清单未定时这条格跑不了，不猜 URL 也不猜端点",
+                lambda m=method, u=url: _source_probe(
+                    u,
+                    allow_egress,
+                    method=m,
+                    body_json=probe_body,
+                    headers=probe_headers,
+                    family=probe_family,
+                ),
             )
         )
     return items
@@ -803,7 +985,9 @@ def main(argv: list[str] | None = None) -> int:
         items = collect(
             config, with_gui=args.with_gui, skip_tts=args.skip_tts, skip_layer=args.skip_layer,
             measure_speech=args.speech_latency, probe_agent=args.probe_agent,
-            probe_sources=tuple(args.probe_source), allow_egress=args.allow_egress,
+            probe_sources=tuple(args.probe_source), probe_posts=tuple(args.probe_post),
+            probe_body=args.probe_body, probe_headers=tuple(args.probe_header),
+            probe_family=args.probe_family, allow_egress=args.allow_egress,
         )
     elapsed = time.monotonic() - started
     if args.doctor_format == "json":
