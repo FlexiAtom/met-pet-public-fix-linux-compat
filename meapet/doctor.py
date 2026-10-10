@@ -326,8 +326,9 @@ def _input_thresholds(with_gui: bool) -> str:
     """点击链上那两道**门槛**的数：Qt 系统给的和产品自己写死的，并排印出来。
 
     分成两组是有原因的：「点一下没反应」有两种完全不同的坏法——拖窗标志先立起
-    （`startDragDistance` 通常远小于分区门票那 35 px），或者双击的第二次 release 在去抖窗口内
-    就已经把反馈发出去了（去抖窗口要跟的是**系统值**，不是提案里那个 300 ms 参考值）。
+    （`startDragDistance` 通常远小于分区门票那 35 px），或者双击的第二次 release 在
+    「单击/双击那道延迟」的窗口内就已经把反馈发出去了（提案里那道延迟要跟的是**系统值**，
+    不是人工那句「比如300ms」的参考值）。
     读数不带这两组数就分不出是哪种，所以两边各印各的，不合成一个"看起来正常"。
     """
     if not with_gui:
@@ -963,7 +964,7 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
         ),
         _probe(
             "input_thresholds",
-            "去抖/分区那两道门槛的数：doubleClickInterval 是**系统给的**，提案里那个 300 ms 只是下限参考——"
+            "单击/双击那道延迟与分区门票的数：doubleClickInterval 是**系统给的**，人工那句「比如300ms」只是下限参考——"
             "固定值小于这一格的读数就拦不住双击；startDragDistance 若小于产品门票那 35 px，"
             "手抖一下这次点击就被当拖窗吃掉。platformName=offscreen 时读到的是 Qt 默认值，不是这台桌面的设定",
             lambda: _input_thresholds(with_gui),
