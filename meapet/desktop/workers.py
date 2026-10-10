@@ -183,6 +183,67 @@ class AgentChatWorker:
         self._future = None
 
 
+class ClickFeedbackWorker:
+    """点击反馈的取文任务 — 兼容原轮询接口（start / done / get_result）。
+
+    与 `ChatWorker` 同一形状而不是 `add_done_callback` 直接回投 UI：那个回调跑在 asyncio 线程上，
+    在里面碰气泡就是跨线程动 Qt。轮询把那一步交回 Qt 主线程，代价只是 100 ms 一档的粒度。
+    """
+
+    def __init__(self, config: dict, source: str, one_shot=None, zone_label: str = ""):
+        self.config = config
+        self.source = source
+        self.one_shot = one_shot
+        self.zone_label = zone_label
+        self._future: Optional[Future] = None
+        self._result: Optional[object] = None
+        self._done = False
+
+    def start(self):
+        from meapet.click_feedback.feedback import fetch_feedback_text
+
+        self._done = False
+        self._result = None
+        self._future = submit(
+            fetch_feedback_text(
+                self.config,
+                self.source,
+                zone_label=self.zone_label,
+                one_shot=self.one_shot,
+            )
+        )
+
+        def _done_cb(fut: Future):
+            try:
+                self._result = fut.result()
+            except Exception as exc:  # noqa: BLE001 - 取文层的异常已经变成 ok=False
+                log_error("ClickFeedbackWorker", f"{type(exc).__name__}: {exc}")
+                self._result = None
+            self._done = True
+
+        self._future.add_done_callback(_done_cb)
+
+    @property
+    def done(self):
+        return self._done
+
+    def get_result(self):
+        return self._result
+
+    def isRunning(self):
+        return self._future is not None and not self._future.done()
+
+    def terminate(self):
+        try:
+            if self._future is not None and not self._future.done():
+                self._future.cancel()
+        except Exception:
+            pass
+
+    def deleteLater(self):
+        self._future = None
+
+
 class TTSWorker:
     """异步 TTS 任务 — 兼容原轮询接口。"""
 

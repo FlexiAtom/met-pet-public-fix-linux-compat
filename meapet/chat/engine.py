@@ -83,6 +83,15 @@ _TTS_METADATA_RE = re.compile(
 _TTS_DELIVERY_MAX_CHARS = 60
 
 
+class ChatCallFailed(RuntimeError):
+    """一次性生成（`one_shot_async`）那一档的失败。
+
+    存在理由：对话链失败时回一句本地兜底句是**产品行为**（人总要听见点什么），但那句与模型真
+    生成的句子**形状相同**，调用方分不出成败。点击反馈那条链的口径是「失败回退预制语音**并留日志**」
+    （人工 2026-10 原话），要留日志就得知道到底失败了没有——所以它必须能把失败当失败拿到手。
+    """
+
+
 class ChatEngine:
     """统一对话引擎 + 记忆/养成系统。
 
@@ -601,18 +610,27 @@ class ChatEngine:
             self._debug_dump("quick_chat exception", e)
             return self._fallback_reply(), "neutral"
 
-    async def _dispatch_chat_async(self, messages: List[Dict[str, str]]) -> str:
-        """按 protocol 分发：ollama_chat 走原生 /api/chat，其余走 OpenAI 兼容。"""
+    async def _dispatch_chat_async(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        strict: bool = False,
+    ) -> str:
+        """按 protocol 分发：ollama_chat 走原生 /api/chat，其余走 OpenAI 兼容。
+
+        `strict=True` 时失败抛 `ChatCallFailed` 而不是回兜底句——只有 `one_shot_async` 用得上，
+        对话链按默认值走（那句兜底句是产品行为，不是缺陷）。
+        """
         protocol = str(getattr(self, "protocol", "") or "").strip().lower()
         if protocol == "ollama_chat":
-            return await self._chat_ollama_async(messages)
+            return await self._chat_ollama_async(messages, strict=strict)
         # MiMo 等 OpenAI 兼容端点共用同一路径；default_base 仅作 api_base 空时兜底。
         from meapet.config.store import detect_endpoint_family
 
         family = detect_endpoint_family(self.api_base, self.host)
         if family == "mimo":
-            return await self._chat_mimo_async(messages)
-        return await self._chat_openai_async(messages)
+            return await self._chat_mimo_async(messages, strict=strict)
+        return await self._chat_openai_async(messages, strict=strict)
 
     @staticmethod
     def _mimo_message_text(message: dict) -> str:
@@ -652,7 +670,12 @@ class ChatEngine:
             return ""
         return joined[:500]
 
-    async def _chat_openai_async(self, messages: List[Dict[str, str]] = None) -> str:
+    async def _chat_openai_async(
+        self,
+        messages: List[Dict[str, str]] = None,
+        *,
+        strict: bool = False,
+    ) -> str:
         """通用 OpenAI 兼容聊天请求"""
         import time as _time
         msgs = messages if messages is not None else self.history
@@ -688,7 +711,7 @@ class ChatEngine:
         except Exception as e:
             _safe_print(f"[chat] OpenAI async 异常: {type(e).__name__}", flush=True)
             self._debug_dump("OpenAI exception", e)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"OpenAI 请求异常 {type(e).__name__}")
 
         elapsed = _time.time() - t0
         _safe_print(
@@ -699,13 +722,13 @@ class ChatEngine:
         if resp.status_code != 200:
             _safe_print(f"[chat] OpenAI HTTP {resp.status_code} → 本地兜底句", flush=True)
             self._debug_dump("OpenAI error body", getattr(resp, "text", ""), limit=2000)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"OpenAI HTTP {resp.status_code}")
 
         try:
             data = resp.json()
         except Exception as e:
             _safe_print(f"[chat] OpenAI JSON 解析失败: {type(e).__name__}", flush=True)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"OpenAI 响应不是 JSON（{type(e).__name__}）")
 
         message = (data.get("choices") or [{}])[0].get("message") or {}
         content = self._mimo_message_text(message)
@@ -720,7 +743,7 @@ class ChatEngine:
                     )
             if not content:
                 _safe_print("[chat] 空 content → 本地兜底句", flush=True)
-                return self._fallback_reply()
+                return self._fail_or_fallback(strict, "OpenAI 返回空 content")
         return content
 
     # <TTS>{...}</TTS> 元数据行约占 100-200 token，回复预算保留下限防截断。
@@ -739,6 +762,7 @@ class ChatEngine:
         *,
         default_base: str,
         label: str,
+        strict: bool = False,
     ) -> str:
         """云厂商 OpenAI 兼容请求（DeepSeek / MiMo 共用）。"""
         import time as _time
@@ -771,7 +795,7 @@ class ChatEngine:
         except Exception as e:
             _safe_print(f"[chat] {label} async 异常: {type(e).__name__}", flush=True)
             self._debug_dump(f"{label} exception", e)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"{label} 请求异常 {type(e).__name__}")
 
         elapsed = _time.time() - t0
         _safe_print(
@@ -782,12 +806,12 @@ class ChatEngine:
             # 错误响应体可能回显对话内容，默认只记录状态码，正文仅调试转储
             _safe_print(f"[chat] {label} HTTP {resp.status_code} → 本地兜底句", flush=True)
             self._debug_dump(f"{label} error body", getattr(resp, "text", ""), limit=2000)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"{label} HTTP {resp.status_code}")
         try:
             data = resp.json()
         except Exception as e:
             _safe_print(f"[chat] {label} JSON 解析失败: {type(e).__name__}", flush=True)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"{label} 响应不是 JSON（{type(e).__name__}）")
         message = (data.get("choices") or [{}])[0].get("message") or {}
         content = self._mimo_message_text(message)
         if not content:
@@ -796,18 +820,29 @@ class ChatEngine:
                 content = self._mimo_content_from_reasoning(reasoning)
         if not content:
             _safe_print(f"[chat] {label} 空 content → 本地兜底句", flush=True)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"{label} 返回空 content")
         return content
 
-    async def _chat_mimo_async(self, messages: List[Dict[str, str]] = None) -> str:
+    async def _chat_mimo_async(
+        self,
+        messages: List[Dict[str, str]] = None,
+        *,
+        strict: bool = False,
+    ) -> str:
         """MiMo OpenAI 兼容请求（content 为空时从 reasoning 弱兜底）。"""
         return await self._chat_openai_compatible_async(
             messages,
             default_base=DEFAULT_MEA_PET_MIMO_API_BASE,
             label="MiMo",
+            strict=strict,
         )
 
-    async def _chat_ollama_async(self, messages: List[Dict[str, str]] = None) -> str:
+    async def _chat_ollama_async(
+        self,
+        messages: List[Dict[str, str]] = None,
+        *,
+        strict: bool = False,
+    ) -> str:
         """Ollama 原生 /api/chat 请求（本地默认无鉴权）。"""
         msgs = messages if messages is not None else self.history
         host = (
@@ -833,19 +868,44 @@ class ChatEngine:
         except Exception as e:
             _safe_print(f"[chat] Ollama async 异常: {type(e).__name__}", flush=True)
             self._debug_dump("Ollama exception", e)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"Ollama 请求异常 {type(e).__name__}")
         if resp.status_code != 200:
             _safe_print(f"[chat] Ollama HTTP {resp.status_code} → 本地兜底句", flush=True)
             self._debug_dump("Ollama error body", getattr(resp, "text", ""), limit=2000)
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, f"Ollama HTTP {resp.status_code}")
         try:
             data = resp.json()
-        except Exception:
-            return self._fallback_reply()
+        except Exception as e:
+            return self._fail_or_fallback(strict, f"Ollama 响应不是 JSON（{type(e).__name__}）")
         content = str(((data.get("message") or {}).get("content")) or "").strip()
         if not content:
-            return self._fallback_reply()
+            return self._fail_or_fallback(strict, "Ollama 返回空 content")
         return content
+
+    async def one_shot_async(self, user_content: str, *, system_prompt: str = "") -> Tuple[str, str]:
+        """一次性生成，返回 ``(display, mood)``；**失败抛 `ChatCallFailed`**。
+
+        为什么不复用 `quick_chat_async`（点击反馈那条链踩过这个判断）：
+        ① 它会往 `self.history` 追加 user/assistant —— 用户没说话，对话时间线却被塞进一条
+        检索资料，后面每一轮都带着它；② 它失败时返回 `_fallback_reply()`，那句 canned 台词与
+        真生成的句子**形状相同**，调用方分不出成败，于是「失败回退预制语音并留日志」这条口径
+        根本没法实现。所以这里既不进历史，也把失败按异常交出去（`strict=True`）。
+
+        只回显示文本与情绪、不回模型那行日语：调用方走的是既有互动语音那一链
+        （`_interaction_speak`），它把同一个文本既显示又朗读，中文由 TTS 自己的机器翻译处理——
+        与摸头回退句现在的待遇完全一致。
+        """
+        if not self.available:
+            raise ChatCallFailed("LLM 未配置或不可用")
+        messages = [
+            {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+        reply = await self._dispatch_chat_async(messages, strict=True)
+        display, mood, _voice, _style = self._parse_reply_payload(reply)
+        if not display:
+            raise ChatCallFailed("模型回复解析后没有可显示文本")
+        return display, mood
 
     async def quick_chat_async(
         self,
@@ -1065,6 +1125,16 @@ class ChatEngine:
             "啊……好困喵。",
         ]
         return random.choice(fallbacks)
+
+    def _fail_or_fallback(self, strict: bool, reason: str) -> str:
+        """失败出口：对话链回兜底句（旧行为），一次性生成链把失败**如实抛出来**。
+
+        `strict` 是显式传到每一档的，不是实例标志位——同一个引擎可能同时挂着对话与反馈两发，
+        用可变状态会让反馈那一发读到对话那条链留下的标记，把兜底句当成真回复念出去。
+        """
+        if strict:
+            raise ChatCallFailed(reason)
+        return self._fallback_reply()
 
     def clear_history(self):
         self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
