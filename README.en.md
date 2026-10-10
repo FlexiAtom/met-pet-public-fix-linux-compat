@@ -48,6 +48,27 @@ python pet.py
 
 `live2d-py` is optional; falls back to PNG when unavailable. Prebuilt packages are available at [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py).
 
+#### Arch-based systems: PyQt5's Qt5 is redirected to the system Qt5
+
+The PyQt5 wheel from pip ships its own Qt5. The Linux bundle/test environment this project is developed against (Arch-based) repoints it at the **system Qt5**:
+
+```text
+site-packages/PyQt5/Qt5/lib     -> /usr/lib
+site-packages/PyQt5/Qt5/plugins -> /usr/lib/qt/plugins
+```
+
+The wheel's own copies are not deleted — they stay in `lib.bak/` and `plugins.bak/` next to the links. The stated motive is resolving conflicts (the maintainer's wording; I did not independently verify the mechanism). No script in this repository does this, so a clean `pip install -r linux_requirements.txt` environment has neither link and needs none of the below.
+
+The cost is that **every Qt5 module family the app actually imports must be installed on the system side** — whichever one is missing, that path fails. Today only speech playback hits this: without `qt5-multimedia`, `from PyQt5.QtMultimedia import QMediaPlayer` always raises `ImportError: libQt5Multimedia.so.5: cannot open shared object file`, playback falls back to `aplay`, and `aplay` takes no volume argument — so the two volume sliders in Settings do nothing (**audio still plays, only the volume setting has no effect**).
+
+Don't guess — ask the diagnostic view:
+
+```bash
+python -m meapet --doctor --skip-tts | grep audio_playback
+```
+
+`绑定=在场 底层=可加载` (binding present, backend loads) means the Qt path works and volume applies; `底层=加载失败：<reason>` (backend fails to load) tells you which system package to install — on Arch it is `qt5-multimedia`. Skipping the redirect and keeping the wheel's own Qt5 works too; both paths play audio, and what differs is who owns the volume setting and whether that library family upgrades with pip or with the system.
+
 The configuration wizard can also be reopened from the pet's right-click menu ("Open Settings…") at any time. After saving, the new backend takes effect immediately; any in-flight generations from the old backend are cancelled.
 
 For Chinese troubleshooting steps, see [`docs/troubleshooting.zh-CN.md`](docs/troubleshooting.zh-CN.md).

@@ -48,6 +48,27 @@ python pet.py
 
 `live2d-py` 是可选依赖；不可用时会回退到 PNG。预编译包可从 [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py) 获取。
 
+#### Arch 系：PyQt5 的 Qt5 被重指向系统 Qt5
+
+pip 装的 PyQt5 wheel 自带一整族 Qt5。本项目的 Linux 整合包/测试环境（Arch 系）把它改成**用系统 Qt5**：
+
+```text
+site-packages/PyQt5/Qt5/lib     -> /usr/lib
+site-packages/PyQt5/Qt5/plugins -> /usr/lib/qt/plugins
+```
+
+wheel 自带的原件没删，整族留在同级的 `lib.bak/` 与 `plugins.bak/`。这么做的动机是**解决冲突**（口径由维护者给出，机制细节我没有独立取证）；仓库里没有任何脚本做这件事，它是环境那一侧铺的，所以 `pip install -r linux_requirements.txt` 出来的干净环境**不带这两个链接**，也不需要下面这条。
+
+代价是**系统侧必须装齐程序真正会 import 的那几族 Qt5 模块**——缺哪族，那一路就起不来。目前唯一会撞到的是语音播报：没装 `qt5-multimedia` 时 `from PyQt5.QtMultimedia import QMediaPlayer` 必报 `ImportError: libQt5Multimedia.so.5: cannot open shared object file`，播放回退到 `aplay`；`aplay` 不吃音量参数，于是设置里那两个音量滑条是空的（**声音照出，只是音量不生效**）。
+
+不用猜，直接问诊断面：
+
+```bash
+python -m meapet --doctor --skip-tts | grep audio_playback
+```
+
+`绑定=在场 底层=可加载` 说明 Qt 那一路起得来、音量档生效；`底层=加载失败：<原因>` 就照那个原因补系统包，Arch 系缺的是 `qt5-multimedia`。不做重指向（保留 wheel 自带那一族）同样能跑，两条路都能出声，区别在音量档归谁负责、那族库随 pip 还是随系统升级。
+
 随时可以通过桌宠右键菜单中的“打开设置...”再次打开配置向导。保存后，新后端会立即生效，旧后端仍在进行的生成任务会被取消。
 
 中文故障排查步骤见 [`docs/troubleshooting.zh-CN.md`](docs/troubleshooting.zh-CN.md)。
