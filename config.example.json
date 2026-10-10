@@ -169,5 +169,27 @@
   "fidus": {
     "enabled": false,
     "ask_float": true
+  },
+  "click_feedback": {
+    "crawler": {
+      "enabled": false,
+      "keywords": [],
+      "api_key": "",
+      "privacy_acknowledged": false
+    },
+    "poetry": {
+      "enabled": false,
+      "sources": [
+        "hitokoto",
+        "wikisource"
+      ],
+      "keywords": [],
+      "privacy_acknowledged": false
+    },
+    "weights": {
+      "preset": 100,
+      "crawler": 50,
+      "poetry": 50
+    }
   }
 }

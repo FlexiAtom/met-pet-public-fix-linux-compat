@@ -140,4 +140,34 @@ DEFAULT_AUDIO = MappingProxyType({
 })
 
 
+#: 点击反馈的三个源里，「爬虫」与「古诗词」都要出网（关键词发给第三方），所以两者默认关，
+#: 隐私档位与屏幕观察同档（默认关 ＋ 用户在设置里启用那一刻弹一次告知）。
+#: 「预制语音」是既有链路，永远可用，不需要开关。
+DEFAULT_CLICK_FEEDBACK_CRAWLER = MappingProxyType({
+    "enabled": False,
+    "keywords": (),
+    # 空串＝不填，走 Tavily 的 keyless 档（实测免注册可用）。填了 key 就发 Bearer，
+    # 而实测「无效 key 不退回 keyless」——填错比不填更坏，所以这一格不给任何"更保险"暗示。
+    "api_key": "",
+    "privacy_acknowledged": False,
+})
+#: 古诗词的两个免 key 源（实测都取回过诗句正文）；jisuapi 已由人工裁为不接线，不在词汇表里。
+DEFAULT_CLICK_FEEDBACK_POETRY_SOURCES = ("hitokoto", "wikisource")
+DEFAULT_CLICK_FEEDBACK_POETRY = MappingProxyType({
+    "enabled": False,
+    "sources": DEFAULT_CLICK_FEEDBACK_POETRY_SOURCES,
+    # 只有 wikisource 吃这一格：它是检索型源，没有检索词就无从下手。
+    # hitokoto 按类目随机给一句，忽略这一格。
+    "keywords": (),
+    "privacy_acknowledged": False,
+})
+#: 权重存原始值、抽样时归一（人工口径：不要求用户凑成 100%）。预制语音给满格是"默认关闭"
+#: 的另一半——两个新源即使被启用，开箱第一天的默认形状也仍以预制语音为主。
+DEFAULT_CLICK_FEEDBACK_WEIGHTS = MappingProxyType({
+    "preset": 100,
+    "crawler": 50,
+    "poetry": 50,
+})
+
+
 
