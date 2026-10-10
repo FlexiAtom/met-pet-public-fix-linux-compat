@@ -179,6 +179,13 @@ class Live2DWidget(QOpenGLWidget):
         self._dragging_window = False
         self._drag_pointer_origin = None
         self._drag_window_origin = None
+        # 单击/双击竞态：分区信号延到 doubleClickInterval 之后再发（动作仍即时）。
+        # Qt 的双击序列是 press→release→DblClick→release，第一次 release 排出去的那一发
+        # 必须能在 DblClick 到达时撤回，否则点开会聊天窗的同时又挨一次摸头反馈。
+        self._zone_click_timer = QTimer(self)
+        self._zone_click_timer.setSingleShot(True)
+        self._zone_click_timer.timeout.connect(self._on_zone_click_timeout)
+        self._pending_zone_signal = None
         # Phase 3: 离屏渲染（穿透模式下窗口隐藏，paintGL 不再被调用）
         self._fbo = None
         self._fbo_size = (0, 0)
@@ -447,6 +454,20 @@ class Live2DWidget(QOpenGLWidget):
     def _on_timer(self):
         self.update()
 
+    def _schedule_zone_click(self, signal):
+        """排一次分区反馈；已有一发待发就换掉它，不叠。"""
+        self._pending_zone_signal = signal
+        self._zone_click_timer.start(QApplication.doubleClickInterval())
+
+    def _cancel_zone_click(self):
+        self._pending_zone_signal = None
+        self._zone_click_timer.stop()
+
+    def _on_zone_click_timeout(self):
+        signal, self._pending_zone_signal = self._pending_zone_signal, None
+        if signal is not None:
+            signal.emit()
+
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
         if self._parent_in_standby():
@@ -542,13 +563,13 @@ class Live2DWidget(QOpenGLWidget):
                     # 分区判定（全窗口范围，不再做椭圆裁剪过滤）
                     if ny > 0.00:
                         self.l2d.model.StartMotion("Idle", 0, live2d.MotionPriority.FORCE)
-                        self.head_patted.emit()
+                        self._schedule_zone_click(self.head_patted)
                     elif nx < 0.0:
                         self.l2d.model.StartMotion("Angry", 0, live2d.MotionPriority.FORCE)
-                        self.lower_left_patted.emit()
+                        self._schedule_zone_click(self.lower_left_patted)
                     else:
                         self.l2d.model.StartMotion("Angry", 0, live2d.MotionPriority.FORCE)
-                        self.lower_right_patted.emit()
+                        self._schedule_zone_click(self.lower_right_patted)
 
             self._press_pos = None
             event.accept()
@@ -564,6 +585,7 @@ class Live2DWidget(QOpenGLWidget):
             self._drag_pointer_origin = None
             self._drag_window_origin = None
             self._press_pos = None
+            self._cancel_zone_click()
             self.chat_requested.emit()
             event.accept()
             return
@@ -576,6 +598,7 @@ class Live2DWidget(QOpenGLWidget):
 
     def shutdown(self):
         self._timer.stop()
+        self._cancel_zone_click()
         self._ready = False
         self._fbo = None
         self._fbo_size = (0, 0)
