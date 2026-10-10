@@ -216,6 +216,18 @@ class SwitchPresentationTests(unittest.TestCase):
             def _toggle_fidus_enabled(self):
                 pass
 
+            def _toggle_click_feedback_source(self, _name):
+                pass
+
+            def _set_click_feedback_poetry_source(self, _source, _enabled):
+                pass
+
+            def _open_click_feedback_keywords(self, _name):
+                pass
+
+            def _open_click_feedback_weights(self):
+                pass
+
             def _toggle_voice_input(self):
                 pass
 

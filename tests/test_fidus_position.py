@@ -1003,11 +1003,14 @@ class TestConfigAndWiring(unittest.TestCase):
             # 其余按名给空实现，没点名的照常 AttributeError。
             _NOOP = (
                 "_copy_agent_control_token", "_do_screen_watch", "_is_auto_start",
+                "_open_click_feedback_keywords", "_open_click_feedback_weights",
                 "_open_size_dialog", "_regenerate_agent_control_token",
                 "_reopen_setup_wizard", "_reset_memory", "_safe_set_mood",
-                "_set_size_factor", "_set_vision_backend", "_set_vision_model",
+                "_set_click_feedback_poetry_source", "_set_size_factor",
+                "_set_vision_backend", "_set_vision_model",
                 "_show_status_panel", "_show_timeline", "_show_volume_dialog",
-                "_toggle_auto_start", "_toggle_fidus_enabled", "_toggle_render_mode",
+                "_toggle_auto_start", "_toggle_click_feedback_source",
+                "_toggle_fidus_enabled", "_toggle_render_mode",
                 "_toggle_standby", "_toggle_voice_input", "_toggle_watcher_enabled",
             )
             _FLAGS = ("_standby", "_use_live2d")

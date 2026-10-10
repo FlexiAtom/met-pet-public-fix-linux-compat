@@ -98,17 +98,18 @@ def normalize_click_feedback_weight(value: object, *, default: int = 0) -> int:
 
 
 def normalize_poetry_sources(value: object, known: tuple) -> list[str]:
-    """古诗词的源勾选：只认词汇表里的名字，去重保序；一个都不剩时按默认两源。
+    """古诗词的源勾选：只认词汇表里的名字，去重保序；没给（``None``）按默认两源。
 
-    "一个都不剩也退回默认"是刻意的——源全清掉等于这一档整体不可用，那由 ``enabled``
-    那一格表达就够了，不该让权重滑条还在、底下却没有源可抽。
+    两档全取消勾选是**保留的**：那是用户在菜单里做的一次选择，这里退回默认等于当场推翻它。
+    源全空时这一路抽不中，理由由 ``feedback.participation_gap`` 那行灰字讲给人听，
+    不靠归一化替用户改主意。
     """
     if value is None:
-        value = ()
+        return [str(name) for name in known]
     items = value if isinstance(value, (list, tuple, set)) else [value]
     chosen: list[str] = []
     for item in items:
         name = str(item or "").strip().lower()
         if name in known and name not in chosen:
             chosen.append(name)
-    return chosen or [str(name) for name in known]
+    return chosen

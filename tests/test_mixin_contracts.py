@@ -158,9 +158,25 @@ class _Composite:
         from meapet.desktop.chat_flow import PetChatFlowMixin
         return PetChatFlowMixin._speak_and_show(self, text, duration_ms, mood)
 
+    def _start_click_feedback(self, zone, preset_fallback):
+        from meapet.desktop.interaction import PetInteractionMixin
+        return PetInteractionMixin._start_click_feedback(self, zone, preset_fallback)
+
     def _on_head_patted(self):
         from meapet.desktop.interaction import PetInteractionMixin
         return PetInteractionMixin._on_head_patted(self)
+
+    def _head_patted_preset(self):
+        from meapet.desktop.interaction import PetInteractionMixin
+        return PetInteractionMixin._head_patted_preset(self)
+
+    def _lower_left_preset(self):
+        from meapet.desktop.interaction import PetInteractionMixin
+        return PetInteractionMixin._lower_left_preset(self)
+
+    def _lower_right_preset(self):
+        from meapet.desktop.interaction import PetInteractionMixin
+        return PetInteractionMixin._lower_right_preset(self)
 
     def _on_zone_triggered(self, zone):
         from meapet.desktop.interaction import PetInteractionMixin

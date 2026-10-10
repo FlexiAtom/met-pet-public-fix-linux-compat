@@ -258,6 +258,7 @@ def rebuild_styles() -> None:
             font-size: 14px;
         }}
         QFrame#SizeDialogCard,
+        QFrame#FeedbackDialogCard,
         QFrame#TimelineCard {{
             background: {_theme.GRADIENT_PAPER};
             border: 1px solid {COLOR_BORDER};

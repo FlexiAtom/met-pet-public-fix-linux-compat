@@ -48,6 +48,13 @@ TAVILY_URL = "https://api.tavily.com/search"
 HITOKOTO_URL = "https://v1.hitokoto.cn/?c=i&encode=json"
 WIKISOURCE_URL = "https://zh.wikisource.org/w/api.php"
 
+#: 每一路的中文名与「它在干什么」。菜单项与灰字说明只读这张表：端点语义抄第二份到 UI 里，
+#: 改一处漏一处，最后会变成菜单说随机、实际在检索。
+SOURCE_LABELS = {
+    "hitokoto": ("一句随机诗词", "按类目随机给一句，不查关键词"),
+    "wikisource": ("古籍检索", "按关键词检索 Wikisource；存的是繁體且有版本差，取回后归一成简体"),
+}
+
 _HITOKOTO_CATEGORY = "i"  # 案文实测：c=i 即诗词类目，返回本就是简体
 _WIKISOURCE_SEARCH_CHARS = 120
 

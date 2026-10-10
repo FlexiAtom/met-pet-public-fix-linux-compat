@@ -9,6 +9,7 @@ from typing import Optional
 from PyQt5.QtCore import QTimer
 
 from meapet.config.defaults import bubble_duration_ms
+from meapet.desktop import status_language
 from meapet.utils import (
     audio_cache_key,
     legacy_audio_cache_name,
@@ -175,6 +176,86 @@ class PetInteractionMixin:
             QTimer.singleShot(3000, lambda: self._safe_set_mood("neutral"))
         except Exception as e:
             log_error("click_feedback", f"显示取回文本失败: {type(e).__name__}: {e}")
+
+    def _toggle_click_feedback_source(self, name: str) -> None:
+        """点击反馈某一路的拨杆：第一次开启先弹一次性隐私告知（人工口径：只在启用设置时弹）。
+
+        「一生只弹一次」由 `privacy_acknowledged` 那一格自己承担，所以不再配「不再提示」复选框
+        ——那是同一件事的第二处真值。关闭只清 `enabled`：确认过的告知不因关闭而作废。
+        """
+        from PyQt5.QtWidgets import QMessageBox
+        from meapet.click_feedback import feedback
+        from meapet.message_dialog import MeaMessageDialog
+
+        title = feedback.SOURCE_TITLES.get(name, name)
+        duration = bubble_duration_ms(self.config, "interaction")
+        section = self.config.setdefault("click_feedback", {}).setdefault(name, {})
+        turning_on = not bool(section.get("enabled", False))
+
+        if turning_on and not section.get("privacy_acknowledged", False):
+            dialog = MeaMessageDialog(
+                self,
+                title=f"开启{title}？",
+                text=feedback.PRIVACY_NOTICES[name],
+                icon=QMessageBox.Question,
+                buttons=int(QMessageBox.Yes | QMessageBox.No),
+                # 默认落点给「不」：授权不该是回车键的副产品。
+                default_button=int(QMessageBox.No),
+            )
+            if dialog.exec_() != int(QMessageBox.Yes):
+                self._show_bubble(
+                    status_language.click_feedback_not_enabled(title), duration
+                )
+                return
+            section["privacy_acknowledged"] = True
+
+        section["enabled"] = turning_on
+        self._save_config()
+
+        # 落盘后按规范化写回的 config 回读再报状态（与屏幕观察同一口径：保存前那个字典会被换掉）。
+        if not feedback.is_source_live(self.config, name):
+            self._show_bubble(status_language.click_feedback_disabled(title), duration)
+            return
+        self._show_bubble(
+            status_language.click_feedback_enabled(
+                title, feedback.participation_gap(self.config, name)
+            ),
+            duration,
+        )
+
+    def _set_click_feedback_poetry_source(self, source: str, enabled: bool) -> None:
+        """古诗词的源勾选。两档全取消也留着——抽不中的理由由菜单那行灰字讲，不在这儿替人改主意。"""
+        from meapet.click_feedback.feedback import POETRY
+
+        poetry = self.config.setdefault("click_feedback", {}).setdefault(POETRY, {})
+        current = [str(item) for item in (poetry.get("sources") or ())]
+        if enabled:
+            if source not in current:
+                current.append(source)
+        else:
+            current = [item for item in current if item != source]
+        poetry["sources"] = current
+        self._save_config()
+
+    def _open_click_feedback_keywords(self, name: str) -> None:
+        """某一源的关键词表；保存才写回，写回什么形状由归一化定（对话框不自己数）。"""
+        from PyQt5.QtWidgets import QDialog
+
+        from meapet.desktop.dialogs import ClickFeedbackKeywordsDialog
+
+        dialog = ClickFeedbackKeywordsDialog(self.config, name, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self._save_config()
+
+    def _open_click_feedback_weights(self) -> None:
+        """三路的抽中权重。"""
+        from PyQt5.QtWidgets import QDialog
+
+        from meapet.desktop.dialogs import ClickFeedbackWeightDialog
+
+        dialog = ClickFeedbackWeightDialog(self.config, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self._save_config()
 
     def _on_head_patted(self):
         """上半区：先按权重抽一路（爬虫/古诗词走异步），落回预制时才是原来那一链。"""

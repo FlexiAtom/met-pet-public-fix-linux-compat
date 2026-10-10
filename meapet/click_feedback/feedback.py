@@ -10,9 +10,12 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
 from meapet.click_feedback.sources import (
+    HITOKOTO_URL,
+    TAVILY_URL,
     Deadline,
     SourceUnavailable,
     TOTAL_BUDGET_SECONDS,
+    WIKISOURCE_URL,
     fetch_crawler_material,
     fetch_poetry_line,
 )
@@ -23,6 +26,29 @@ PRESET = "preset"
 CRAWLER = "crawler"
 POETRY = "poetry"
 SOURCE_NAMES = (PRESET, CRAWLER, POETRY)
+
+#: 给用户看的名字（顺序即菜单与权重对话框的排列）。抽样口径住在 `weights` 那一格，
+#: UI 只读这一张表——把「预制语音/爬虫改写/古诗词」抄进对话框里，改一处漏一处。
+SOURCE_TITLES = {PRESET: "预制语音", CRAWLER: "爬虫改写", POETRY: "古诗词"}
+
+#: 启用那一路之前要给人看的那一句（人工口径 2026-10：「关于隐私口径，仅在启用设置时弹窗」）。
+#: 写在这层而不是 UI 层，是因为「什么数据离开这台机器、发给哪个地址」由取文链决定；
+#: 地址一律取 `sources` 里的实测常量，不另抄一遍字符串——抄了就会有第二份真值去漂。
+PRIVACY_NOTICES = {
+    CRAWLER: (
+        "开启后这一路会做两件事：\n"
+        f"· 把「关键词」里那些词作为检索请求发到 {TAVILY_URL}\n"
+        "· 检索回来的网页正文交给当前对话模型单独问一句，改写成气泡里那一行\n\n"
+        "改写不进气泡之外的地方：不进对话历史、不带你的屏幕内容。"
+        "网页正文是第三方文本，可能夹着奇怪的句子，它只影响气泡与语音里说什么。"
+    ),
+    POETRY: (
+        "开启后按勾选的源取一句诗：\n"
+        f"· 一句随机诗词：{HITOKOTO_URL}（随机给，不发关键词）\n"
+        f"· 古籍检索：{WIKISOURCE_URL}（把关键词作为检索词发过去）\n\n"
+        "取回的文字直接进气泡与语音，不交给模型改写。"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -61,6 +87,9 @@ def participating_sources(config: dict) -> list[tuple[str, int]]:
        「关于隐私口径，仅在启用设置时弹窗」；手改配置把 enabled 拧成 true 不算点过）。
     爬虫还多一条前置：没有关键词就没有可检索的东西，权重再高也不参与（那不该变成每次点击
     白等一趟再回退）。权重 ≤ 0 的源同样不参与——那是人给的「关掉这一路」的另一种写法。
+
+    菜单要显示开关状态时读 `is_source_live`，别直接读 `enabled`；抽不中的理由由
+    `participation_gap` 给，两者合起来才不存在「开了但没反应，还没处问」。
     """
     out: list[tuple[str, int]] = []
     weights = _weights(config)
@@ -88,6 +117,43 @@ def participating_sources(config: dict) -> list[tuple[str, int]]:
     ):
         out.append((POETRY, poetry_weight))
     return out
+
+
+def is_source_live(config: dict, name: str) -> bool:
+    """菜单拨杆该显示的状态：**开了并且确认过告知**才算开着。
+
+    只管 `CRAWLER`／`POETRY` 这两路——预制语音没有拨杆，它的"开"就是点击本来就有反应。
+
+    读 `enabled` 单独那一格会谎报——手改配置把 `enabled` 拧成 true 而没点过告知时，拨杆显示
+    开着、这一路却永远抽不中（`participating_sources` 不放它进来）。那种"打开了但没反应"
+    正是本案要避免的形状，所以状态由这里统一给，理由另见 `participation_gap`。
+    """
+    section = _section(config, name)
+    return section.get("enabled") is True and section.get("privacy_acknowledged") is True
+
+
+def participation_gap(config: dict, name: str) -> str:
+    """已开启、却还抽不中的理由；能抽中就给空串（同样只管会外联的那两路）。
+
+    菜单把它写成一行灰字提示：用户对着一个「开着的开关」不该只能猜。没开不算 gap（拨杆
+    自己就在说这件事），所以关着一律返回空串。
+    """
+    section = _section(config, name)
+    if section.get("enabled") is not True:
+        return ""
+    if section.get("privacy_acknowledged") is not True:
+        return "没点过启用时的隐私告知，这一路不参与抽样"
+    if int(_weights(config).get(name, 0) or 0) <= 0:
+        return "权重是 0，这一路等于关掉"
+    if name == CRAWLER and not [
+        w for w in (section.get("keywords") or ()) if str(w).strip()
+    ]:
+        return "还没填关键词，检索不出东西"
+    if name == POETRY and not [
+        s for s in (section.get("sources") or ()) if str(s).strip()
+    ]:
+        return "一个来源都没选，取不到诗句"
+    return ""
 
 
 def pick_source(config: dict, rng: Optional[Callable[[], float]] = None) -> str:

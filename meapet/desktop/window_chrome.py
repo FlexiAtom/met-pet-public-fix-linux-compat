@@ -38,6 +38,22 @@ from meapet.ui_theme import (
 from meapet.utils import safe_print
 
 
+def _tavily_key_hint(status: str) -> str:
+    """爬虫子菜单那行灰字：Tavily key 现在从哪来（`secret_status` 的取值口径）。
+
+    菜单不收 key（人工口径「Key什么的让用户自己填」），但也不许用户对着"没反应"猜。
+    免注册档是实测过的（案文 2026-10：keyless 可用），所以"没填"不是故障；至于填了之后
+    key 有效与否，这一层量不出来（实测「无效 key 不退回 keyless」），文案就不替它作保。
+    """
+    if status == "missing":
+        return "Tavily key 没填：走免注册档，可用"
+    if status == "file":
+        return "Tavily key 读自配置文件"
+    if status.startswith("env:"):
+        return "Tavily key 读自环境变量"
+    return "Tavily key 已配置"
+
+
 class PetWindowChromeMixin:
     """System tray + right-click menu + Windows autostart."""
 
@@ -504,6 +520,8 @@ class PetWindowChromeMixin:
         locate_menu.addAction(fidus_action)
         settings_menu.addMenu(locate_menu)
 
+        settings_menu.addMenu(self._build_click_feedback_menu())
+
         auto_started = self._is_auto_start()
         auto_action = QAction("开机自启", self)
         auto_action.setCheckable(True)
@@ -572,6 +590,108 @@ class PetWindowChromeMixin:
         quit_action.setIcon(standard_icon("quit"))
         quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
+        return menu
+
+    def _build_click_feedback_menu(self) -> QMenu:
+        """「点击反馈」子菜单：两路走网的内容各自开关，抽中哪一路看权重。
+
+        拨杆读 `is_source_live`（开了**且**点过隐私告知）而不是裸 `enabled`：手改配置把
+        `enabled` 拧成 true 却从没确认过告知时，这一路压根不参与抽样，拨杆跟着显示开着就成了
+        「开了但没反应，还没处问」。状态与理由一起给——紧跟着的那行灰字读 `participation_gap`。
+        """
+        from meapet.click_feedback import feedback
+        from meapet.click_feedback.sources import SOURCE_LABELS
+        from meapet.config.store import secret_status
+
+        menu = QMenu("点击反馈", self)
+        menu.setIcon(standard_icon("expression"))
+        menu.setObjectName("ClickFeedbackMenu")
+        apply_named_style(menu, "MENU_STYLE")
+        menu.setAccessibleName("点击反馈")
+
+        # 顶层这一行是三路各自状态的合成结果：开关分散在下一层，这里给"那么我点什么会怎样"。
+        live_titles = [
+            feedback.SOURCE_TITLES.get(name, name)
+            for name, _weight in feedback.participating_sources(self.config)
+        ]
+        summary_text = (
+            "现在点击会从：" + " · ".join(live_titles)
+            if live_titles
+            else "三路都不抽中，点击还是原来的反应（预制语音）"
+        )
+        summary = QAction(summary_text, self)
+        summary.setEnabled(False)
+        menu.addAction(summary)
+
+        for name in (feedback.CRAWLER, feedback.POETRY):
+            title = feedback.SOURCE_TITLES[name]
+            submenu = QMenu(title, self)
+            submenu.setObjectName(f"ClickFeedback{name.capitalize()}Menu")
+            apply_named_style(submenu, "MENU_STYLE")
+            submenu.setAccessibleName(f"点击反馈 {title}")
+
+            switch = QAction(status_language.menu_click_feedback_toggle(title), self)
+            # 状态开关不是动作：文字恒定，状态由拨杆表示（与屏幕观察那一项同形）。
+            switch.setObjectName(SWITCH_ACTION_NAME)
+            switch.setCheckable(True)
+            switch.setChecked(feedback.is_source_live(self.config, name))
+            switch.triggered.connect(
+                lambda _checked, n=name: self._toggle_click_feedback_source(n)
+            )
+            submenu.addAction(switch)
+
+            if name == feedback.POETRY:
+                poetry = ((self.config.get("click_feedback") or {}).get(name)) or {}
+                chosen = [str(s) for s in (poetry.get("sources") or ())]
+                for sname in sorted(SOURCE_LABELS):
+                    label, description = SOURCE_LABELS[sname]
+                    source_action = QAction(label, self)
+                    # 这两档也用拨杆而不是勾：`PetMenuWindow` 对普通可勾项只在 accessible
+                    # 名字里写「已选中」，屏上看不出差别（尺寸预设那几项正有此病）。拨杆是唯一
+                    # 看得见状态的那一形。
+                    source_action.setObjectName(SWITCH_ACTION_NAME)
+                    source_action.setCheckable(True)
+                    source_action.setChecked(sname in chosen)
+                    source_action.setToolTip(description)
+                    source_action.triggered.connect(
+                        lambda checked, s=sname: self._set_click_feedback_poetry_source(
+                            s, bool(checked)
+                        )
+                    )
+                    submenu.addAction(source_action)
+
+            keywords_action = QAction("关键词…", self)
+            keywords_action.setToolTip(
+                "检索围绕这些词，一行一个"
+                if name == feedback.CRAWLER
+                else "只有「古籍检索」用这些词做检索词；「一句随机诗词」不查词"
+            )
+            keywords_action.triggered.connect(
+                lambda _checked, n=name: self._open_click_feedback_keywords(n)
+            )
+            submenu.addAction(keywords_action)
+
+            if name == feedback.CRAWLER:
+                # key 不在菜单里收（人工口径：「Key什么的让用户自己填」），只说它现在从哪来。
+                key_line = QAction(
+                    _tavily_key_hint(secret_status(self.config).get("tavily", "")), self
+                )
+                key_line.setEnabled(False)
+                submenu.addAction(key_line)
+
+            gap = feedback.participation_gap(self.config, name)
+            if gap:
+                gap_line = QAction(gap, self)
+                gap_line.setEnabled(False)
+                submenu.addAction(gap_line)
+
+            menu.addMenu(submenu)
+
+        menu.addSeparator()
+        weight_action = QAction("抽中权重…", self)
+        weight_action.setToolTip("三路各给 0–100 的相对值，不必凑成 100")
+        weight_action.triggered.connect(self._open_click_feedback_weights)
+        menu.addAction(weight_action)
         return menu
 
     def _show_about(self):
