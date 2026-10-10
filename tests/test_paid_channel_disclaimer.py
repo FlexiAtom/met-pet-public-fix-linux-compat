@@ -21,7 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt5.QtCore import QSize, Qt  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
-from meapet.desktop.disclaimer import PAID_CHANNEL_NOTICE  # noqa: E402
+from meapet.desktop.disclaimer import ACQUISITION_CHANNELS, PAID_CHANNEL_NOTICE  # noqa: E402
 from meapet.desktop.screen_geometry import resize_dialog_to_content  # noqa: E402
 
 _app = QApplication.instance() or QApplication(sys.argv)
@@ -102,6 +102,69 @@ class AboutDialogTest(unittest.TestCase):
         grown = resize_dialog_to_content(self.dialog, QSize(360, 220))
         self.assertLessEqual(grown.width(), 400, f"关于页被撑到 {grown.width()} px")
         self.assertGreater(notice.height(), 0)
+
+
+class AcquisitionChannelsTest(unittest.TestCase):
+    """关于页「获取渠道」那三条：人工 2026-10-10 点名的原话，一条不多一条不少。
+
+    钉两件事：① 内容逐字（含**审核群**那个号——它和 Q-A 文档里的 1083503687 不是同一个，
+    谁都不许"顺手统一"）；② 版位没坏。把 URL 当可见文本时关于页需要 618 px 高，offscreen
+    那块 600 px 的屏会把弹窗夹到 581 而使免责句与上一条**重叠 8 px**（实测），所以两条仓库
+    链接按上方致谢的同构形态渲染——URL 在 href 里，不在字面上。
+    """
+
+    EXPECTED = (
+        ("QQ群“审核群”", "1128485088"),
+        ("主干仓库", "https://github.com/suan-11/mea-pet-public"),
+        ("Linux、Wayland适配及其他测试功能", "https://github.com/FlexiAtom/met-pet-public-fix-linux-compat"),
+    )
+
+    def setUp(self) -> None:
+        from meapet.desktop.dialogs import AboutDialog
+
+        self.host = QWidget()
+        self.dialog = AboutDialog(self.host)
+        self.dialog.show()
+        _app.processEvents()
+        self.addCleanup(self.dialog.deleteLater)
+
+    def _rows(self) -> list[QLabel]:
+        rows = [
+            label
+            for label in self.dialog.findChildren(QLabel)
+            if label.accessibleName().startswith("获取渠道 · ")
+        ]
+        return sorted(rows, key=lambda w: w.y())
+
+    def test_constant_lists_exactly_the_three_named_channels(self) -> None:
+        self.assertEqual(ACQUISITION_CHANNELS, self.EXPECTED)
+
+    def test_every_channel_is_rendered_in_order(self) -> None:
+        rows = self._rows()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(
+            [row.accessibleName().removeprefix("获取渠道 · ") for row in rows],
+            [label for label, _ in self.EXPECTED],
+        )
+
+    def test_group_number_is_visible_text_and_the_repos_are_links(self) -> None:
+        group, trunk, linux = self._rows()
+        self.assertEqual(group.text(), "QQ群“审核群”: 1128485088")
+        self.assertTrue(group.textInteractionFlags() & Qt.TextSelectableByMouse, "群号得能选中复制")
+        for row, (_, url) in zip((trunk, linux), self.EXPECTED[1:]):
+            self.assertIn(f'href="{url}"', row.text())
+            self.assertTrue(row.openExternalLinks())
+
+    def test_no_row_is_clipped_or_overlapped(self) -> None:
+        rows = self._rows() + [_notice_labels(self.dialog)[0]]
+        previous_bottom = None
+        for row in rows:
+            self.assertGreaterEqual(
+                row.height(), row.heightForWidth(row.width()), f"{row.accessibleName()} 高度被压"
+            )
+            if previous_bottom is not None:
+                self.assertGreaterEqual(row.y(), previous_bottom, f"{row.accessibleName()} 与上一条重叠")
+            previous_bottom = row.y() + row.height()
 
 
 class BothSurfacesShareOneConstantTest(unittest.TestCase):

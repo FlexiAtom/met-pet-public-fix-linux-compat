@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
 
 from meapet.desktop.capture_selection import select_screen_region
 from meapet.desktop.dev_options import version_label_text
-from meapet.desktop.disclaimer import PAID_CHANNEL_NOTICE
+from meapet.desktop.disclaimer import PAID_CHANNEL_NOTICE, ACQUISITION_CHANNELS
 from meapet.desktop.screen_geometry import resize_dialog_to_content
 from meapet.desktop.theme import CONSENT_DIALOG_STYLE
 from meapet.ui_theme import (
@@ -1012,6 +1012,21 @@ class AboutDialog(QDialog):
         notice_title = QLabel("获取渠道")
         notice_title.setObjectName("FieldLabel")
         layout.addWidget(notice_title)
+
+        for label, value in ACQUISITION_CHANNELS:
+            if value.startswith("http"):
+                row = QLabel(f'<a href="{value}">{label}</a>')
+                row.setTextInteractionFlags(Qt.TextBrowserInteraction)
+                row.setOpenExternalLinks(True)
+            else:
+                # 群号没有可点开的形态，给成可选中复制的一行字。
+                row = QLabel(f"{label}: {value}")
+                row.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            row.setObjectName("AboutLink")
+            row.setTextFormat(Qt.RichText)
+            row.setMinimumHeight(MIN_TARGET_SIZE)
+            row.setAccessibleName(f"获取渠道 · {label}")
+            layout.addWidget(row)
 
         notice = QLabel(PAID_CHANNEL_NOTICE)
         notice.setObjectName("ConsentBody")
