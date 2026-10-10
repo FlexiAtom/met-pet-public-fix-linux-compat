@@ -8,6 +8,8 @@ MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screen
 
 **Mobile Version**: [mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile) (Lightweight mobile client with core features)
 
+**Official QQ Group**: 1128485088 (in the join request, please state: your purpose + the OS you use)
+
 ## Current Capabilities
 
 | Capability | Description |

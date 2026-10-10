@@ -107,8 +107,8 @@ class AboutDialogTest(unittest.TestCase):
 class AcquisitionChannelsTest(unittest.TestCase):
     """关于页「获取渠道」那三条：人工 2026-10-10 点名的原话，一条不多一条不少。
 
-    钉两件事：① 内容逐字（含**审核群**那个号——它和 Q-A 文档里的 1083503687 不是同一个，
-    谁都不许"顺手统一"）；② 版位没坏。把 URL 当可见文本时关于页需要 618 px 高，offscreen
+    钉两件事：① 内容逐字（群号是人工 2026-10-10T15:34:59 点名的**审核群**那一个，更早流传的那个
+    号他判为过期，四处落点的收敛由下面 `GroupNumberConsistencyTest` 单独钉）；② 版位没坏。把 URL 当可见文本时关于页需要 618 px 高，offscreen
     那块 600 px 的屏会把弹窗夹到 581 而使免责句与上一条**重叠 8 px**（实测），所以两条仓库
     链接按上方致谢的同构形态渲染——URL 在 href 里，不在字面上。
     """
@@ -165,6 +165,48 @@ class AcquisitionChannelsTest(unittest.TestCase):
             if previous_bottom is not None:
                 self.assertGreaterEqual(row.y(), previous_bottom, f"{row.accessibleName()} 与上一条重叠")
             previous_bottom = row.y() + row.height()
+
+
+class GroupNumberConsistencyTest(unittest.TestCase):
+    """群号在四个落点只能有一个号。
+
+    人工 2026-10-10T15:34:59 裁「两个群号合并，1083503687过期」与「README加群说明：QQ/群
+    1128485088（备注：来意+使用的系统）」，所以钉两面：新号四面都在、旧号四面都不在。旧号只写在
+    这份测试里当反证——它扫的是那四个落点，不扫本文件。
+    """
+
+    CURRENT = "1128485088"
+    EXPIRED = "1083503687"
+    SURFACES = (
+        "README.md",
+        "README.en.md",
+        "Q-A_常见问题解答[可以直接右键使用记事本打开喵].md",
+        "meapet/desktop/disclaimer.py",
+    )
+
+    def _text(self, name: str) -> str:
+        return (ROOT / name).read_text(encoding="utf-8")
+
+    def test_the_current_number_is_the_one_the_interface_shows(self) -> None:
+        self.assertEqual(ACQUISITION_CHANNELS[0][1], self.CURRENT)
+
+    def test_the_current_number_is_on_all_four_surfaces(self) -> None:
+        for name in self.SURFACES:
+            self.assertIn(self.CURRENT, self._text(name), f"{name} 上没有当前群号")
+
+    def test_the_expired_number_is_on_none_of_them(self) -> None:
+        for name in self.SURFACES:
+            self.assertNotIn(self.EXPIRED, self._text(name), f"{name} 上还挂着已过期群号")
+
+    def test_both_readmes_state_what_to_write_in_the_join_request(self) -> None:
+        """他点名的备注要求（来意 + 使用的系统）两份 README 都得在群号那一行里。"""
+        for name, required in (
+            ("README.md", ("来意", "使用的系统")),
+            ("README.en.md", ("purpose", "OS")),
+        ):
+            line = next(line for line in self._text(name).splitlines() if self.CURRENT in line)
+            for word in required:
+                self.assertIn(word, line, f"{name} 那行缺 {word}")
 
 
 class BothSurfacesShareOneConstantTest(unittest.TestCase):
