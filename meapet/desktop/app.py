@@ -69,7 +69,7 @@ from meapet.desktop.dev_options import PetDevOptionsMixin
 from meapet.desktop.render_host import PetRenderHostMixin, calculate_drag_position
 from meapet.desktop.config_bridge import PetConfigBridgeMixin
 from meapet.desktop.voice_mixin import PetVoiceMixin
-from meapet.desktop.splash import StartupSplash
+from meapet.desktop.splash import FIRST_RUN_HOLD_MS, StartupSplash
 from meapet.desktop import status_language
 
 # Windows 专用多媒体后端偏好：仅 Windows 上设置，Linux/macOS 不需要。
@@ -877,7 +877,9 @@ def main():
     log.info("[boot] 保活窗口就绪")
 
     config_path = resolve_startup_config_path(PROJECT_ROOT)
-    if os.path.basename(config_path) == "config.example.json":
+    # 落到 example 那份，就等于"这台机器上还没人存过配置"——人工口径里的第一次使用。
+    first_run = os.path.basename(config_path) == "config.example.json"
+    if first_run:
         log.info("[boot] 使用默认示例配置文件 config.example.json")
 
     # 可选启动页（失败忽略）
@@ -885,6 +887,7 @@ def main():
     try:
         splash = StartupSplash()
         splash.setAttribute(Qt.WA_QuitOnClose, False)
+        splash.set_hold_ms(FIRST_RUN_HOLD_MS if first_run else 0)
         if hasattr(splash, "status"):
             splash.status.setText("正在启动...")
         splash.show()
@@ -927,7 +930,7 @@ def main():
 
     if splash is not None:
         try:
-            splash.hide()
+            splash.dismiss()
         except Exception:
             pass
 
@@ -964,7 +967,7 @@ def main():
         startup_finished["done"] = True
         if splash is not None:
             try:
-                splash.hide()
+                splash.dismiss()
             except Exception:
                 pass
         pet2 = holder.get("pet")

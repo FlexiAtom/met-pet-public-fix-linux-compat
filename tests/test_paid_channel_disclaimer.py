@@ -1,12 +1,17 @@
-"""付费渠道免责句：两处界面各有一份，而且说的是**同一句逐字不变**的话。
+"""付费渠道免责句与「获取渠道」那三条：界面上两份，措辞逐字不动。
 
-人工 2026-10-10 的原话（逐字见 `~/.Athena/projects/meapet/voice.md`）要求加载弹窗与关于页都加那一句。
-那一句是他的法律口径措辞，所以这里钉三件事：① 文案逐字等于原话（我不许自己润色）；② 两处都真的挂上了；
-③ 挂上之后版位没坏——加载弹窗是 `setFixedSize(440, 300)` 的定尺卡片，关于页那句不设宽度约束时
-会把弹窗从 360 px 撑到 573 px（实测），这两种崩法都得有断言挡着。
+人工 2026-10-10 的原话（逐字见 `~/.Athena/projects/meapet/voice.md`）：13:10:04 要「加载弹窗和关于页
+加句"…"」，14:22:02 给关于页那三条渠道，15:57:18 补「加载弹窗在没有配置文件时延迟10秒消失（通过是否
+存在配置文件来判断是否是第一次使用）」——那句免责只有首用停留 10 秒才有人读得到，两件事是同一格。
+所以这里钉四件事：
+① 文案逐字等于原话（我不许自己润色）；② 加载弹窗与关于页**都**挂着，且两处是同一句话；
+③ 版位没坏——关于页那句不设宽度约束时会把弹窗从 360 px 撑到 573 px（实测），长 URL 当可见文本时
+又需要 618 px 高而被 600 px 的屏夹出 8 px 重叠（实测），两种崩法都得有断言挡着；
+④ 那句话在源码里只有**一处**字面量，防止有人复制一份后各自漂移。
 """
 from __future__ import annotations
 
+import ast
 import os
 import sys
 import unittest
@@ -19,6 +24,7 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QSize, Qt  # noqa: E402
+from PyQt5.QtTest import QTest  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
 from meapet.desktop.disclaimer import ACQUISITION_CHANNELS, PAID_CHANNEL_NOTICE  # noqa: E402
@@ -52,7 +58,7 @@ class WordingTest(unittest.TestCase):
 
 
 class SplashTest(unittest.TestCase):
-    """加载弹窗：440×300 定尺卡片，句子是 11 px 两行。"""
+    """加载弹窗：人工 13:10:04 点名的两处之一。"""
 
     def setUp(self) -> None:
         from meapet.desktop.splash import StartupSplash
@@ -68,14 +74,75 @@ class SplashTest(unittest.TestCase):
         self.assertEqual(len(labels), 1, "加载弹窗上这一句只该有一份")
         self.assertEqual(labels[0].text(), PAID_CHANNEL_NOTICE)
 
-    def test_the_notice_fits_the_fixed_size_card(self) -> None:
-        """定尺卡片不会自己长高：句子被挤出卡片时这条会红。"""
+    def test_the_card_still_fits_with_it(self) -> None:
+        """卡片是定尺 440×300。这句要占 33 px，装不下就得改尺寸或砍文案——先把数钉住。"""
         notice = _notice_labels(self.splash)[0]
         card = self.splash.card
-        bottom_in_card = notice.y() + card.y() + notice.height()
-        self.assertLessEqual(bottom_in_card, card.height(), "卡片只有 300 px 高")
-        self.assertGreater(notice.height(), 0)
-        self.assertTrue(notice.wordWrap(), "不换行就会把卡片撑破")
+        self.assertEqual(card.height(), 300 - 2 * 12)
+        self.assertTrue(notice.wordWrap(), "不折行就会按单行 1040 px 去要宽度")
+        self.assertLessEqual(
+            notice.y() + card.y() + notice.height(), card.height(),
+            f"免责句底部 {notice.y() + card.y() + notice.height()} 出卡片 {card.height()}",
+        )
+
+
+class FirstUseHoldTest(unittest.TestCase):
+    """首用（没有自己的 config.json）时卡片停留满时长再关——不然那句照样没人读得到。
+
+    人工 2026-10-10T15:57:18 给的原话是「加载弹窗在没有配置文件时延迟10秒消失（通过是否存在配置文件
+    来判断是否是第一次使用）」；16:40 选定的计时口径是"无 config.json ⇒ 显示满 10 秒再关，有配置照旧
+    立即关"。这里用 400 ms 代替 10 秒跑同一套时钟，测试不该为等待而慢 10 秒。
+    """
+
+    def _shown(self, hold_ms: int):
+        from meapet.desktop.splash import StartupSplash
+
+        splash = StartupSplash()
+        splash.set_hold_ms(hold_ms)
+        splash.show()
+        _app.processEvents()
+        self.addCleanup(splash.deleteLater)
+        return splash
+
+    def test_the_named_hold_is_ten_seconds(self) -> None:
+        from meapet.desktop.splash import FIRST_RUN_HOLD_MS
+
+        self.assertEqual(FIRST_RUN_HOLD_MS, 10_000)
+
+    def test_dismiss_waits_out_the_hold(self) -> None:
+        splash = self._shown(400)
+        splash.dismiss()
+        self.assertTrue(splash.isVisible(), "时长没到就关了")
+        QTest.qWait(700)
+        self.assertFalse(splash.isVisible(), "时长过了还不关")
+
+    def test_dismiss_is_immediate_without_hold(self) -> None:
+        splash = self._shown(0)
+        splash.dismiss()
+        self.assertFalse(splash.isVisible(), "有配置时不该多等——他只要首用那一次")
+
+    def test_first_run_is_read_off_the_startup_config_path(self) -> None:
+        """`main()` 那句判据本身：落到 example 才算首用。
+
+        他给的是「通过是否存在配置文件来判断是否是第一次使用」，而启动路径已经只在没有
+        config.json 时才回落到 example——这条把那层等价关系钉住，换人重写判据时会亮。
+        """
+        import tempfile
+
+        from meapet.config.store import resolve_startup_config_path
+
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(
+                os.path.basename(resolve_startup_config_path(root)),
+                "config.example.json",
+                "没有 config.json 时不该报成「已经配过」",
+            )
+            Path(root, "config.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(
+                os.path.basename(resolve_startup_config_path(root)),
+                "config.json",
+                "有 config.json 还判成首用，每次启动都要多等 10 秒",
+            )
 
 
 class AboutDialogTest(unittest.TestCase):
@@ -114,7 +181,7 @@ class AcquisitionChannelsTest(unittest.TestCase):
     """
 
     EXPECTED = (
-        ("QQ群“审核群”", "1128485088"),
+        ("官方Q群（审核群）", "1128485088"),
         ("主干仓库", "https://github.com/suan-11/mea-pet-public"),
         ("Linux、Wayland适配及其他测试功能", "https://github.com/FlexiAtom/met-pet-public-fix-linux-compat"),
     )
@@ -149,7 +216,7 @@ class AcquisitionChannelsTest(unittest.TestCase):
 
     def test_group_number_is_visible_text_and_the_repos_are_links(self) -> None:
         group, trunk, linux = self._rows()
-        self.assertEqual(group.text(), "QQ群“审核群”: 1128485088")
+        self.assertEqual(group.text(), "官方Q群（审核群）: 1128485088")
         self.assertTrue(group.textInteractionFlags() & Qt.TextSelectableByMouse, "群号得能选中复制")
         for row, (_, url) in zip((trunk, linux), self.EXPECTED[1:]):
             self.assertIn(f'href="{url}"', row.text())
@@ -209,20 +276,60 @@ class GroupNumberConsistencyTest(unittest.TestCase):
                 self.assertIn(word, line, f"{name} 那行缺 {word}")
 
 
-class BothSurfacesShareOneConstantTest(unittest.TestCase):
-    """两处各写一遍字面量，迟早会漂移成两句不同的话。"""
+class OneSourceForTheSentenceTest(unittest.TestCase):
+    """这句话只有**一处**字面量、两处消费者（加载弹窗＋关于页），且两处同一句。
 
-    def test_splash_and_about_render_the_identical_text(self) -> None:
+    他 13:10:04 点的就是这两处。各写一遍字面量迟早漂移成两句不同的话，所以一面钉"只有一个字面量"，
+    另一面钉"两处渲染出来的文本逐字相等"。
+    """
+
+    def test_only_the_constant_module_and_the_two_surfaces_reference_it(self) -> None:
+        consumers = {
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "meapet").rglob("*.py")
+            if "PAID_CHANNEL_NOTICE" in path.read_text(encoding="utf-8")
+        }
+        self.assertEqual(
+            consumers,
+            {
+                "meapet/desktop/disclaimer.py",
+                "meapet/desktop/dialogs.py",
+                "meapet/desktop/splash.py",
+            },
+            "引用这句话的地方变了——两处是他点名的，加第三处得先由他裁",
+        )
+
+    def test_the_two_surfaces_render_the_identical_text(self) -> None:
         from meapet.desktop.dialogs import AboutDialog
         from meapet.desktop.splash import StartupSplash
 
-        splash = StartupSplash()
         # dialog 是 host 的子级：不留住 host，它会先被 GC 把 dialog 一起删掉（实测 RuntimeError）
-        self.host = QWidget()
-        about = AboutDialog(self.host)
+        host = QWidget()
+        self.addCleanup(host.deleteLater)
+        splash = StartupSplash()
+        about = AboutDialog(host)
         self.addCleanup(splash.deleteLater)
         self.addCleanup(about.deleteLater)
         self.assertEqual(_notice_labels(splash)[0].text(), _notice_labels(about)[0].text())
+
+    def test_the_sentence_is_written_out_verbatim_in_exactly_one_place(self) -> None:
+        """扫 AST 的字面量值，不扫源码文本。
+
+        常量在 `disclaimer.py` 里写成两段相邻字面量（隐式拼接），整句**从不以任何子串形式
+        出现在源码**里——拿 `VERBATIM in text` 去扫，天然恒空，那条断言只是在假绿。
+        """
+        hits = []
+        for path in sorted((ROOT / "meapet").rglob("*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            if any(
+                isinstance(node, ast.Constant) and node.value == VERBATIM
+                for node in ast.walk(tree)
+            ):
+                hits.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(hits, ["meapet/desktop/disclaimer.py"], "有人又抄了一遍这句话的字面量")
 
 
 if __name__ == "__main__":
