@@ -44,6 +44,7 @@ BASE_ITEMS = [
     "layer_shim",
     "fidus",
     "audio",
+    "audio_playback",
     "input_devices",
     "asr",
     "screens",

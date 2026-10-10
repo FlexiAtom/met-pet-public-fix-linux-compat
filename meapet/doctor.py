@@ -355,6 +355,41 @@ def _audio_import() -> str:
     return f"pyaudio 规格={'在场' if importlib.util.find_spec('pyaudio') else '缺席'}"
 
 
+def _audio_playback(config: dict) -> str:
+    """播放那一路：Qt 首选在这台机器上到底起不起得来、回退走哪条、音量档生不生效。
+
+    这里**真的 import 一次**绑定，因为 `find_spec` 只查得到 `.abi3.so` 在不在，查不到它
+    NEEDED 的那几个 Qt5 库被裁没裁——本案那条日志就是撞在这一格上的。
+    """
+    import importlib
+    import importlib.util
+    import shutil
+
+    binding = importlib.util.find_spec("PyQt5.QtMultimedia")
+    if binding is None:
+        head = "绑定=缺席（PyQt5 没装 QtMultimedia）"
+    else:
+        try:
+            importlib.import_module("PyQt5.QtMultimedia")
+            head = "绑定=在场 底层=可加载 ⇒ Qt 那一路可用（音量档生效）"
+        except Exception as exc:  # noqa: BLE001 - 取证面把不可用当读数报，不当异常抛
+            head = f"绑定=在场 底层=加载失败：{type(exc).__name__}: {exc}"
+
+    if sys.platform.startswith("win"):
+        tail = "回退=os.startfile（不吃增益）"
+    elif sys.platform == "darwin":
+        afplay = shutil.which("afplay")
+        tail = f"回退=afplay {'在场(' + afplay + ')' if afplay else '缺席'}（不吃增益）"
+    else:
+        aplay = shutil.which("aplay")
+        tail = f"回退=aplay {'在场(' + aplay + ')' if aplay else '缺席'}（不吃增益）"
+    audio = (config or {}).get("audio") or {}
+    return (
+        f"{head} · {tail} · 音量档 tts={audio.get('tts_volume_percent')}% "
+        f"sfx={audio.get('sfx_volume_percent')}%（只有 Qt 那一路读这两个数）"
+    )
+
+
 def _input_devices(config: dict) -> str:
     from meapet.voice.engine import VOICE_INPUT_SAMPLE_RATE, list_input_devices
 
@@ -901,6 +936,14 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             "audio",
             "枚举设备要靠它；空表分不出「没声卡」与「pyaudio 没装」，所以这两格分开报",
             _audio_import,
+        ),
+        _probe(
+            "audio_playback",
+            "出声那条链的读数：Qt 首选真加载一次（find_spec 查不到被裁掉的 Qt5 库；产品侧那一次 import "
+            "在 meapet/desktop/audio.py 的 _qt_media_bundle），回退那三路（startfile/afplay/aplay）"
+            "都不吃增益，所以音量档只在 Qt 那一路生效；「底层=加载失败」是**首选不可用**，"
+            "不等于没出声——产品那时已经改走回退那一路",
+            lambda: _audio_playback(config),
         ),
         _probe(
             "input_devices",

@@ -24,6 +24,29 @@ from meapet.desktop.status_panel import StatusPanel
 AUDIO_BUBBLE_TAIL_MS = 500
 MIN_REPLY_BUBBLE_MS = 3000
 
+#: 每进程只探一次：None=没探过，探过后是 (类三元组或 None, 真因)。
+#: 底层库缺席（整合包把 libQt5Multimedia.so.5 那几条裁掉了）与"这一发没播成"是两件事，
+#: 所以前者印一次「首选 Qt 播放不可用」，后者才配得上「播放失败」四个字。
+_QT_MEDIA_STATE = None
+_QT_MEDIA_NOTICED = False
+
+
+def _qt_media_bundle():
+    """返回 (QMediaPlayer, QMediaContent, QUrl)，底层库不可用时返回 None 并把真因**只印一次**。"""
+    global _QT_MEDIA_STATE, _QT_MEDIA_NOTICED
+    if _QT_MEDIA_STATE is None:
+        try:
+            from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
+            from PyQt5.QtCore import QUrl
+            _QT_MEDIA_STATE = ((QMediaPlayer, QMediaContent, QUrl), "")
+        except Exception as exc:  # noqa: BLE001 - 不可用是这条链上的一条读数，不是异常
+            _QT_MEDIA_STATE = (None, f"{type(exc).__name__}: {exc}")
+    bundle, reason = _QT_MEDIA_STATE
+    if bundle is None and not _QT_MEDIA_NOTICED:
+        _QT_MEDIA_NOTICED = True
+        safe_print(f"[audio] 首选 Qt 播放不可用：{reason} ⇒ 本进程改走系统播放器，音量档不生效")
+    return bundle
+
 
 def bubble_duration_for_audio(
     audio_duration_ms: int,
@@ -84,31 +107,37 @@ class PetAudioMixin:
             volume = 100
 
         # 首选：PyQt5 QtMultimedia（跨平台，支持音量控制）
-        try:
-            from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-            from PyQt5.QtCore import QUrl
-            if not hasattr(self, "_media_player") or self._media_player is None:
-                self._media_player = QMediaPlayer(self)
-            self._media_player.stop()
-            self._media_player.setMedia(QMediaContent(QUrl.fromLocalFile(abs_path)))
-            self._media_player.setVolume(volume)
-            self._media_player.play()
-            safe_print(f"[audio] Qt 播放: {os.path.basename(abs_path)}, volume={volume}")
-            return
-        except Exception as e:
-            safe_print(f"[audio] Qt 播放失败: {e}")
+        bundle = _qt_media_bundle()
+        if bundle is not None:
+            QMediaPlayer, QMediaContent, QUrl = bundle
+            try:
+                if not hasattr(self, "_media_player") or self._media_player is None:
+                    self._media_player = QMediaPlayer(self)
+                self._media_player.stop()
+                self._media_player.setMedia(QMediaContent(QUrl.fromLocalFile(abs_path)))
+                self._media_player.setVolume(volume)
+                self._media_player.play()
+                safe_print(f"[audio] Qt 播放: {os.path.basename(abs_path)}, volume={volume}%")
+                return
+            except Exception as e:
+                # 这一行只留给**真发了却没播成**的那一发；底层库缺席走的是上面那句「不可用」
+                safe_print(f"[audio] Qt 播放失败: {e}")
 
         # 备用：系统默认播放器（不支持音量控制）
         try:
             if sys.platform.startswith("win"):
                 os.startfile(abs_path)  # type: ignore[attr-defined]
-                safe_print(f"[audio] startfile 打开: {os.path.basename(abs_path)}")
+                played = "startfile 打开"
             elif sys.platform == "darwin":
                 subprocess.Popen(["afplay", abs_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                safe_print(f"[audio] afplay 播放: {os.path.basename(abs_path)}")
+                played = "afplay 播放"
             else:
                 subprocess.Popen(["aplay", abs_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                safe_print(f"[audio] aplay 播放: {os.path.basename(abs_path)}")
+                played = "aplay 播放"
+            safe_print(
+                f"[audio] {played}: {os.path.basename(abs_path)}"
+                f"（音量档 {volume}% 未生效：这条不带增益）"
+            )
         except Exception as e:
             safe_print(f"[audio] 最终播放失败: {e}")
 
