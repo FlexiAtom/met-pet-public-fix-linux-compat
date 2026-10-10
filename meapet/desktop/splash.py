@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from meapet.desktop.disclaimer import PAID_CHANNEL_NOTICE
 from meapet.desktop.theme import SPLASH_STYLE
 from meapet.ui_theme import ensure_application_fonts, apply_named_style
 
@@ -86,6 +87,13 @@ class StartupSplash(QWidget):
         foot.setObjectName("SplashHint")
         foot.setAlignment(Qt.AlignCenter)
         layout.addWidget(foot)
+
+        notice = QLabel(PAID_CHANNEL_NOTICE)
+        notice.setObjectName("SplashHint")
+        notice.setWordWrap(True)
+        notice.setAlignment(Qt.AlignCenter)
+        notice.setAccessibleName("付费渠道免责提示")
+        layout.addWidget(notice)
 
         self._steps: List[Tuple[str, Callable[[], None]]] = []
         self._index = 0

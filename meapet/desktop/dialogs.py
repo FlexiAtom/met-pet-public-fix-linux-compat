@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 
 from meapet.desktop.capture_selection import select_screen_region
 from meapet.desktop.dev_options import version_label_text
+from meapet.desktop.disclaimer import PAID_CHANNEL_NOTICE
 from meapet.desktop.screen_geometry import resize_dialog_to_content
 from meapet.desktop.theme import CONSENT_DIALOG_STYLE
 from meapet.ui_theme import (
@@ -1007,6 +1008,19 @@ class AboutDialog(QDialog):
             link.setOpenExternalLinks(True)
             link.setMinimumHeight(MIN_TARGET_SIZE)
             layout.addWidget(link)
+
+        notice_title = QLabel("获取渠道")
+        notice_title.setObjectName("FieldLabel")
+        layout.addWidget(notice_title)
+
+        notice = QLabel(PAID_CHANNEL_NOTICE)
+        notice.setObjectName("ConsentBody")
+        notice.setWordWrap(True)
+        # 不设这个就会被关于页撑到 573 px 宽：word-wrap label 的 sizeHint 按单行算（实测 1040 px），
+        # 而 resize_dialog_to_content 取的是 sizeHint 与设计基准的最大值。
+        notice.setMaximumWidth(300)
+        notice.setAccessibleName("付费渠道免责提示")
+        layout.addWidget(notice)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
