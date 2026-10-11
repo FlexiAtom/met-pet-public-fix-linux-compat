@@ -911,17 +911,23 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         return translated, target_lang
 
     def _language_checks_bypassed(self) -> bool:
-        """VITS 那一路不做语言校验（人工 2026-10-12 裁决「去除校验」）。
+        """本地出声的两路（VITS、GPT-SoVITS）整条不做语言校验
+        （人工 2026-10-12 裁决「去除校验」，GSV 同档：「GPT-Sovits也需要改这档」）。
 
-        这条路上 ``supported_languages()`` 是硬编码的 ``('jp',)``（本文件
+        VITS：``supported_languages()`` 是硬编码的 ``('jp',)``（本文件
         :753-754），而推理前端拿到什么文本都照音素化，只按语言换标记
         （engines/vits.py:vits_frontend_text）——引擎没有"会不会说这门语言"
-        这一档，照念。校验留着只会把每一句掐成静默；念出来可懂与否交给耳朵。
-        GSV/MiMo 不动：那两路的 supported 是从参考音频推的真集合。`vits_mode` 是遗留
-        开关，与 `engine: mimo` 同给时两个 mode 位都真，但 speak 里 MiMo 那一支在前
+        这一档，照念。
+        GPT-SoVITS：``supported`` 是从参考音频文件名推出来的集合（:774-789），
+        它只说明"池里有哪些语言的参考"，不说明"能不能念别的语言"——跨语言克隆
+        正是这一路的能力，且 payload 里 ``prompt_language`` 与 ``text_language``
+        本来就分开发（engines/gsv.py:57-65）。校验留着只会把每一句非 ``voice_lang``
+        的回复掐成静默（实测 8/8 臂里 4 臂静默，其中 2 臂还是外部翻译池是否可用决定的）。
+        MiMo 不动：云端那一档音色与语言是真绑定，supported 有意义。
+        `vits_mode` 是遗留开关，与 `engine: mimo` 同给时两个 mode 位都真，但 speak 里 MiMo 那一支在前
         （:1205 早于 :1235）——所以作用域跟着**真正出声的那个引擎**走，不跟标志走。
         """
-        return bool(self._vits_mode and not self._mimo_mode)
+        return not self._mimo_mode
 
     def _select_tts_text_route(
         self,
@@ -934,18 +940,21 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         claimed = canonical_tts_language(requested_language)
         if self._language_checks_bypassed():
             # 早退在这一处而不是每个分支里，是为了只有一条真相：三道闸
-            # （来源语言档、目标语言档、_language_plan 那档）对 VITS 一起让位。
-            # target 槽带**文本自己那门语言**，它只被引擎拿去挑前端标记
-            # （engines/vits.py:vits_frontend_text）：判成中文的那句走 [ZH] 拼音，
-            # 判不出的纯汉字（古诗词那一类 unknown）仍按 [JA] 音读——那是这一档
-            # 改动之前的既有听感，不搭车。
-            frontend_lang = (
-                "zh" if detect_script_language(clean) == "zh" else (claimed or "jp")
+            # （来源语言档、目标语言档、_language_plan 那档）对本地两路引擎一起让位。
+            # target 槽带**文本自己那门语言**（判得出才带），下游各引擎自己消费：
+            # VITS 拿它挑前端标记（engines/vits.py:vits_frontend_text），判不出的
+            # 纯汉字（古诗词那一类 unknown）仍按 claimed 落 [JA] 音读——那是这一档
+            # 改动之前的既有听感，不搭车；GSV 拿它挑参考音频前缀并填 text_language，
+            # 参考自己的语言另走 prompt_language（engines/gsv.py:57-65），
+            # 于是"日语参考念中文"与"中文参考念中文"两种池子都能出声。
+            observed = detect_script_language(clean)
+            synthesis_lang = (
+                observed if observed in {"zh", "jp", "en"} else (claimed or "jp")
             )
             return (
                 "direct",
                 claimed or "jp",
-                frontend_lang,
+                synthesis_lang,
                 "language_checks_bypassed",
             )
         supported = self.supported_languages()
@@ -1173,7 +1182,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 仅显示气泡（原文气泡仍会显示）。
         # 走「念原文」那一档时这道闸让位给路由：闸门的判据是"文本对不对得上配置的目标语言"，
         # 而那一档压根不打算念目标语言——不放开它就会把一句能直接念的中文掐成静默。
-        # VITS 那一档整条不做校验（见 _language_checks_bypassed），否则中文在
+        # 本地两路引擎整条不做校验（见 _language_checks_bypassed），否则中文在
         # voice_lang=jp 下仍会在这里被掐掉，而且是一条与路由 reason 不同名的静默。
         if (
             not prefer_source_language
@@ -1279,7 +1288,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
 
         # ── 新增：async 路径也做语言不匹配检查 ──
-        # 「念原文」那一档交给路由判，理由与同步路径那一处相同；VITS 整条不校验。
+        # 「念原文」那一档交给路由判，理由与同步路径那一处相同；本地两路整条不校验。
         if (
             not prefer_source_language
             and not self._language_checks_bypassed()
