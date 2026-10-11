@@ -914,12 +914,12 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         """VITS 那一路不做语言校验（人工 2026-10-12 裁决「去除校验」）。
 
         这条路上 ``supported_languages()`` 是硬编码的 ``('jp',)``（本文件
-        :753-754），而推理前端对**任何**文本都套 ``[JA]…[JA]``
-        （engines/vits.py:152、:226）——引擎没有"会不会说这门语言"这一档，
-        照念。校验留着只会把每一句掐成静默；念出来可懂与否交给耳朵。
+        :753-754），而推理前端拿到什么文本都照音素化，只按语言换标记
+        （engines/vits.py:vits_frontend_text）——引擎没有"会不会说这门语言"
+        这一档，照念。校验留着只会把每一句掐成静默；念出来可懂与否交给耳朵。
         GSV/MiMo 不动：那两路的 supported 是从参考音频推的真集合。`vits_mode` 是遗留
         开关，与 `engine: mimo` 同给时两个 mode 位都真，但 speak 里 MiMo 那一支在前
-        （:1193 早于 :1223）——所以作用域跟着**真正出声的那个引擎**走，不跟标志走。
+        （:1205 早于 :1235）——所以作用域跟着**真正出声的那个引擎**走，不跟标志走。
         """
         return bool(self._vits_mode and not self._mimo_mode)
 
@@ -935,7 +935,19 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         if self._language_checks_bypassed():
             # 早退在这一处而不是每个分支里，是为了只有一条真相：三道闸
             # （来源语言档、目标语言档、_language_plan 那档）对 VITS 一起让位。
-            return "direct", claimed or "jp", "jp", "language_checks_bypassed"
+            # target 槽带**文本自己那门语言**，它只被引擎拿去挑前端标记
+            # （engines/vits.py:vits_frontend_text）：判成中文的那句走 [ZH] 拼音，
+            # 判不出的纯汉字（古诗词那一类 unknown）仍按 [JA] 音读——那是这一档
+            # 改动之前的既有听感，不搭车。
+            frontend_lang = (
+                "zh" if detect_script_language(clean) == "zh" else (claimed or "jp")
+            )
+            return (
+                "direct",
+                claimed or "jp",
+                frontend_lang,
+                "language_checks_bypassed",
+            )
         supported = self.supported_languages()
         target = self._configured_or_default_target()
         translation_available = self._translation_available()
@@ -1221,7 +1233,9 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         log.trace(lambda: f"合成: {tts_text[:60]}")
 
         if self._vits_mode:
-            return self._speak_vits(tts_text, output_wav)
+            return self._speak_vits(
+                tts_text, output_wav, language=synthesis_language
+            )
         return self._speak_gsv(
             tts_text,
             output_wav,

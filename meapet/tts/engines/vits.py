@@ -21,6 +21,23 @@ from meapet.tts.common import (
 log = get_color_logger("tts")
 
 
+def vits_frontend_text(text: str, language: Optional[str]) -> str:
+    """按整句语言给 VITS 前端套语言标记。
+
+    ``cjke_cleaners2`` 只音素化**包在标记里**的文本，裸中日韩文会被逐字符丢掉
+    （vits_core/text/cleaners.py:88-99）。中文有自己那一支 ``[ZH]`` →
+    ``chinese_to_ipa``（拼音），而 ``[JA]`` 那一支对汉字只给音读——人工
+    2026-10-12 听过后点了「[ZH] 能听」，中文才换标记。
+
+    整句只选一支，不逐 run 分块：实测 ``[ZH]打开[ZH] [EN]TCP[EN] [ZH]端口[ZH]``
+    清出 31 音素却只剩 30（大写缩写被符号表丢），而中文串里外扩英文进 ``[ZH]``
+    是 37→37 零丢；更关键的是日文句子里的汉字本来就多，按 run 标 ``[ZH]``
+    会把音读念碎。所以判据取"这句是什么语言"，不取"这段是什么字符"。
+    """
+    marker = "ZH" if str(language or "").lower().startswith("zh") else "JA"
+    return f"[{marker}]{text}[{marker}]"
+
+
 class TtsVitsMixin:
     def _vits_external_python(self) -> str:
         return resolve_external_python(
@@ -77,13 +94,18 @@ class TtsVitsMixin:
                 continue
             argv.extend([flag, str(value)])
 
-    def _speak_vits(self, tts_text: str, output_wav: str) -> Optional[tuple[str, str]]:
+    def _speak_vits(
+        self, tts_text: str, output_wav: str, language: str = "jp"
+    ) -> Optional[tuple[str, str]]:
         """VITS backend inference.
 
         Prefer a configured external Python + ``vits_infer.py`` when available
         (most reliable on Windows frozen builds). Fall back to in-process torch
         when no external interpreter is configured, or when the subprocess path
         is unavailable.
+
+        ``language`` 只决定前端标记（``vits_frontend_text``），不改变合成文本本身：
+        VITS 那一路不做语言校验，句子的语言由选路阶段带下来。
 
         The route is decided once, in ``resolve_vits_route``. An explicit
         ``tts.vits_inprocess: true`` does **not** outrank a real external
@@ -116,17 +138,21 @@ class TtsVitsMixin:
             # 外部解释器可用：先子进程，失败再退进程内（打包版自带 torch 可能
             # 加载不了，这条兜底是原有行为）。
             result = TtsVitsMixin._speak_vits_subprocess(
-                self, tts_text, output_wav, external_py
+                self, tts_text, output_wav, external_py, language=language
             )
             if result[0]:
                 return result
             log.warning(
                 "VITS subprocess failed; trying in-process torch as fallback"
             )
-            return TtsVitsMixin._speak_vits_inprocess(self, tts_text, output_wav)
+            return TtsVitsMixin._speak_vits_inprocess(
+                self, tts_text, output_wav, language=language
+            )
 
         # 进程内单路：没有可退的外部解释器（上面已挡掉"两路都没有"）。
-        return TtsVitsMixin._speak_vits_inprocess(self, tts_text, output_wav)
+        return TtsVitsMixin._speak_vits_inprocess(
+            self, tts_text, output_wav, language=language
+        )
 
     def _speak_vits_subprocess(
         self,
@@ -134,6 +160,7 @@ class TtsVitsMixin:
         output_wav: str,
         vits_python: str,
         knobs: Optional[tuple[str, str, str]] = None,
+        language: str = "jp",
     ) -> Optional[tuple[str, str]]:
         log.info("VITS inference (subprocess)...")
         t1 = time.time()
@@ -149,7 +176,7 @@ class TtsVitsMixin:
             vits_python,
             vits_script,
             "--text",
-            f"[JA]{tts_text}[JA]",
+            vits_frontend_text(tts_text, language),
             "--output",
             output_wav,
             "--noise_scale",
@@ -208,13 +235,13 @@ class TtsVitsMixin:
                 return None, ""
 
             log.info(f"VITS output: {os.path.basename(output_wav)} ({elapsed:.1f}s)")
-            return output_wav, "jp"
+            return output_wav, language
         except Exception as e:
             log.error(f"VITS exception: {type(e).__name__}: {e}")
             return None, ""
 
     def _speak_vits_inprocess(
-        self, tts_text: str, output_wav: str
+        self, tts_text: str, output_wav: str, language: str = "jp"
     ) -> Optional[tuple[str, str]]:
         log.info("VITS inference (in-process)...")
         t1 = time.time()
@@ -223,7 +250,7 @@ class TtsVitsMixin:
 
             model_path, config_path, speaker = TtsVitsMixin._vits_knobs(self)
             synthesize_vits(
-                f"[JA]{tts_text}[JA]",
+                vits_frontend_text(tts_text, language),
                 output_wav,
                 model_path=model_path,
                 config_path=config_path,
@@ -236,7 +263,7 @@ class TtsVitsMixin:
             log.info(
                 f"VITS output: {os.path.basename(output_wav)} ({elapsed:.1f}s, in-process)"
             )
-            return output_wav, "jp"
+            return output_wav, language
         except Exception as e:
             log.error(f"VITS in-process exception: {type(e).__name__}: {e}")
             return None, ""

@@ -847,9 +847,9 @@ class TestVitsLanguageChecksBypassed(unittest.TestCase):
 
     他那份 config 的形状是 engine=vits + voice_lang=jp +
     `translate_target_language=zh` + `prefer_model_voice_translation=true`，
-    实测六格（三本文 × 两链）全被 skip ⇒ 桌宠每句不出声。推理前端对任何文本都套
-    ``[JA]…[JA]``（engines/vits.py:152、:226），所以这一路要的是"照念"，
-    念出来可懂与否由耳朵裁（提案件 §待测第一条），不是在这里换成静默的理由。
+    实测六格（三本文 × 两链）全被 skip ⇒ 桌宠每句不出声。推理前端拿到什么文本都
+    照音素化，只按语言换标记（engines/vits.py:vits_frontend_text），所以这一路要的
+    是"照念"，念出来可懂与否由耳朵裁（提案件 §待测第一条），不是在这里换成静默的理由。
     """
 
     @staticmethod
@@ -878,23 +878,33 @@ class TestVitsLanguageChecksBypassed(unittest.TestCase):
         return MeaTTS({"tts": tts_cfg})
 
     def test_three_gates_all_yield_on_the_same_config(self):
-        """来源语言档、目标语言档、_language_plan 那档一起让位——早退只有一条真相。"""
-        texts = (
-            "床前明月光，疑是地上霜。",  # 脚本判 unknown（纯汉字无假名）
-            "今天的风好大，我想吃点热的。",  # 脚本判 zh —— 他贴那条命中的就是它
-            "今日はいい天気ですね。",  # 脚本判 jp
+        """来源语言档、目标语言档、_language_plan 那档一起让位——早退只有一条真相。
+
+        target 槽带的是**文本自己那门语言**，它只被引擎拿去挑 ``[ZH]``/``[JA]``
+        标记；脚本判不出的纯汉字（古诗词那一类 unknown）仍按 jp 走音读——
+        那句的听感不在这条裁决的改动范围内。
+        """
+        cases = (
+            ("床前明月光，疑是地上霜。", "jp"),  # 脚本判 unknown（纯汉字无假名）
+            ("今天的风好大，我想吃点热的。", "zh"),  # 脚本判 zh —— 他贴那条命中的就是它
+            ("今日はいい天気ですね。", "jp"),  # 脚本判 jp
         )
         with tempfile.TemporaryDirectory() as td:
             tts = self._vits_tts(td)
             self.assertEqual(tts.supported_languages(), ("jp",))
-            for text in texts:
+            for text, frontend_lang in cases:
                 for prefer in (False, True):
                     with self.subTest(text=text[:4], prefer=prefer):
                         self.assertEqual(
                             tts._select_tts_text_route(
                                 text, "jp", prefer_source_language=prefer
                             ),
-                            ("direct", "jp", "jp", "language_checks_bypassed"),
+                            (
+                                "direct",
+                                "jp",
+                                frontend_lang,
+                                "language_checks_bypassed",
+                            ),
                         )
 
     def test_no_translation_is_bought_in_on_the_way(self):
@@ -905,20 +915,25 @@ class TestVitsLanguageChecksBypassed(unittest.TestCase):
             with mock.patch.object(tts, "_translate_text") as translate:
                 prepared = tts._prepare_tts_text("今天的风好大，喵。", "jp")
             translate.assert_not_called()
-        self.assertEqual(prepared, ("今天的风好大，喵。", "jp"))
+        self.assertEqual(prepared, ("今天的风好大，喵。", "zh"))
 
     def test_speak_hands_the_raw_text_to_the_engine(self):
         """外层那道 `should_skip_tts_due_to_language_mismatch` 也得让位，否则中文在
-        voice_lang=jp 下仍被掐成静默，而且是一条与路由 reason 不同名的静默。"""
+        voice_lang=jp 下仍被掐成静默，而且是一条与路由 reason 不同名的静默。
+
+        `language` 一起断言：前端用哪一个标记（``[ZH]``/``[JA]``）只看这一个入参，
+        它是路由与引擎之间唯一的口径通道。
+        """
         with tempfile.TemporaryDirectory() as td:
             tts = self._vits_tts(td)
             with mock.patch.object(tts, "_ensure_deps", return_value=True):
                 with mock.patch.object(
-                    tts, "_speak_vits", return_value=("/tmp/vits.wav", "jp")
+                    tts, "_speak_vits", return_value=("/tmp/vits.wav", "zh")
                 ) as speak_vits:
                     result = tts.speak("今天的风好大，喵。", "happy")
-        self.assertEqual(result, ("/tmp/vits.wav", "jp"))
+        self.assertEqual(result, ("/tmp/vits.wav", "zh"))
         self.assertEqual(speak_vits.call_args.args[0], "今天的风好大，喵。")
+        self.assertEqual(speak_vits.call_args.kwargs["language"], "zh")
 
     def test_async_entry_reaches_the_engine_too(self):
         with tempfile.TemporaryDirectory() as td:
@@ -959,7 +974,7 @@ class TestVitsLanguageChecksBypassed(unittest.TestCase):
 
     def test_the_scope_follows_the_engine_that_actually_speaks(self):
         """`vits_mode` 与 `engine: mimo` 同给时两个 mode 位都真，但 MiMo 那一支在
-        speak 里排在 VITS 前面（:1193 早于 :1223）——所以去校验只跟着**真正出声**的
+        speak 里排在 VITS 前面（service.py:1205 早于 :1235）——所以去校验只跟着**真正出声**的
         引擎走，不跟着标志走，否则这条遗留组合会把 MiMo 的语言核对一并摘掉。"""
         with tempfile.TemporaryDirectory() as td:
             tts = self._vits_tts(td, engine="mimo", vits_mode=True)
