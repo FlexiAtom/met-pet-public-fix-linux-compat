@@ -137,6 +137,12 @@ class PetWindowChromeMixin:
                 stop_control()
             except Exception:
                 pass
+        stop_onebot = getattr(self, "_stop_onebot", None)
+        if callable(stop_onebot):
+            try:
+                stop_onebot()
+            except Exception:
+                pass
         try:
             adapter = getattr(self, "agent_adapter", None)
             close = getattr(adapter, "close", None)
@@ -542,6 +548,17 @@ class PetWindowChromeMixin:
             rotate_token_action = QAction("重新生成 Agent 控制令牌…", self)
             rotate_token_action.triggered.connect(self._regenerate_agent_control_token)
             settings_menu.addAction(rotate_token_action)
+        if (self.config.get("onebot") or {}).get("enabled"):
+            onebot_status = QAction(
+                status_language.menu_onebot_status_prefix()
+                + str(getattr(self, "_onebot_status_text", lambda: "")() or ""),
+                self,
+            )
+            onebot_status.setEnabled(False)
+            settings_menu.addAction(onebot_status)
+            onebot_reload = QAction(status_language.menu_onebot_reload(), self)
+            onebot_reload.triggered.connect(self._reload_onebot)
+            settings_menu.addAction(onebot_reload)
         settings_menu.addSeparator()
         reset_label = (
             "新建 Agent 会话…"

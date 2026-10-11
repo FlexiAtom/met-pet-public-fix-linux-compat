@@ -85,6 +85,7 @@ from wizard.pages import (
     BackendPage,
     EnvCheckPage,
     LLMPage,
+    OneBotPage,
     TTSPage,
     VisionPage,
     VoiceInputPage,
@@ -111,6 +112,7 @@ class SetupWizard(QWidget):
     TAB_VOICE = 3
     TAB_VISION = 4
     TAB_VOICE_INPUT = 5
+    TAB_ONEBOT = 6
 
     _WINDOW_RESIZE_MARGIN = 10
     _WINDOW_STATE_SAVE_DELAY_MS = 250
@@ -295,6 +297,7 @@ class SetupWizard(QWidget):
         self.tts_page = TTSPage()
         self.vision_page = VisionPage()
         self.voice_input_page = VoiceInputPage()
+        self.onebot_page = OneBotPage()
 
         for page in (
             self.env_page,
@@ -305,6 +308,7 @@ class SetupWizard(QWidget):
             self.tts_page,
             self.vision_page,
             self.voice_input_page,
+            self.onebot_page,
         ):
             prepare_accessible_page(page)
 
@@ -327,7 +331,7 @@ class SetupWizard(QWidget):
         self.tabs.setAccessibleName("配置分类")
         self.tabs.setAccessibleDescription("带橙色圆点的分类缺少必要配置，并有文字提示")
         self.tabs.list.setAccessibleName(
-            "环境、Live2D、对话、语音、屏幕识图和语音输入分类"
+            "环境、Live2D、对话、语音、屏幕识图、语音输入和 OneBot 分类"
         )
         self.tabs.list.setAccessibleDescription(
             "橙色圆点表示该分类仍缺少必要配置；具体原因显示在分类提示和顶部状态中"
@@ -351,6 +355,7 @@ class SetupWizard(QWidget):
         self.tabs.addTab(self._make_scroll_tab(self.tts_page), "语音")
         self.tabs.addTab(self._make_scroll_tab(self.vision_page), "屏幕识图")
         self.tabs.addTab(self._make_scroll_tab(self.voice_input_page), "语音输入")
+        self.tabs.addTab(self._make_scroll_tab(self.onebot_page), "OneBot")
         main.addWidget(self.tabs, 1)
 
         # 底部按钮
@@ -1099,6 +1104,28 @@ class SetupWizard(QWidget):
         self.vision_page.api_key_input.textChanged.connect(
             self._refresh_required_tabs
         )
+        for widget in (
+            self.onebot_page.enabled_cb,
+            self.onebot_page.forward_enabled,
+            self.onebot_page.reverse_enabled,
+            self.onebot_page.http_api_enabled,
+            self.onebot_page.http_post_enabled,
+            self.onebot_page.hub_enabled,
+            self.onebot_page.allow_private,
+            self.onebot_page.allow_groups,
+            self.onebot_page.reverse_allow_insecure_remote,
+            self.onebot_page.http_post_allow_insecure_remote,
+            self.onebot_page.hub_allow_insecure_remote,
+        ):
+            widget.toggled.connect(self._refresh_required_tabs)
+        for widget in (
+            self.onebot_page.forward_url,
+            self.onebot_page.http_api_base,
+            self.onebot_page.reverse_host,
+            self.onebot_page.http_post_host,
+            self.onebot_page.hub_host,
+        ):
+            widget.textChanged.connect(self._refresh_required_tabs)
 
     def _on_llm_backend_changed(self, checked: bool = True) -> None:
         if not checked:
@@ -1124,6 +1151,7 @@ class SetupWizard(QWidget):
             self.TAB_VOICE: [],
             self.TAB_VISION: [],
             self.TAB_VOICE_INPUT: [],
+            self.TAB_ONEBOT: [],
         }
         issues[self.TAB_ENV].extend(self.env_page.required_missing())
 
@@ -1228,6 +1256,15 @@ class SetupWizard(QWidget):
                         vision_key = llm_key
                     if not vision_key:
                         issues[self.TAB_VISION].append("云端识图 API Key")
+
+        try:
+            from meapet.onebot.config import validate_onebot_config
+
+            issues[self.TAB_ONEBOT].extend(
+                validate_onebot_config(self.onebot_page.collect())
+            )
+        except Exception as exc:
+            self.env_page.log(f"检查 OneBot 配置失败: {type(exc).__name__}")
         return issues
 
     def _refresh_required_tabs(self, *_args) -> None:
@@ -1238,6 +1275,7 @@ class SetupWizard(QWidget):
             self.TAB_CHAT: "对话",
             self.TAB_VOICE: "语音",
             self.TAB_VISION: "屏幕识图",
+            self.TAB_ONEBOT: "OneBot",
         }
         missing_sections = []
         for index, label in labels.items():
@@ -1389,6 +1427,14 @@ class SetupWizard(QWidget):
                 )
             except Exception as exc:
                 self.env_page.log(f"恢复语音输入配置失败: {exc}")
+
+            try:
+                self.onebot_page.apply_config(cfg.get("onebot") or {})
+                self.env_page.log(
+                    f"已恢复 OneBot（QQ 通道）配置：{self.onebot_page.summary()}"
+                )
+            except Exception as exc:
+                self.env_page.log(f"恢复 OneBot 配置失败: {exc}")
 
             eng = (tts.get("engine") or "?").lower()
             tts_on = "开" if tts.get("enabled", True) else "关"
@@ -1688,6 +1734,10 @@ class SetupWizard(QWidget):
         self._collect_tts_fields(config)
         self._collect_vision_fields(config)
         self._collect_voice_input_fields(config)
+        config["onebot"] = self._deep_merge(
+            config.get("onebot") or {},
+            self.onebot_page.collect(),
+        )
         return config
 
     def _save(self):

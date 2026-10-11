@@ -91,6 +91,9 @@ class PetConfigBridgeMixin:
         stop_control = getattr(self, "_stop_control", None)
         if callable(stop_control):
             stop_control()
+        stop_onebot = getattr(self, "_stop_onebot", None)
+        if callable(stop_onebot):
+            stop_onebot()
         self._disconnect_watcher_signals()
         stop_voice = getattr(self, "_stop_voice_engine", None)
         if callable(stop_voice):
@@ -152,6 +155,9 @@ class PetConfigBridgeMixin:
             self._init_chat()
             self._init_watcher()
             self._init_control()
+            init_onebot = getattr(self, "_init_onebot", None)
+            if callable(init_onebot):
+                init_onebot()
             self._init_voice()
         except Exception as exc:
             log.error(

@@ -103,6 +103,13 @@ def _log_private_text(label: str, text: str, *, suffix: str = "") -> None:
 
 
 class PetChatFlowMixin:
+    def _notify_channel_turn_finished(self, reply: str = "", reason: str = "") -> None:
+        """回复通道（OneBot 等）挂钩点。
+
+        基础实现是 no-op，由 ``PetOneBotMixin`` 覆盖；这样只继承本 mixin 的测试
+        宿主不需要关心外部通道状态。
+        """
+
     def _refresh_conversation_key(self) -> ConversationKey:
         from meapet.conversation.orchestrator import ConversationOrchestrator
 
@@ -984,6 +991,8 @@ class PetChatFlowMixin:
             for segment in sorted(segments, key=lambda item: item.index)
             if segment.display_text
         ).strip()
+        # 外部通道（OneBot）在回复定稿时立即回收本轮
+        self._notify_channel_turn_finished(reply)
         user_text = str(getattr(self, "_last_user_msg", "") or "").strip()
         if self._is_agent_mode() and user_text and reply:
             history = list(getattr(self, "_agent_history", ()) or ())
@@ -1059,6 +1068,8 @@ class PetChatFlowMixin:
         self._agent_format_repair_pending = False
         if hasattr(self, '_chat_timeout') and self._chat_timeout:
             self._chat_timeout.stop()
+        # 取消不回复 QQ：这是本机主动打断，不是对端提问失败
+        self._notify_channel_turn_finished("", "agent_turn_cancelled")
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
         log.info(f"[chat] 本轮呈现完成: turn={turn_id[:24]}")
@@ -1085,6 +1096,7 @@ class PetChatFlowMixin:
             self._chat_timeout.stop()
         self._show_bubble(str(safe_message or "回复请求失败。"), 10000, mood=None)
         self._position_bubble()
+        self._notify_channel_turn_finished(str(safe_message or ""), "agent_turn_failed")
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
 
@@ -1158,6 +1170,8 @@ class PetChatFlowMixin:
             self._chat_timeout.stop()
         eng = getattr(self, "chat_engine", None)
         known_moods = getattr(eng, "_MOOD_TAGS", ())
+        # 外部通道（OneBot）需要在文字定稿时立即拿到，不能等 TTS 音频
+        self._notify_channel_turn_finished(reply)
         detected = mood if mood in known_moods else self._detect_mood(reply)
         # 气泡只显示中文；TTS 优先用模型附带的日语行（无则回退整段 reply，由 TTS 再翻译）
         voice_text = reply
@@ -1472,6 +1486,9 @@ class PetChatFlowMixin:
             mood=None,
         )
         self._position_bubble()
+        self._notify_channel_turn_finished(
+            str(status_language.model_service_error() or ""), "chat_error"
+        )
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
 
@@ -1491,6 +1508,9 @@ class PetChatFlowMixin:
         set_awaiting_reply_state(self, False)
         self._show_bubble(status_language.chat_timeout(), 3000)
         self._position_bubble()
+        self._notify_channel_turn_finished(
+            str(status_language.chat_timeout() or ""), "chat_timeout"
+        )
         timeline = getattr(self, "_conversation_timeline", None)
         key = (
             getattr(context, "conversation_key", None)

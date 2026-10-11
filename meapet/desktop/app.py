@@ -62,6 +62,7 @@ from meapet.desktop.widgets import DialogueBubbleStack
 from meapet.desktop.audio import PetAudioMixin
 from meapet.desktop.watch_ctrl import PetWatcherMixin
 from meapet.desktop.chat_flow import PetChatFlowMixin
+from meapet.desktop.onebot_bridge import PetOneBotMixin
 from meapet.desktop.control_bridge import PetControlBridgeMixin
 from meapet.desktop.interaction import PetInteractionMixin
 from meapet.desktop.window_chrome import PetWindowChromeMixin
@@ -124,6 +125,7 @@ class MeaPet(
     PetAudioMixin,
     PetWatcherMixin,
     PetVoiceMixin,
+    PetOneBotMixin,
     PetChatFlowMixin,
     PetControlBridgeMixin,
     PetInteractionMixin,
@@ -211,6 +213,7 @@ class MeaPet(
         _safe("chat", self._init_chat)
         _safe("tts", self._init_tts)
         _safe("control", self._init_control)
+        _safe("onebot", self._init_onebot)
         self._cloud_watch_confirmed = False
         _safe("watcher", self._init_watcher)
         _safe("voice", self._init_voice)
