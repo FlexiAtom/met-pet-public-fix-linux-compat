@@ -1,0 +1,21 @@
+dsh-onebot-relay — OneBot v11 ↔ DeepSeek Harness 网桥（DSH host 插件）
+Copyright (C) 2026  dsh-onebot-relay contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+
+完整许可文本见 https://www.gnu.org/licenses/agpl-3.0.txt
+（本文件有意只放声明与链接：把 34 KB 的法律文本复制一份进仓库，
+ 会在每次许可证修订时产生「哪一份才是权威」的问题。）
