@@ -254,12 +254,15 @@ class TTSWorker:
         mood: str = "neutral",
         style: str = "",
         language: str = "",
+        prefer_source_language: bool = False,
     ):
         self.tts = tts
         self.text = text
         self.mood = mood
         self.style = style
         self.language = str(language or "").strip()
+        # 「念文本自己那门语言」那一档，由调用方决定（互动链开、对话回复链不开）。
+        self.prefer_source_language = bool(prefer_source_language)
         self._future: Optional[Future] = None
         self._done = False
         self._result = None
@@ -281,6 +284,9 @@ class TTSWorker:
         self._future.add_done_callback(_done_cb)
 
     async def _run(self):
+        # 那一档只在真的开着时才往下传：产品里替 tts 造的那些假对象有的只声明到
+        # `(text, mood)`，多一枚关键字就成了 TypeError——这格 if/elif 阶梯本来就是为它们留的。
+        extra = {"prefer_source_language": True} if self.prefer_source_language else {}
         if hasattr(self.tts, "speak_async"):
             if self.language:
                 result = await self.tts.speak_async(
@@ -288,12 +294,14 @@ class TTSWorker:
                     mood=self.mood,
                     style=self.style,
                     language=self.language,
+                    **extra,
                 )
-            elif self.style:
+            elif self.style or extra:
                 result = await self.tts.speak_async(
                     self.text,
                     mood=self.mood,
                     style=self.style,
+                    **extra,
                 )
             else:
                 result = await self.tts.speak_async(self.text, mood=self.mood)
@@ -304,7 +312,7 @@ class TTSWorker:
                 args = (self.text, self.mood, self.style)
             else:
                 args = (self.text, self.mood)
-            result = await asyncio.to_thread(self.tts.speak, *args)
+            result = await asyncio.to_thread(self.tts.speak, *args, **extra)
         if result and result[0]:
             wav, lang = result
             return f"{wav}|{lang}"

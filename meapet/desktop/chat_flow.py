@@ -1545,7 +1545,13 @@ class PetChatFlowMixin:
                 self._play_audio(cached, audio_type="tts")
                 return
             self._pending_speak_reply = (text, duration_ms, mood)
-            self._speak_worker = TTSWorker(tts, text, mood=mood)
+            # 互动这一链念**文本自己那门语言**：它的文本不是模型带 `voice_language` 回来的
+            # （预制回退句、点击反馈取回的古诗词/改写句），拿配置的目标语言去核对只会把
+            # 「引擎本来能直接念的一句中文」掐成静默。对话回复那一链不走这里，仍按
+            # `prefer_model_voice_translation` 翻到目标语言。
+            self._speak_worker = TTSWorker(
+                tts, text, mood=mood, prefer_source_language=True
+            )
             self._speak_worker.start()
             self._ensure_tts_poll()
         except Exception as e:

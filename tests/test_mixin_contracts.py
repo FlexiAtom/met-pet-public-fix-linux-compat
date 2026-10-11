@@ -340,6 +340,30 @@ class TestCrossMixinCallChain(unittest.TestCase):
         self.assertEqual(c.bubble.texts[-1][1], 8_500)
         self.assertEqual(c._played, [str(wav_path)])
 
+    def test_speak_and_show_asks_the_worker_to_read_the_text_language(self):
+        """互动这一链的文本没有模型声明的语言（预制回退句、点击反馈取回的古诗），
+        拿配置的目标语言去核对只会把能直接念的一句中文掐成静默——所以它开
+        `prefer_source_language`。对话回复那一链由别处出声，不开。"""
+        import meapet.desktop.chat_flow as chat_flow
+
+        seen = {}
+
+        class CaptureWorker:
+            done = False
+
+            def __init__(self, tts, text, *_args, **kwargs):
+                seen["text"] = text
+                seen["kwargs"] = kwargs
+
+            def start(self):
+                pass
+
+        c = _Composite()
+        with mock.patch.object(chat_flow, "TTSWorker", CaptureWorker):
+            c._speak_and_show("别摸了……", 1000, "happy")
+
+        self.assertTrue(seen["kwargs"].get("prefer_source_language"))
+
     def test_speak_and_show_rejects_string_self_pattern(self):
         """文档化错误形态：若误标 staticmethod，self 会变成 str。"""
         from meapet.desktop.chat_flow import PetChatFlowMixin

@@ -667,3 +667,176 @@ class TestVoiceTranslationPrompt(unittest.TestCase):
             with self.subTest(instruction=instruction[:24]):
                 self.assertIn("voice_text 实际使用的语言", instruction)
                 self.assertIn("voice_text 与 voice_language 必须一致", instruction)
+
+
+class TestPreferSourceLanguage(unittest.TestCase):
+    """互动那一链念**文本自己那门语言**（人工裁乙）。
+
+    目标语言配成 jp 时，点击反馈取回的古诗词/改写句与预制回退句都得出声：既不 machine
+    translation 成日语，也不被草案 §五 那道闸门掐成静默。对话回复那一链不开这一档，
+    仍按 `prefer_model_voice_translation` 翻到目标语言——下面最后一条把两支钉在同
+    一份配置上比对，防止以后有人把这一档当成全局开关推开。
+    """
+
+    @staticmethod
+    def _tts(td, **overrides):
+        from meapet.tts.service import MeaTTS
+
+        tts_cfg = {
+            "enabled": True,
+            "engine": "gpt_sovits",
+            "api_key": "test-key-not-real",
+            "voice_lang": "jp",
+            "supported_languages": ["jp", "zh"],
+            "translate_to_jp": False,
+            "prefer_model_voice_translation": True,
+            "output_dir": td,
+            "gpt_weights_dir": td,
+            "sovits_weights_dir": td,
+            "ref_dir": td,
+        }
+        tts_cfg.update(overrides)
+        return MeaTTS({"tts": tts_cfg})
+
+    def test_supported_source_language_is_read_without_translation_or_silence(self):
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._tts(td)
+            route = tts._select_tts_text_route(
+                "床前明月光，喵。", "jp", prefer_source_language=True
+            )
+
+        self.assertEqual(route, ("direct", "zh", "zh", "source_language_supported"))
+
+    def test_confident_but_unsupported_source_language_skips_with_a_reason(self):
+        """引擎念不了英文时静默并留下理由，而不是悄悄换成目标语言去念。"""
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._tts(td)
+            route = tts._select_tts_text_route(
+                "hello my dear friend", "jp", prefer_source_language=True
+            )
+
+        self.assertEqual(route, ("skip", "en", "jp", "source_language_unsupported"))
+
+    def test_undetectable_text_falls_through_to_the_existing_route(self):
+        """「哼。」这类判不出来源语言的文本，开不开这一档结果都一样。"""
+        with tempfile.TemporaryDirectory() as td:
+            for prefer in (False, True):
+                with self.subTest(prefer_source_language=prefer):
+                    tts = self._tts(td, prefer_model_voice_translation=False)
+                    tts.translation_service = mock.Mock(available=False)
+                    route = tts._select_tts_text_route(
+                        "哼。", "jp", prefer_source_language=prefer
+                    )
+                    self.assertEqual(
+                        route, ("direct", "jp", "jp", "declared_text_ambiguous")
+                    )
+
+    def test_language_gate_lets_the_source_language_route_through(self):
+        """闸门那条早退是这次静默的真凶：不开这一档它照旧拦，开了就得让位给路由。"""
+        from meapet.tts.language_policy import (
+            should_skip_tts_due_to_language_mismatch,
+        )
+
+        text = "主人今天很闲喵？"
+        self.assertTrue(should_skip_tts_due_to_language_mismatch(text, "jp"))
+
+        with tempfile.TemporaryDirectory() as td:
+            # mimo 只为了让 speak 跳过本地权重文件那两道前置检查——闸门与引擎无关。
+            tts = self._tts(td, engine="mimo")
+            with mock.patch.object(tts, "_ensure_deps", return_value=True):
+                with mock.patch.object(
+                    tts, "_prepare_tts_text", return_value=None
+                ) as prepare:
+                    self.assertIsNone(tts.speak(text, "happy"))
+                prepare.assert_not_called()
+
+                with mock.patch.object(
+                    tts, "_prepare_tts_text", return_value=None
+                ) as prepare:
+                    self.assertIsNone(
+                        tts.speak(text, "happy", prefer_source_language=True)
+                    )
+                prepare.assert_called_once()
+                self.assertEqual(
+                    prepare.call_args.kwargs, {"prefer_source_language": True}
+                )
+                self.assertEqual(prepare.call_args.args[0], text)
+
+    def test_async_local_path_hands_the_preference_to_speak(self):
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._tts(td)
+            text = "主人今天很闲喵？"
+
+            with mock.patch.object(tts, "speak", return_value=None) as speak:
+                self.assertIsNone(
+                    asyncio.run(
+                        tts.speak_async(
+                            text, mood="happy", prefer_source_language=True
+                        )
+                    )
+                )
+                self.assertTrue(speak.call_args.kwargs["prefer_source_language"])
+
+            with mock.patch.object(tts, "speak", return_value=None) as speak:
+                self.assertIsNone(asyncio.run(tts.speak_async(text, mood="happy")))
+                speak.assert_not_called()
+
+    def test_the_two_chains_diverge_on_one_config(self):
+        """同一份配置：对话回复翻到 jp，互动念 zh 原文，且后者不碰翻译。"""
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._tts(
+                td,
+                engine="mimo",
+                supported_languages=["zh", "en", "jp"],
+                translate_target_language="jp",
+            )
+            tts.translation_service = mock.Mock(available=True)
+            with mock.patch.object(
+                tts,
+                "_translate_text_async",
+                new=mock.AsyncMock(return_value="こんにちは"),
+            ) as translate:
+                dialogue = asyncio.run(tts._prepare_tts_text_async("你好呀", "zh-CN"))
+                interaction = asyncio.run(
+                    tts._prepare_tts_text_async(
+                        "你好呀", "zh-CN", prefer_source_language=True
+                    )
+                )
+
+            translate.assert_awaited_once_with("你好呀", "zh", "jp")
+
+        self.assertEqual(dialogue, ("こんにちは", "jp"))
+        self.assertEqual(interaction, ("你好呀", "zh"))
+
+    def test_worker_forwards_the_preference_only_when_asked(self):
+        from meapet.desktop.workers import TTSWorker
+
+        class WideTTS:
+            voice_lang = "jp"
+
+            def __init__(self):
+                self.kwargs = []
+
+            async def speak_async(
+                self, text, mood="neutral", style="", language="", **kwargs
+            ):
+                self.kwargs.append(kwargs)
+                return ("/tmp/source.wav", "zh")
+
+        wide = WideTTS()
+        result = asyncio.run(
+            TTSWorker(
+                wide, "床前明月光", mood="happy", prefer_source_language=True
+            )._run()
+        )
+        self.assertEqual(result, "/tmp/source.wav|zh")
+        self.assertEqual(wide.kwargs, [{"prefer_source_language": True}])
+
+        class NarrowTTS:
+            """产品里替 tts 造的那些假对象只声明到 (text, mood)——多一枚关键字就 TypeError。"""
+
+            async def speak_async(self, text, mood="neutral"):
+                return ("/tmp/narrow.wav", "jp")
+
+        result = asyncio.run(TTSWorker(NarrowTTS(), "哼。", mood="happy")._run())
+        self.assertEqual(result, "/tmp/narrow.wav|jp")

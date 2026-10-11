@@ -866,10 +866,13 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self,
         clean: str,
         requested_language: str,
+        *,
+        prefer_source_language: bool = False,
     ) -> Optional[tuple[str, str]]:
         action, source_lang, target_lang, reason = self._select_tts_text_route(
             clean,
             requested_language,
+            prefer_source_language=prefer_source_language,
         )
         log.info(f"[tts] 合成原文 chars={len(clean)}")
         log.trace(lambda value=clean: f"[tts] 合成原文:\n{value}")
@@ -911,6 +914,8 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self,
         clean: str,
         requested_language: str,
+        *,
+        prefer_source_language: bool = False,
     ) -> tuple[str, str, str, str]:
         """返回 action/source/target/reason，不执行网络请求。"""
         claimed = canonical_tts_language(requested_language)
@@ -920,6 +925,18 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         prefer_effective = bool(
             self.prefer_model_voice_translation and translation_available
         )
+
+        if prefer_source_language:
+            # 「念文本自己那门语言」那一档：引擎能直接合成就照念，既不翻译也不静默。
+            # 判据取脚本检测而不是调用方声明——走这一档的是互动链（预制回退句、点击反馈），
+            # 它手上没有模型给的 `voice_language` 可信，声明值只是"配置要哪种语言"。
+            observed = detect_script_language(clean)
+            if observed in supported:
+                return "direct", observed, observed, "source_language_supported"
+            if observed in {"zh", "jp", "en"}:
+                # 是一门确定的语言、但引擎不支持：静默并留下理由，不悄悄换成目标语言去念。
+                return "skip", observed, target, "source_language_unsupported"
+            # unknown（纯符号、单个拟声词等）判不出来源语言，按目标语言照常走。
 
         if prefer_effective:
             if not target or target not in supported:
@@ -975,10 +992,13 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self,
         clean: str,
         requested_language: str,
+        *,
+        prefer_source_language: bool = False,
     ) -> Optional[tuple[str, str]]:
         action, source_lang, target_lang, reason = self._select_tts_text_route(
             clean,
             requested_language,
+            prefer_source_language=prefer_source_language,
         )
         log.info(f"[tts] 合成原文 chars={len(clean)}")
         log.trace(lambda value=clean: f"[tts] 合成原文:\n{value}")
@@ -1044,11 +1064,15 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         mood: str = "neutral",
         style: str = "",
         language: str = "",
+        *,
+        prefer_source_language: bool = False,
     ) -> Optional[tuple[str, str]]:
         """
         文字 → 语音，返回 (wav_path, lang)
         - engine=mimo: 云端 MiMo TTS（中文/英文音色，不强制译日语）
         - 其它本地引擎: 默认仍走日语合成
+        - `prefer_source_language=True`: 文本自己那门语言能直接合成就照念（互动那一链用，
+          理由见 `_select_tts_text_route` 里那一档）
         """
         if not self.enabled:
             return None
@@ -1118,14 +1142,20 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 在 plan_tts_language 之前，先检测 voice_text 是否与目标语言明显不符。
         # 若 should_skip_tts_due_to_language_mismatch 返回 True，则跳过 TTS，
         # 仅显示气泡（原文气泡仍会显示）。
-        if should_skip_tts_due_to_language_mismatch(clean, target_language):
+        # 走「念原文」那一档时这道闸让位给路由：闸门的判据是"文本对不对得上配置的目标语言"，
+        # 而那一档压根不打算念目标语言——不放开它就会把一句能直接念的中文掐成静默。
+        if not prefer_source_language and should_skip_tts_due_to_language_mismatch(
+            clean, target_language
+        ):
             log.info(
                 f"TTS: 语言不匹配，跳过语音（文件触发回复含非目标语言内容）"
                 f" lang={target_language} chars={len(clean)}"
             )
             return None
 
-        prepared = self._prepare_tts_text(clean, target_language)
+        prepared = self._prepare_tts_text(
+            clean, target_language, prefer_source_language=prefer_source_language
+        )
         if prepared is None:
             return None
         tts_text, synthesis_language = prepared
@@ -1188,6 +1218,8 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         mood: str = "neutral",
         style: str = "",
         language: str = "",
+        *,
+        prefer_source_language: bool = False,
     ):
         """async 入口：MiMo 走 httpx；本地 GSV/VITS 仍 to_thread(子进程)。"""
         import asyncio
@@ -1212,7 +1244,10 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
 
         # ── 新增：async 路径也做语言不匹配检查 ──
-        if should_skip_tts_due_to_language_mismatch(clean, target_language):
+        # 「念原文」那一档交给路由判，理由与同步路径那一处相同。
+        if not prefer_source_language and should_skip_tts_due_to_language_mismatch(
+            clean, target_language
+        ):
             log.info(
                 f"TTS: 语言不匹配，跳过语音（async，文件触发回复含非目标语言内容）"
                 f" lang={target_language} chars={len(clean)}"
@@ -1223,6 +1258,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             prepared = await self._prepare_tts_text_async(
                 clean,
                 target_language,
+                prefer_source_language=prefer_source_language,
             )
             if prepared is None:
                 return None
@@ -1247,6 +1283,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             mood,
             style,
             target_language,
+            prefer_source_language=prefer_source_language,
         )
 
 
