@@ -840,3 +840,133 @@ class TestPreferSourceLanguage(unittest.TestCase):
 
         result = asyncio.run(TTSWorker(NarrowTTS(), "哼。", mood="happy")._run())
         self.assertEqual(result, "/tmp/narrow.wav|jp")
+
+
+class TestVitsLanguageChecksBypassed(unittest.TestCase):
+    """VITS 那一路**不做**语言校验（人工 2026-10-12T00:36:57 裁决「去除校验」）。
+
+    他那份 config 的形状是 engine=vits + voice_lang=jp +
+    `translate_target_language=zh` + `prefer_model_voice_translation=true`，
+    实测六格（三本文 × 两链）全被 skip ⇒ 桌宠每句不出声。推理前端对任何文本都套
+    ``[JA]…[JA]``（engines/vits.py:152、:226），所以这一路要的是"照念"，
+    念出来可懂与否由耳朵裁（提案件 §待测第一条），不是在这里换成静默的理由。
+    """
+
+    @staticmethod
+    def _vits_tts(td, **overrides):
+        from meapet.tts.service import MeaTTS
+
+        root = Path(td)
+        model = root / "G_latest.pth"
+        model.write_bytes(b"fake-vits-weights-not-an-lfs-pointer")
+        config = root / "finetune_speaker.json"
+        config.write_text("{}", encoding="utf-8")
+        tts_cfg = {
+            "enabled": True,
+            "engine": "vits",
+            "api_key": "test-key-not-real",
+            "voice_lang": "jp",
+            "translate_target_language": "zh",
+            "translate_to_jp": False,
+            "prefer_model_voice_translation": True,
+            "output_dir": td,
+            "ref_dir": td,
+            "vits_model": str(model),
+            "vits_config": str(config),
+        }
+        tts_cfg.update(overrides)
+        return MeaTTS({"tts": tts_cfg})
+
+    def test_three_gates_all_yield_on_the_same_config(self):
+        """来源语言档、目标语言档、_language_plan 那档一起让位——早退只有一条真相。"""
+        texts = (
+            "床前明月光，疑是地上霜。",  # 脚本判 unknown（纯汉字无假名）
+            "今天的风好大，我想吃点热的。",  # 脚本判 zh —— 他贴那条命中的就是它
+            "今日はいい天気ですね。",  # 脚本判 jp
+        )
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._vits_tts(td)
+            self.assertEqual(tts.supported_languages(), ("jp",))
+            for text in texts:
+                for prefer in (False, True):
+                    with self.subTest(text=text[:4], prefer=prefer):
+                        self.assertEqual(
+                            tts._select_tts_text_route(
+                                text, "jp", prefer_source_language=prefer
+                            ),
+                            ("direct", "jp", "jp", "language_checks_bypassed"),
+                        )
+
+    def test_no_translation_is_bought_in_on_the_way(self):
+        """裁决里"不机翻"那一半：原文直接交给引擎，翻译一次都不叫。"""
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._vits_tts(td)
+            tts.translation_service = mock.Mock(available=True)
+            with mock.patch.object(tts, "_translate_text") as translate:
+                prepared = tts._prepare_tts_text("今天的风好大，喵。", "jp")
+            translate.assert_not_called()
+        self.assertEqual(prepared, ("今天的风好大，喵。", "jp"))
+
+    def test_speak_hands_the_raw_text_to_the_engine(self):
+        """外层那道 `should_skip_tts_due_to_language_mismatch` 也得让位，否则中文在
+        voice_lang=jp 下仍被掐成静默，而且是一条与路由 reason 不同名的静默。"""
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._vits_tts(td)
+            with mock.patch.object(tts, "_ensure_deps", return_value=True):
+                with mock.patch.object(
+                    tts, "_speak_vits", return_value=("/tmp/vits.wav", "jp")
+                ) as speak_vits:
+                    result = tts.speak("今天的风好大，喵。", "happy")
+        self.assertEqual(result, ("/tmp/vits.wav", "jp"))
+        self.assertEqual(speak_vits.call_args.args[0], "今天的风好大，喵。")
+
+    def test_async_entry_reaches_the_engine_too(self):
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._vits_tts(td)
+            with mock.patch.object(tts, "speak", return_value=None) as speak:
+                self.assertIsNone(
+                    asyncio.run(tts.speak_async("今天的风好大，喵。", mood="happy"))
+                )
+        self.assertEqual(speak.call_args.args[0], "今天的风好大，喵。")
+
+    def test_the_other_two_engines_keep_their_checks(self):
+        """作用域只在 VITS：GSV 的 supported 是从参考音频/配置推的真集合，闸留着。"""
+        with tempfile.TemporaryDirectory() as td:
+            vits = self._vits_tts(td)
+            self.assertTrue(vits._language_checks_bypassed())
+
+            gsv = TestPreferSourceLanguage._tts(td, supported_languages=["jp"])
+            self.assertFalse(gsv._language_checks_bypassed())
+            self.assertEqual(
+                gsv._select_tts_text_route(
+                    "hello my dear friend", "jp", prefer_source_language=True
+                ),
+                ("skip", "en", "jp", "source_language_unsupported"),
+            )
+
+            mimo = TestPreferSourceLanguage._tts(td, engine="mimo")
+            self.assertFalse(mimo._language_checks_bypassed())
+
+    def test_vits_mode_flag_takes_the_same_branch(self):
+        """`vits_mode: true` 与 `engine: vits` 在 :389 是同一个判据，别两处两答。"""
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._vits_tts(td, engine="gpt_sovits", vits_mode=True)
+            self.assertTrue(tts._language_checks_bypassed())
+            self.assertEqual(
+                tts._select_tts_text_route("hello my dear friend", "jp"),
+                ("direct", "jp", "jp", "language_checks_bypassed"),
+            )
+
+    def test_the_scope_follows_the_engine_that_actually_speaks(self):
+        """`vits_mode` 与 `engine: mimo` 同给时两个 mode 位都真，但 MiMo 那一支在
+        speak 里排在 VITS 前面（:1193 早于 :1223）——所以去校验只跟着**真正出声**的
+        引擎走，不跟着标志走，否则这条遗留组合会把 MiMo 的语言核对一并摘掉。"""
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._vits_tts(td, engine="mimo", vits_mode=True)
+            self.assertTrue(tts._vits_mode)
+            self.assertTrue(tts._mimo_mode)
+            self.assertFalse(tts._language_checks_bypassed())
+            self.assertNotEqual(
+                tts._select_tts_text_route("hello my dear friend", "jp")[0],
+                "direct",
+            )

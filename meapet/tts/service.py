@@ -910,6 +910,19 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
         return translated, target_lang
 
+    def _language_checks_bypassed(self) -> bool:
+        """VITS 那一路不做语言校验（人工 2026-10-12 裁决「去除校验」）。
+
+        这条路上 ``supported_languages()`` 是硬编码的 ``('jp',)``（本文件
+        :753-754），而推理前端对**任何**文本都套 ``[JA]…[JA]``
+        （engines/vits.py:152、:226）——引擎没有"会不会说这门语言"这一档，
+        照念。校验留着只会把每一句掐成静默；念出来可懂与否交给耳朵。
+        GSV/MiMo 不动：那两路的 supported 是从参考音频推的真集合。`vits_mode` 是遗留
+        开关，与 `engine: mimo` 同给时两个 mode 位都真，但 speak 里 MiMo 那一支在前
+        （:1193 早于 :1223）——所以作用域跟着**真正出声的那个引擎**走，不跟标志走。
+        """
+        return bool(self._vits_mode and not self._mimo_mode)
+
     def _select_tts_text_route(
         self,
         clean: str,
@@ -919,6 +932,10 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
     ) -> tuple[str, str, str, str]:
         """返回 action/source/target/reason，不执行网络请求。"""
         claimed = canonical_tts_language(requested_language)
+        if self._language_checks_bypassed():
+            # 早退在这一处而不是每个分支里，是为了只有一条真相：三道闸
+            # （来源语言档、目标语言档、_language_plan 那档）对 VITS 一起让位。
+            return "direct", claimed or "jp", "jp", "language_checks_bypassed"
         supported = self.supported_languages()
         target = self._configured_or_default_target()
         translation_available = self._translation_available()
@@ -1144,8 +1161,12 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 仅显示气泡（原文气泡仍会显示）。
         # 走「念原文」那一档时这道闸让位给路由：闸门的判据是"文本对不对得上配置的目标语言"，
         # 而那一档压根不打算念目标语言——不放开它就会把一句能直接念的中文掐成静默。
-        if not prefer_source_language and should_skip_tts_due_to_language_mismatch(
-            clean, target_language
+        # VITS 那一档整条不做校验（见 _language_checks_bypassed），否则中文在
+        # voice_lang=jp 下仍会在这里被掐掉，而且是一条与路由 reason 不同名的静默。
+        if (
+            not prefer_source_language
+            and not self._language_checks_bypassed()
+            and should_skip_tts_due_to_language_mismatch(clean, target_language)
         ):
             log.info(
                 f"TTS: 语言不匹配，跳过语音（文件触发回复含非目标语言内容）"
@@ -1244,9 +1265,11 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
 
         # ── 新增：async 路径也做语言不匹配检查 ──
-        # 「念原文」那一档交给路由判，理由与同步路径那一处相同。
-        if not prefer_source_language and should_skip_tts_due_to_language_mismatch(
-            clean, target_language
+        # 「念原文」那一档交给路由判，理由与同步路径那一处相同；VITS 整条不校验。
+        if (
+            not prefer_source_language
+            and not self._language_checks_bypassed()
+            and should_skip_tts_due_to_language_mismatch(clean, target_language)
         ):
             log.info(
                 f"TTS: 语言不匹配，跳过语音（async，文件触发回复含非目标语言内容）"
