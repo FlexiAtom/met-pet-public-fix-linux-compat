@@ -111,7 +111,7 @@ pyinstaller MeaPet.spec
 
 - **VITS**：在应用进程内运行（应用内包含 torch 和 `vits_core`）。模型存在时不需要外部 Python。
 - **MiMo**：云端 TTS（需要 API Key）。
-- **GPT-SoVITS**：仍需要独立 GPT-SoVITS 运行环境中的 `python.exe`；不要将路径指向 `MeaPet.exe`。
+- **GPT-SoVITS**：仍需要独立 GPT-SoVITS 运行环境里的解释器（Windows 是 `python.exe`，Linux 是 `bin/python`）；不要把路径指向打包版自己的可执行文件。
 
 不要发布包含 API Key 的开发者 `config.json`。打包时只应将 `config.example.json` 作为模板。不要提交 `dist/` 或 `build/`。
 
@@ -202,6 +202,81 @@ GPT-SoVITS 的项目根一般不用填：程序从 `tts.python_exe` 所在目录
 
 语音翻译使用 MeaPet 内置的非 LLM 机器翻译服务池。单个分段失败时会轮换服务，总尝试次数最多为 3 次。启用“优先使用模型语音翻译”后，模型返回的 `voice_language` 和 `voice_text` 会与配置的目标语言核对；若不一致，则翻译到目标语言。单独的“不支持时翻译”开关控制输出语言不受支持时的回退策略。翻译最终失败时会跳过该语音分段，但保留文本气泡。
 
+## Linux 手动配置本地语音
+
+Linux 没有官方 GPT-SoVITS 整合包（上游给 Linux 的那条路是 conda + `requirements.txt`，全程不创建 `runtime/` 目录），向导在 Linux 上也就没有“帮你建环境”的按钮。两个本地引擎都能用，只是环境和权重得自己动手。
+
+程序找 GPT-SoVITS 解释器的顺序只有三级：**配置那一格 → 环境变量 `MEA_PET_GSV_PYTHON` → 候选表自动检测**。候选表覆盖 `CONDA_PREFIX`/`VIRTUAL_ENV`、家目录下的 `GPT-SoVITS*`（含解压多带一层日期目录那档）、`~/miniconda3` 与 `~/anaconda3` 里的 `envs/GPTSoVits`、`envs/gpt-sovits`；源码运行时最后才回落到跑桌宠的那个解释器。三条都没命中才算“未配置”。
+
+### GPT-SoVITS
+
+以 v2Pro 源码树 + 一个自建 CPU 环境为例（`runtime/` 只是名字，程序按标记认根，不看你叫它什么）：
+
+```bash
+# 1) 源码树：整合包解压后的目录，或 git clone https://github.com/RVC-Boss/GPT-SoVITS
+#    下面假定落在 ~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604
+# 2) 建环境并装依赖（CPU 版 torch 就够；用 conda 的人把 venv 换成 conda env 即可）
+python3.10 -m venv ~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime
+PY=~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime/bin/python
+$PY -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+$PY -m pip install -r ~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/requirements.txt
+$PY -m pip install matplotlib   # 上游 requirements.txt 缺这一个（AR/modules/lr_schedulers.py 顶层 import）
+```
+
+`onnxruntime-gpu` 会连带拉数 GB 的 nvidia-* 轮子，纯 CPU 机器可以先把那一行改成 `onnxruntime`，funasr / gradio / tensorboard / modelscope 这几包推理用不到，跳过装得更快。上游另一份 `extra-req.txt` 里只有 `faster-whisper`，那是 ASR（从音频里自动提参考）用的，朗读不需要。
+
+然后把环境指给程序，任选一种：
+
+```json
+{
+  "tts": {
+    "engine": "gpt_sovits",
+    "enabled": true,
+    "python_exe": "/home/you/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime/bin/python"
+  }
+}
+```
+
+- 向导里那一格填**文件夹**或**解释器**都行：填 `.../GPT-SoVITS-v2pro-20250604` 时程序自己在里面找 `runtime/bin/python`，直接填解释器路径也照收。
+- 环境建在源码树**之外**（conda env 那种）时，光有解释器反推不到根，须再写 `tts.gsv_root`，见上面「多语言语音」。
+- 权重随仓库是 Git LFS pointer，程序不会自动拉取。`models/GPT_weights/*.ckpt` 与 `models/SoVITS_weights/*.pth` 要 `git lfs pull`，或手动放置真身，或用 `tts.gpt_weights_dir` / `tts.sovits_weights_dir` 指到别处。
+- 参考音频目录是 `tts.ref_dir`（仓库里那份 `GPT-Sovits/` 装的是 wav+txt 样本，**不是** GPT-SoVITS 源码树，只是名字撞车）。多语言固定参考见「多语言语音」。
+
+### VITS
+
+VITS 只需要一个装了 PyTorch 的解释器，CPU 版即可（本机实测 Python 3.10 + `torch 2.5.1+cpu` 端到端出声）。
+
+```bash
+python3.10 -m venv ~/vits_env
+~/vits_env/bin/pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+~/vits_env/bin/pip install -r vits_requirements.txt   # 已含 torch，重复装不会换轮子
+```
+
+权重同样不自动下载：`vits_models/G_latest.pth` 在仓库里是 LFS pointer，`git lfs pull` 或手动放真身；`vits_models/finetune_speaker.json` 是普通文件，随包已有。
+
+```json
+{
+  "tts": {
+    "engine": "vits",
+    "enabled": true,
+    "vits_python": "/home/you/vits_env/bin/python",
+    "vits_model": "/home/you/vits_weights/G_latest.pth",
+    "vits_config": "/home/you/work/met-pet/vits_models/finetune_speaker.json",
+    "vits_speaker": "Mea"
+  }
+}
+```
+
+- `vits_python` 留空时，源码运行会用跑桌宠的那个解释器起子进程——那条要求桌宠自己的环境里也有 torch。指定 `vits_python` 是最省事的一档。
+- `vits_model` / `vits_config` 留空即走随包路径 `vits_models/`；填了就以配置原样为准——既不做 `~` 展开，也不会相对项目根重写，所以请写绝对路径。随包那格在仓库里是 LFS pointer，`git lfs pull` 之前它不是模型。
+- `vits_speaker` 必须出现在 `vits_config` 的说话人表里，默认 `Mea`。
+
+### 配完怎么确认
+
+- 无头取证：`python -m meapet --doctor`，看 `tts.gpt_sovits` 与 `tts.vits` 两行的“前置=齐/不齐”，事实串里点名缺哪一格（解释器、依赖、权重是不是还是 pointer）。想连真合成延迟一起量再加 `--speech-latency`（这会起推理子进程、落 wav，不播放）。
+- 在 GUI 里：右键菜单 ▸ 设置与数据 ▸ 开发者选项 ▸「朗读测试（GPT-SoVITS）」/「朗读测试（VITS）」，两引擎各一条，失败会把判据写出来。
+- 语音页打开即给读数：绿灯后面写着那条路是**从哪来的**（选的文件夹 / 填的解释器 / 环境变量 / 自动检测），你填的那条如果被丢掉也会一并说出来。
+
 ## 屏幕视觉
 
 视觉链路可在向导中配置为三种模式：
@@ -290,7 +365,7 @@ http(s)://<listen_host>:<port>/mcp
 | `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway Token |
 | `AGENT_LINK_TOKEN` / `MEAPET_AGENT_TOKEN` | 自定义 Agent Link Token |
 | `MEAPET_CONTROL_TOKEN` | Companion MCP Bearer Token |
-| `MEA_PET_GSV_PYTHON` | GPT-SoVITS 环境中的 `python.exe` |
+| `MEA_PET_GSV_PYTHON` | GPT-SoVITS 环境的解释器（Windows `python.exe` / Linux `bin/python`） |
 | `MEAPET_PIP_INDEX_URL` / `PIP_INDEX_URL` | Python 包索引覆盖；默认使用清华 TUNA |
 | `MEAPET_TORCH_INDEX_URL` / `TORCH_INDEX_URL` | 可选的 PyTorch wheel 索引覆盖 |
 | `MEAPET_HF_ENDPOINT` / `HF_ENDPOINT` | 可选的 Hugging Face 端点覆盖 |
