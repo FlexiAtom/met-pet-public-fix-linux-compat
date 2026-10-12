@@ -19,7 +19,7 @@ MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screen
 | Agent | Hermes TUI Gateway, OpenClaw Gateway v4, or custom Agent Link v1 over WebSocket |
 | Display | Streaming text bubble without TTS; waits for audio then shows bubble + plays in sync |
 | Multi-segment replies | Each segment has its own bubble, mood, voice text, language, and TTS style |
-| Speech | MiMo cloud TTS, local GPT-SoVITS, local VITS; GPT-SoVITS supports per-language reference audio |
+| Speech | MiMo cloud TTS, local GPT-SoVITS, local VITS; GPT-SoVITS supports per-language reference audio. Content guarantee (see [Multi-language Speech](#multi-language-speech)): **only VITS × zh is confirmed intelligible by human listening; every other combination only guarantees that audio comes out** |
 | Vision | Disabled, inherit main model, or relay via independent vision model |
 | Reverse control | Shared frontend tools over Companion MCP or the same Agent Link connection |
 | Local data | SQLite memory, affection, per-backend/per-session conversation timeline |
@@ -159,6 +159,28 @@ Rendering rules:
 Both direct and Agent modes share the same presentation layer, so switching backends does not change bubble or TTS timing.
 
 ## Multi-language Speech
+
+### What is actually intelligible
+
+A human-ear pass over every engine × language combination on 2026-10-13 fixed this guarantee:
+**only VITS × zh is guaranteed to be correct; everything else is guaranteed to make sound.**
+Every row below the first only promises that audio is produced and played — not that what it says
+is correct, complete, or intelligible.
+
+| Engine × language | Guarantee |
+|------|------|
+| VITS × zh | **Correct** (confirmed by human listening) |
+| VITS × ja / en | Sound only. ja is unconfirmed ("sounds like Japanese" is not evidence of intelligibility); en measurably breaks down |
+| GPT-SoVITS × zh / ja | Sound only. zh is unreadable in practice (half sentences, repetition); ja has no judge at all — the person doing the listening does not read Japanese, so verification stops at "it made sound" |
+| GPT-SoVITS × en | Not even sound: currently produces no audio, missing NLTK `averaged_perceptron_tagger_eng` |
+| MiMo cloud TTS | No content verification was done this round; no guarantee claimed here |
+
+This does not change how the configuration keys below work, and it does not contradict the health
+checks: `python -m meapet --doctor` and the green light on the speech page report whether the
+**preconditions are met** (interpreter, dependencies, weights, reference audio) — never whether the
+words came out right. Machine proxies here (this repo ships a zh/en-only ASR) can tell "collapsed"
+or "repeating", but cannot tell "it read the wrong sentence". Only an ear settles content, and so
+far only the first row above has one.
 
 GPT-SoVITS can be configured with a fixed reference audio per language in `tts.reference_audios`. Each entry must specify the language; paths can be project-relative or absolute. Reference text can be left empty:
 
