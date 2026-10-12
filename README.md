@@ -22,6 +22,7 @@ MeaPet 有清晰的职责边界：角色呈现、聊天气泡、TTS、截图授�
 | 语音 | 支持 MiMo 云端 TTS、本地 GPT-SoVITS、本地 VITS；GPT-SoVITS 支持按语言配置参考音频。内容保证口径见[多语言语音](#多语言语音)：**仅 VITS × zh 经人耳确认可用，其余组合只保证出声** |
 | 视觉 | 可禁用、继承主模型，或通过独立视觉模型中继 |
 | 反向控制 | 通过 Companion MCP 或同一 Agent Link 连接共享前端工具 |
+| QQ 通道 | OneBot v11：发起端（反向 WebSocket / HTTP API）或接收端（正向 WebSocket / 事件 HTTP POST），可对接 NapCat 与 SnowLuma；另有 hub 端点供下游消费者（如自带的 `dsh-onebot-relay` 插件）接入 |
 | 本地数据 | SQLite 记忆、好感度，以及按后端和会话隔离的对话时间线 |
 | 渲染 | Live2D 动态模型与 PNG 差分立绘，可在运行时切换 |
 
@@ -336,6 +337,25 @@ http(s)://<listen_host>:<port>/mcp
 - 服务还会验证来源 IP、Host、Origin、请求大小和速率。
 
 自定义 Agent Link 不会启动第二个监听器。它会在现有 WebSocket 上投影相同的能力注册表，使聊天、主动消息和工具调用保持在同一个连接中。
+
+## QQ 通道（OneBot v11）
+
+MeaPet 也可以是一个 QQ 机器人：它双向实现 OneBot v11，因此无论 NapCat 还是 SnowLuma，正反两个方向都能对接：
+
+- **发起端** —— `forward_ws`（主动连对端的 WebSocket 服务端）与 `http_api`（调用对端 HTTP API 发送）。
+- **接收端** —— `reverse_ws`（监听，等对端连进来）与 `http_post`（接收事件上报）。
+- **下游端点（hub）** —— 下游消费者以 OneBot 客户端身份接入：既能收到 QQ 事件，也能发送回复。
+  自带的 `dsh-onebot-relay` dsh 插件就是通过它把 QQ 会话接到 dsh agent。
+
+`onebot.reply_mode` 决定由谁回答：`pet`（桌宠自己的回复后端）、`hub`（只给下游消费者，例如 dsh）或 `both`。
+群聊默认需要 @ 机器人，并支持按用户 / 按群的准入白名单。
+
+来自 QQ 的文本不会被回显到桌宠气泡里——气泡是角色台词，只显示桌宠自己的回复。轮次串行处理，两侧都带超时，
+所以一次丢回复不会把队列卡死。
+
+完整契约、配置项、端点表、NapCat/SnowLuma 接线、安全说明与 dsh 插件安装步骤见
+[`docs/onebot.md`](docs/onebot.md)；架构（组件图、线程模型、路由、失败模式、扩展点、部署与回滚 runbook）见
+[`docs/onebot-architecture.md`](docs/onebot-architecture.md)。
 
 ## 配置
 

@@ -862,6 +862,13 @@ def _normalize_agent_control(value: object) -> dict:
     return control
 
 
+def _normalize_onebot(value: object) -> dict:
+    """规范化 OneBot 段；schema 与默认值由 ``meapet.onebot.config`` 提供。"""
+    from meapet.onebot.config import normalize_onebot_config
+
+    return normalize_onebot_config(value)
+
+
 def _clamp_ratio(value: object, default: float, lo: float, hi: float) -> float:
     try:
         number = float(value)
@@ -1016,6 +1023,7 @@ def normalize_config(config: dict) -> dict:
     )
     cfg["live2d"] = live2d
     cfg["agent_control"] = _normalize_agent_control(cfg.get("agent_control"))
+    cfg["onebot"] = _normalize_onebot(cfg.get("onebot"))
 
     # bubble
     bub = cfg.get("bubble_duration_ms") if isinstance(cfg.get("bubble_duration_ms"), dict) else {}
@@ -1308,6 +1316,15 @@ def scrub_secrets(config: dict) -> dict:
         crawler = click_feedback.get("crawler")
         if isinstance(crawler, dict):
             crawler["api_key"] = ""
+    if "onebot" in out and isinstance(out["onebot"], dict):
+        onebot = out["onebot"]
+        for section in ("forward_ws", "reverse_ws", "http_api", "http_post", "hub"):
+            block = onebot.get(section)
+            if not isinstance(block, dict):
+                continue
+            for key in ("access_token", "push_token"):
+                if key in block:
+                    block[key] = ""
     return out
 
 

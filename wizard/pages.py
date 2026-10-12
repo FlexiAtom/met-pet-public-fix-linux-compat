@@ -5,6 +5,7 @@ from wizard.page_backend import BackendPage
 from wizard.page_tts import TTSPage
 from wizard.page_vision import VisionPage
 from wizard.page_voice_input import VoiceInputPage
+from wizard.page_onebot import OneBotPage
 
 __all__ = [
     "EnvCheckPage",
@@ -13,4 +14,5 @@ __all__ = [
     "TTSPage",
     "VisionPage",
     "VoiceInputPage",
+    "OneBotPage",
 ]

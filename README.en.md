@@ -22,6 +22,7 @@ MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screen
 | Speech | MiMo cloud TTS, local GPT-SoVITS, local VITS; GPT-SoVITS supports per-language reference audio. Content guarantee (see [Multi-language Speech](#multi-language-speech)): **only VITS × zh is confirmed intelligible by human listening; every other combination only guarantees that audio comes out** |
 | Vision | Disabled, inherit main model, or relay via independent vision model |
 | Reverse control | Shared frontend tools over Companion MCP or the same Agent Link connection |
+| QQ channel | OneBot v11 — initiator (forward WebSocket / HTTP API) or receiver (reverse WebSocket / event POST), works with NapCat and SnowLuma, plus a hub endpoint for downstream consumers such as the bundled `dsh-onebot-relay` plugin |
 | Local data | SQLite memory, affection, per-backend/per-session conversation timeline |
 | Rendering | Live2D dynamic model and PNG diff sprites, switchable at runtime |
 
@@ -256,6 +257,31 @@ Security constraints:
 - The service also validates source IP, Host, Origin, request size, and rate.
 
 Custom Agent Link does not start this second listener. It projects the same capability registry over the existing WebSocket, so chat, proactive messages, and tool calls remain on one connection.
+
+## QQ Channel (OneBot v11)
+
+MeaPet can also be a QQ bot. It implements OneBot v11 in both directions, so it plugs into NapCat or
+SnowLuma either way round:
+
+- **Initiator** — `forward_ws` (connect out to the peer's WebSocket server) and `http_api` (call the
+  peer's HTTP API to send).
+- **Receiver** — `reverse_ws` (listen, let the peer connect in) and `http_post` (accept event POSTs).
+- **Hub** — an endpoint downstream consumers attach to as OneBot clients: they receive QQ events and
+  can send replies. This is how the bundled `dsh-onebot-relay` dsh plugin drives dsh agent sessions
+  from QQ.
+
+`onebot.reply_mode` decides who answers: `pet` (the desktop pet's own backend), `hub` (only the
+downstream consumer, e.g. dsh), or `both`. Group chats require an `@` by default, and per-user /
+per-group allowlists are available.
+
+Inbound QQ text is never echoed into the pet's bubble — bubbles are character speech, so only the
+pet's own reply appears there. Turns are serialized (one at a time) with a timeout on both sides,
+so a lost reply cannot wedge the queue.
+
+Full contract, config reference, endpoint table, NapCat/SnowLuma wiring, security notes, and the dsh
+plugin install steps: [`docs/onebot.md`](docs/onebot.md).
+Overall architecture (component map, threading model, routing, failure modes, extension points,
+deployment/rollback runbook): [`docs/onebot-architecture.md`](docs/onebot-architecture.md).
 
 ## Configuration
 

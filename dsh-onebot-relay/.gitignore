@@ -1,0 +1,14 @@
+# 本地开发产物——**不要**提交，也**不会**进 tgz（scripts/package-release.mjs 显式跳过）
+node_modules/
+
+# 打包输出
+dist/
+*.tgz
+
+# 单测用的临时目录（test/state.test.mjs 会在这里写 state 文件）
+test/.tmp/
+
+# 编辑器 / 系统噪音
+.DS_Store
+Thumbs.db
+*.log

@@ -277,6 +277,49 @@ def menu_section_system() -> str:
     return "系统"
 
 
+# --- OneBot / QQ 通道 ----------------------------------------------------- #
+
+
+def menu_section_onebot() -> str:
+    return "QQ 通道（OneBot）"
+
+
+def menu_onebot_status_prefix() -> str:
+    return "连接状态："
+
+
+def menu_onebot_disabled() -> str:
+    return "OneBot 未启用（在配置页开启）"
+
+
+def onebot_connecting() -> str:
+    return "正在连接 QQ 通道…"
+
+
+def onebot_connected(name: str = "") -> str:
+    suffix = f"（{name}）" if name else ""
+    return f"QQ 通道已就绪{suffix}"
+
+
+def onebot_disconnected(reason: str = "") -> str:
+    suffix = f"：{reason}" if reason else ""
+    return f"QQ 通道未连接{suffix}"
+
+
+def onebot_busy(queue_size: int = 0) -> str:
+    if queue_size > 0:
+        return f"QQ 消息排队中（{queue_size} 条）…"
+    return "QQ 来消息了，正在想…"
+
+
+def onebot_reply_failed() -> str:
+    return "回发 QQ 失败，检查 OneBot 连接与权限喵"
+
+
+def menu_onebot_reload() -> str:
+    return "重连 QQ 通道"
+
+
 def menu_voice_input_enable() -> str:
     return "开启语音输入"
 

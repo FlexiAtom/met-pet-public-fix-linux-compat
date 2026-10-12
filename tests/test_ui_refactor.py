@@ -420,7 +420,7 @@ class UiRefactorTests(unittest.TestCase):
         self.assertIsInstance(wizard.tabs.list, QListWidget)
         self.assertEqual(
             [wizard.tabs.tabText(index) for index in range(wizard.tabs.count())],
-            ["环境", "Live2D", "对话", "语音", "屏幕识图", "语音输入"],
+            ["环境", "Live2D", "对话", "语音", "屏幕识图", "语音输入", "OneBot"],
         )
         live2d_scroll = wizard.tabs.widget(wizard.TAB_LIVE2D)
         self.assertIs(
