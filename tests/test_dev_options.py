@@ -33,6 +33,10 @@ from meapet.desktop.dev_options import (  # noqa: E402
     dev_unlock_hint,
     version_label_text,
 )
+from meapet.tts.diagnostics import (  # noqa: E402
+    SPEECH_TEST_LANGUAGES,
+    SPEECH_TEST_SENTENCES,
+)
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
@@ -212,24 +216,75 @@ class FakeTTS:
 
 
 class SpeechTestTests(unittest.TestCase):
-    def test_the_two_buttons_fork_to_the_two_engines(self) -> None:
-        """人工 2026-10-08：朗读测试按引擎拆两个键——共用一键就只测到配置选中的那一路。"""
+    def test_the_two_speech_entries_are_per_engine_with_three_languages(self) -> None:
+        """人工 2026-10-08 按引擎拆两键，2026-10-12 每键再按语言开三档。
+
+        顶层那两个 action 现在只带子菜单，trigger 它不会走到合成——所以断言分两层：
+        形状（引擎 × 语言）与接线（点某一档就把活交给那一个引擎）。
+        """
         host = DevHost()
         host.tts = FakeTTS()
         menu = host._dev_build_menu()
         labels = [action.text() for action in menu.actions()]
-        speech_actions = [
-            action for action in menu.actions() if action.text().startswith("朗读测试")
-        ]
         self.assertEqual(
             labels[1:3],
             ["朗读测试（GPT-SoVITS）", "朗读测试（VITS）"],
-            f"两个朗读测试键该按这个顺序排在第 2、3 位，实际菜单是 {labels}",
+            f"两条朗读测试该按这个顺序排在第 2、3 位，实际菜单是 {labels}",
         )
-        self.assertEqual(len(speech_actions), 2)
-        for action in speech_actions:
-            action.trigger()
-        self.assertEqual(host.speech_forks, ["gpt_sovits", "vits"])
+        for speech_action, engine in zip(menu.actions()[1:3], ("gpt_sovits", "vits")):
+            submenu = speech_action.menu()
+            self.assertEqual(submenu.objectName(), f"DevSpeechTestMenu::{engine}")
+            self.assertEqual(
+                [item.text() for item in submenu.actions()],
+                [text for text, _code in SPEECH_TEST_LANGUAGES],
+                "档位与顺序只认 `SPEECH_TEST_LANGUAGES`，不在菜单侧另立一份",
+            )
+        host.speech_forks.clear()
+        menu.actions()[1].menu().actions()[0].trigger()
+        menu.actions()[2].menu().actions()[2].trigger()
+        self.assertEqual(
+            host.speech_forks,
+            ["gpt_sovits", "vits"],
+            "子菜单里点下去的那一档，得交给它所属的那个引擎",
+        )
+
+    def test_every_language_tier_hands_over_that_languages_sentence(self) -> None:
+        """中文/英文两档此前**没有入口**：取句跟着配置 `tts.voice_lang` 走（他这台是 jp）。
+
+        人工 2026-10-12T15:34:53「需要在开发者选项加中文和英文的合成（GSV和VITS都需要，
+        目前都是日语）」——两引擎 × 三档，逐格钉"点哪档念哪门语言"。
+        """
+        for engine in ("gpt_sovits", "vits"):
+            for _label, code in SPEECH_TEST_LANGUAGES:
+                with self.subTest(engine=engine, code=code):
+                    host = DevHost()
+                    host.tts = FakeTTS(voice_lang="jp")
+                    host._dev_speech_test(engine, code)
+                    self.assertEqual(
+                        host.spoken[0][0],
+                        SPEECH_TEST_SENTENCES[code],
+                        f"{engine} 点 {code} 那档，交给链路的该是那门语言的句子",
+                    )
+                    self.assertIs(host.spoken[0][3], host.tts)
+
+    def test_the_bubble_says_which_language_it_is_about_to_speak(self) -> None:
+        """他要确认的是"中文这档真念中文"，所以气泡里得有语言，不能只有引擎名。"""
+        host = DevHost()
+        host.tts = FakeTTS()
+        host._dev_speech_test("vits", "en")
+        self.assertIn("英文", " ".join(host.bubbles))
+
+    def test_no_language_still_follows_the_configured_voice_lang(self) -> None:
+        """不传语言 = 改前那格：回落到 `speak()` 自己算出的目标语言，行为逐字不变。"""
+        host = DevHost()
+        host.tts = FakeTTS(voice_lang="jp")
+        host._dev_speech_test("gpt_sovits")
+        self.assertEqual(host.spoken[0][0], SPEECH_TEST_SENTENCES["jp"])
+
+        other = DevHost()
+        other.tts = FakeTTS(voice_lang="zh")
+        other._dev_speech_test("vits")
+        self.assertEqual(other.spoken[0][0], SPEECH_TEST_SENTENCES["zh"])
 
     def test_it_reuses_the_real_speak_chain(self) -> None:
         host = DevHost()

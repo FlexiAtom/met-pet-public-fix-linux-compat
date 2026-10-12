@@ -8,6 +8,8 @@
 
 五项里的「朗读测试」在人工 2026-10-08 的要求下按引擎拆成两个键（GSV / VITS 各自一条
 前置与选路，共用一个键就只能测到配置当前选中的那一个），菜单因此是六条。
+每个键下面再按语言分三档（人工 2026-10-12 要求加中文与英文：两档此前没有入口，
+取句跟着配置 `tts.voice_lang` 走，想换语言得先改产品配置）。
 """
 from __future__ import annotations
 
@@ -25,8 +27,10 @@ from PyQt5.QtWidgets import QAction, QMenu
 from meapet import __version__
 from meapet.log import get_color_logger
 from meapet.tts.diagnostics import (
+    SPEECH_TEST_LANGUAGES,
     SPEECH_WAIT_NOTES,
     speech_facts,
+    speech_test_language_label,
     speech_test_sentence,
     tts_for_engine,
 )
@@ -43,6 +47,7 @@ DEV_UNLOCKED_HINT = "开发者选项已解锁（本次运行有效）"
 # 日志导出里除了 LOG_DIR，还想要这几个（同属数据目录，散在旁边）
 DATA_LOG_FILES = ("chat_errors.log", "meapet_boot.log", "meapet_fault.log")
 #: 解锁后「设置与数据」里那一支的六项，顺序即菜单顺序（测试按它断言）。
+#: 第 2、3 项现在是**子菜单标题**：`menu.actions()` 里它们是 menuAction，文本照旧，断言不用改。
 DEV_MENU_LABELS = (
     f"语音输入测试（录 {DEV_VOICE_SECONDS} 秒）",
     "朗读测试（GPT-SoVITS）",
@@ -111,17 +116,35 @@ class PetDevOptionsMixin:
                 self._dev_voice_input_test,
                 # 两个引擎各一条：共用一个键就只测到配置当前选中的那一路，另一路的
                 # 前置坏在哪一格永远看不见（人工 2026-10-08 点定拆成两个键）。
-                lambda: self._dev_speech_test("gpt_sovits"),
-                lambda: self._dev_speech_test("vits"),
+                # 每条再按语言开三档（人工 2026-10-12T15:34:53「加中文和英文的合成，
+                # GSV和VITS都需要，目前都是日语」）：以前那一档跟着配置 `tts.voice_lang`
+                # 取句，想听中文得先把配置改掉——调试入口不该要动人家的产品配置。
+                ("speech", "gpt_sovits"),
+                ("speech", "vits"),
                 self._dev_print_screen_info,
                 self._dev_export_logs,
                 self._dev_export_config,
             ),
         ):
+            if isinstance(slot, tuple):
+                menu.addMenu(self._dev_speech_submenu(label, slot[1]))
+                continue
             action = QAction(label, self)
             action.triggered.connect(slot)
             menu.addAction(action)
         return menu
+
+    def _dev_speech_submenu(self, label: str, engine: str) -> QMenu:
+        """一个引擎一条「朗读测试」子菜单，档位与顺序只认 `SPEECH_TEST_LANGUAGES`。"""
+        submenu = QMenu(label, self)
+        submenu.setObjectName(f"DevSpeechTestMenu::{engine}")
+        for text, code in SPEECH_TEST_LANGUAGES:
+            action = QAction(text, self)
+            action.triggered.connect(
+                lambda _checked=False, e=engine, c=code: self._dev_speech_test(e, c)
+            )
+            submenu.addAction(action)
+        return submenu
 
     # -------------------------------------------------------------- ① 语音输入
     def _dev_voice_input_test(self) -> None:
@@ -167,7 +190,7 @@ class PetDevOptionsMixin:
         """判据本体在 `meapet.tts.diagnostics`（`--doctor` 共用一份），这里只把 `self.config` 递进去。"""
         return tts_for_engine(self.config or {}, engine)
 
-    def _dev_speech_test(self, engine: str) -> None:
+    def _dev_speech_test(self, engine: str, lang: str = "") -> None:
         try:
             tts = self._dev_tts_for_engine(engine)
         except Exception as exc:
@@ -178,7 +201,12 @@ class PetDevOptionsMixin:
             )
             return
         health = bool(tts.health_check())
+        # 点的是哪一档就念哪门语言；不传（旧调用方）才回落到 `speak()` 自己那格算出的
+        # 目标语言——同一个 `_normalize_voice_lang`，不在这里另立一份语言真值。
+        target = lang or tts._normalize_voice_lang()
+        label = speech_test_language_label(target)
         facts = (
+            f"语言={label} "
             f"enabled={getattr(tts, 'enabled', None)} "
             f"engine={getattr(tts, 'engine', None)} "
             f"前置={'齐' if health else '不齐'}"
@@ -190,12 +218,11 @@ class PetDevOptionsMixin:
             # 看不出坏在哪一格——开发者选项存在的意义就是把那一格写出来。
             self._dev_say(f"朗读不会出声：{facts} {detail}")
             return
-        # 测试词用 speak() 自己那格算出来的目标语言（同一个 `_normalize_voice_lang`，
-        # 不在这里另立一份语言真值）：合成前有语言闸门，中文句配 jp 声线必被跳过。
-        sentence = speech_test_sentence(tts._normalize_voice_lang())
+        sentence = speech_test_sentence(target)
         note = SPEECH_WAIT_NOTES.get(engine, "本地合成，不是卡死")
         # 不先说一声，点下去就是一两分钟"没反应"——那形状和没修一模一样。
-        self._dev_say(f"开始朗读测试（{engine}，{note}）：{facts} {detail}")
+        # 语言也写进这句：他要确认的是"中文这档真念的是中文"，不只是引擎名。
+        self._dev_say(f"开始朗读测试（{engine}，{label}，{note}）：{facts} {detail}")
         self._speak_and_show(sentence, 2500, tts=tts)
 
     # -------------------------------------------------------- ③ fidus 屏幕信息

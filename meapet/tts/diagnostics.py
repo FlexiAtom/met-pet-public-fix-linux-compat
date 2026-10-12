@@ -68,9 +68,10 @@ def speech_facts(engine: str, tts) -> str:
     )
 
 
-#: 朗读测试词跟着 tts 的目标语言走：`speak()` 在合成前有一道语言闸门
-#: （`language_policy.should_skip_tts_due_to_language_mismatch`），非目标语言的文本直接跳过不出声。
-#: 写死一句中文去测 voice_lang=jp 的机器，永远只能得到"跳过"——那是这句不合格，不是朗读坏了。
+#: 测试词按语言分档，`speech_test_sentence` 按码取句。
+#: 从前这里写的理由是"`speak()` 合成前有语言闸门，非目标语言的文本直接跳过不出声"——
+#: 那道闸自 2026-10-12 `c486e50`（VITS）/`99f4626`（两路同档）起在本地链路撤掉了，
+#: 只剩 mimo 模式还生效。现在分档是为了能按语言点菜，不是为了绕闸。
 #: 2026-10-09 从 `desktop.dev_options` 搬来：`--doctor` 要用同一句，留在菜单侧就得让无头取证
 #: 去 import 建菜单的模块，那是本模块存在时要消灭的第二条路。
 SPEECH_TEST_SENTENCES = {
@@ -87,6 +88,30 @@ def speech_test_sentence(lang: object = "") -> str:
         SPEECH_TEST_SENTENCES.get(canonical_tts_language(lang) or "zh")
         or SPEECH_TEST_SENTENCES["zh"]
     )
+
+
+#: 开发者选项「朗读测试」子菜单的语言档：顺序即菜单顺序，标签给人看、码给 `speech_test_sentence`。
+#: 人工 2026-10-12T15:34:53「需要在开发者选项加中文和英文的合成（GSV和VITS都需要，目前都是日语）」
+#: ——此前那两个键跟着配置 `tts.voice_lang` 取句（他这台是 jp ⇒ 中文/英文两档根本没有入口）。
+#: **写死这三档，不跟着 `supported_languages()` 生成**：那玩意量的是**参考音频清单**的形状，
+#: 不是合成能力——他这台只有 `jp_normal.wav`/`zh_normal.wav` 两份参考，实测返回 `('zh', 'jp')`，
+#: 动态生成会正好把这次点名要的「英文」整档抹掉（GSV 侧非中文缺 `en_*` 时早就收成 jp 档念，见 `engines/gsv.py`）。
+#: 次一等的理由：它遍历的是 set（`service.py:776-777` 的 `lowered = {…}` ⇒ 顺序随哈希种子漂，
+#: 姊妹案 (B′) 实测 12 个进程 7×('zh','jp') / 5×('jp','zh')）。调试入口必须比产品更稳定，
+#: 菜单不能每次点开不一样。
+SPEECH_TEST_LANGUAGES = (("中文", "zh"), ("日文", "jp"), ("英文", "en"))
+
+#: `speech_test_sentence` 与菜单标签共用的那一份对照（**码 → 标签**，表本身是标签在前）。
+#: 与 `speech_test_sentence` 走同一个 `canonical_tts_language` + 同一个 zh 兜底，
+#: 所以气泡里写的语言跟耳朵听到的不会分家。
+SPEECH_TEST_LANGUAGE_LABELS = {code: text for text, code in SPEECH_TEST_LANGUAGES}
+
+
+def speech_test_language_label(lang: object = "") -> str:
+    from meapet.config.normalizers import canonical_tts_language
+
+    code = canonical_tts_language(lang) or "zh"
+    return SPEECH_TEST_LANGUAGE_LABELS.get(code, code)
 
 
 #: 延迟那格每引擎烧几发。写两发不是为了取平均，是为了把"模型加载"和"页缓存暖了"这两笔
