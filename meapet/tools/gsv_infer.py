@@ -180,6 +180,9 @@ def main():
             "text_split_method": text_split_method,
             "speed_factor": args.get("speed", 1.0),
             "sample_steps": args.get("sample_steps", 8),
+            # 上游默认 seed=-1（= 当场换成随机），这里不接这一行等于没改：
+            # 调用方（engines/gsv.py）钉的是定值，同句同参考才是同一次采样。
+            "seed": args.get("seed", 0),
             "batch_size": 1,
             "batch_threshold": 0.75,
             "split_bucket": True,

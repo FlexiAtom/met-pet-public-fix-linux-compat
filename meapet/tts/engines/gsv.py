@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -19,6 +20,18 @@ from meapet.tts.common import (
 )
 
 log = get_color_logger("tts")
+
+# 人工 2026-10-12T14:07:28「要禁止并发」。推理子进程吃满 CPU/内存，两个一起跑会互相拖慢到
+# 双双撞上 gsv_timeout（实测 14 字句在受压窗口 241.35 s / 240.38 s 被砍成静默）。VITS 那一路
+# 早有 vits_runtime.py:37 的锁，GSV 这路此前一把都没有——所以排队，不是并行。
+_GSV_INFER_LOCK = threading.Lock()
+
+# 上游 ``TTS_infer_pack/TTS.py:1020`` 的 ``seed`` 默认 ``-1``，而 ``set_seed()``（:194-196）
+# 把 -1 当场换成 ``random.randint(0, 2**32-1)`` ⇒ 同句连 6 发拿到 4 种时长
+# （4.62/4.70/4.74/4.82）、12 个 wav md5 两两不同。人工同刻裁决「seed要改」：钉成定值。
+# 不做成配置键——这一档要的就是"不再飘"，可调等于把飘留在配置里；
+# 与 gsv_infer.py 里 text_split_method/batch_size 那批脚本内定值同档。
+GSV_INFER_SEED = 0
 
 _GSV_LANGUAGE_LABELS = {
     "jp": LANG_TTS,
@@ -71,6 +84,8 @@ class TtsGsvMixin:
             "speed": self.speed,
             "sample_steps": self.sample_steps,
             "output_wav": output_wav,
+            # 钉采样种子：不带这行上游就按 -1 每次随机（模块级 GSV_INFER_SEED 的注释给了实测散布）。
+            "seed": GSV_INFER_SEED,
             # 根不靠解释器路径反推：conda env 在树外时，只有这一路能把根传进子进程。
             "gsv_root": self.gsv_root,
         }
@@ -85,16 +100,31 @@ class TtsGsvMixin:
         try:
             cmd = [self.python_exe, self.infer_script]
             log.info("启动推理子进程…")
-            t1 = time.time()
 
-            proc = subprocess.run(
-                cmd,
-                input=payload_json.encode("utf-8"),
-                capture_output=True,
-                timeout=self.gsv_timeout,
-                cwd=project_root(),
-                **hidden_subprocess_kwargs(),
-            )
+            # 禁止并发（人工 2026-10-12T14:07:28）：排队上限取同一条 gsv_timeout——排队本身
+            # 也吃预算，等满了就放弃这一次并留理由，不把调用方（朗读也有 UI 线程上的入口）无限期挂住。
+            queued_at = time.time()
+            if not _GSV_INFER_LOCK.acquire(timeout=float(self.gsv_timeout)):
+                log.warning(
+                    f"GSV 推理已在进行，等满 {self.gsv_timeout:.0f}s 仍未排到 → "
+                    "本次放弃（禁止并发）"
+                )
+                return None, ""
+            try:
+                t1 = time.time()
+                proc = subprocess.run(
+                    cmd,
+                    input=payload_json.encode("utf-8"),
+                    capture_output=True,
+                    timeout=self.gsv_timeout,
+                    cwd=project_root(),
+                    **hidden_subprocess_kwargs(),
+                )
+            finally:
+                _GSV_INFER_LOCK.release()
+            waited = t1 - queued_at
+            if waited > 1.0:
+                log.info(f"排队等前一句 {waited:.1f}s")
             elapsed = time.time() - t1
             # 用 replace 忽略无法解码的字节（GPT-SoVITS 可能会输出 GBK 编码的中文日志）
             stdout_text = proc.stdout.decode('utf-8', errors='replace')

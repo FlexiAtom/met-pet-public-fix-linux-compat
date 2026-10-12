@@ -1132,7 +1132,7 @@ class TestGsvLanguageChecksBypassed(unittest.TestCase):
         self.assertTrue(any("no ref" in line for line in captured.output))
 
     def test_non_chinese_sentence_lands_on_the_jp_reference_tier_like_vits(self):
-        """人工 2026-10-12T13:50:35 定档：「GSV要改目前VITS的"根据实际语言选jp还是zh"」。
+        """人工 2026-10-12T13:43:26 定档：「GSV要改目前VITS的"根据实际语言选jp还是zh"」。
 
         VITS 那一档是两值收敛（engines/vits.py:37 判到中文才 ``[ZH]``，其余一律 ``[JA]``），
         所以英文句在 VITS 那一路**出声**；GSV 原先按三档找 ``en_*`` 参考，随包池里没有就静默
