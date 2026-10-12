@@ -272,6 +272,26 @@ class TtsGsvMixin:
                 wav_file, txt_file = alt_wav, alt_txt
                 lang_label = fallback_label
 
+        # 与 VITS 那一档对齐（engines/vits.py:37 判到中文才 [ZH]，其余一律 [JA]）：
+        # 本轮语言不是中文、而池里又没有这门语言的参考时，落 jp 档而不是把这句掐成静默——
+        # 参考只决定音色，念什么由 payload 里另发的 text_language 决定（:57-65），
+        # 跨语言克隆正是这一路的原生能力。随包池只有 zh_/jp_ 两档，英文句因此有声音。
+        # 中文不进这一档：上面那条前人裁决仍然有效（宁可跳过，也不给中文原文配日文参考）。
+        if (
+            (not wav_file or not txt_file)
+            and voice_language
+            and target_language != "zh"
+            and not prefixes[0].startswith("jp")
+        ):
+            alt_wav, alt_txt = _scan(("jp_", "ja_"))
+            if alt_wav and alt_txt:
+                log.warning(
+                    f"无 {prefixes[0]}* 参考，整句非中文 → 落 jp 档 "
+                    f"{os.path.basename(alt_wav)}"
+                )
+                wav_file, txt_file = alt_wav, alt_txt
+                lang_label = LANG_TTS
+
         if not wav_file or not txt_file:
             if not os.path.isdir(ref_folder):
                 log.warning(f"Ref folder not found: {ref_folder}")

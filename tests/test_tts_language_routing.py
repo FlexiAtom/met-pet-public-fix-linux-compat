@@ -1089,7 +1089,7 @@ class TestGsvLanguageChecksBypassed(unittest.TestCase):
                     with mock.patch.object(tts, "_translate_text") as translate:
                         prepared = tts._prepare_tts_text(text, "jp")
                     translate.assert_not_called()
-        self.assertEqual(prepared, (text, expected_lang))
+                    self.assertEqual(prepared, (text, expected_lang))
 
     def test_speak_channels_the_observed_language_to_the_payload(self):
         """speak() → GSV 那一趟的通道：合成语言决定参考前缀与 ``text_language``，
@@ -1116,15 +1116,67 @@ class TestGsvLanguageChecksBypassed(unittest.TestCase):
         self.assertEqual(speak_gsv.call_args.args[5], prompt_lang)
 
     def test_missing_reference_for_that_language_stays_silent_with_a_reason(self):
-        """去校验不等于凭空造音色：英文句在只有 zh/jp 参考的池子里仍不出声，
-        但理由是"缺参考音频"，不再是语言校验——这一档没把静默换成假音。
+        """去校验不等于凭空造音色：**中文**句在删掉 zh 参考后仍不出声，理由是"缺参考音频"。
+        前人裁决「宁可跳过语音，也不能把中文原文与日语参考音频错配」没被这档翻掉。
         """
         with tempfile.TemporaryDirectory() as td:
             tts = self._gsv_tts(td)
+            (Path(td) / "refs" / "normal" / "zh_normal.wav").unlink()
+            (Path(td) / "refs" / "normal" / "zh_normal.txt").unlink()
             with mock.patch.object(tts, "_ensure_deps", return_value=True):
                 with mock.patch.object(tts, "_speak_gsv") as speak_gsv:
                     with self.assertLogs("tts", level="WARNING") as captured:
-                        result = tts.speak("hello my dear friend", "happy")
+                        result = tts.speak("今天的风好大，喵。", "happy")
         self.assertIsNone(result[0])
         speak_gsv.assert_not_called()
         self.assertTrue(any("no ref" in line for line in captured.output))
+
+    def test_non_chinese_sentence_lands_on_the_jp_reference_tier_like_vits(self):
+        """人工 2026-10-12T13:50:35 定档：「GSV要改目前VITS的"根据实际语言选jp还是zh"」。
+
+        VITS 那一档是两值收敛（engines/vits.py:37 判到中文才 ``[ZH]``，其余一律 ``[JA]``），
+        所以英文句在 VITS 那一路**出声**；GSV 原先按三档找 ``en_*`` 参考，随包池里没有就静默
+        ——同一句话两路引擎一个有一个没有，这就是他说的"不稳定"还剩下的那一格。
+        现在整句非中文就落 jp 档，音色用日文参考、念的语言仍按整句实际结论填 ``text_language=英文``
+        （prompt/text 两字段分开是这一路的原生能力，见 engines/gsv.py:57-65）。
+        """
+        cases = (
+            ("hello my dear friend", "jp_normal.wav", "英文", "日文"),
+            ("床前明月光，疑是地上霜。", "jp_normal.wav", "日文", "日文"),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._gsv_tts(td)
+            for text, ref_name, text_lang, prompt_lang in cases:
+                with self.subTest(text=text[:4]):
+                    with mock.patch.object(tts, "_ensure_deps", return_value=True):
+                        with mock.patch.object(
+                            tts, "_speak_gsv", return_value=("/tmp/gsv.wav", "zh")
+                        ) as speak_gsv:
+                            result = tts.speak(text, "happy")
+                    self.assertEqual(result, ("/tmp/gsv.wav", "zh"))
+                    self.assertEqual(
+                        os.path.basename(speak_gsv.call_args.args[3]), ref_name
+                    )
+                    self.assertEqual(
+                        speak_gsv.call_args.kwargs["text_lang"], text_lang
+                    )
+                    self.assertEqual(speak_gsv.call_args.args[5], prompt_lang)
+
+    def test_an_english_reference_tier_still_wins_when_it_exists(self):
+        """两档收敛不等于抹掉 en 档：池里真有 ``en_*`` 参考时仍优先用它，
+        只有缺条目才落 jp——不把自建参考音频的用户改坏。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            tts = self._gsv_tts(td)
+            stem = Path(td) / "refs" / "normal" / "en_normal"
+            stem.with_suffix(".wav").write_bytes(b"RIFF" + b"\x00" * 64)
+            stem.with_suffix(".txt").write_text("an english reference", encoding="utf-8")
+            with mock.patch.object(tts, "_ensure_deps", return_value=True):
+                with mock.patch.object(
+                    tts, "_speak_gsv", return_value=("/tmp/gsv.wav", "zh")
+                ) as speak_gsv:
+                    tts.speak("hello my dear friend", "happy")
+        self.assertEqual(
+            os.path.basename(speak_gsv.call_args.args[3]), "en_normal.wav"
+        )
+        self.assertEqual(speak_gsv.call_args.args[5], "英文")
