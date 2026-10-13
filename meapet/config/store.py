@@ -50,6 +50,9 @@ from meapet.config.defaults import (
     DEFAULT_OPENCLAW_WS_URL,
     DEFAULT_WATCHER_INTERVAL,
 )
+from meapet.log import get_color_logger
+
+_log = get_color_logger("config")
 from meapet.config import providers as _providers
 from meapet.ui_theme import (
     normalize_pet_size_factor,
@@ -109,6 +112,25 @@ _VISION_BACKENDS = frozenset({"ollama", "mimo"})
 DEFAULT_API_BASE = DEFAULT_OPENAI_API_BASE
 
 _ENV_PLACEHOLDERS = ("", "$ENV", "${ENV}", "env", "ENV")
+
+
+def infer_agent_kind(raw_base: object) -> Tuple[str, str]:
+    """``llm.agent.kind`` 没写时，按地址反推网关类型，第二条是判据文本。
+
+    三条判据都是各网关**自己的地址签名**，不是按端口大小猜：``18789`` 是 OpenClaw 的默认口，
+    ``agent-link`` 是 Agent Link 的路径，``9119`` 与 ``/api/ws`` 是 Hermes 的原生 WS。
+    三种默认地址（``defaults.py``）都长这样，所以**不能**拿 "是 ws:// 就算 agent_link" 当判据——
+    那会把 ``ws://127.0.0.1:9119/api/ws`` 那份本来正确的 hermes 猜成另一路。
+    三条都不命中才退回历史默认 hermes，此时判据文本明说是猜的，调用方须把它说出来。
+    """
+    lowered = str(raw_base or "").strip().lower()
+    if "18789" in lowered:
+        return "openclaw", "地址里有 18789（OpenClaw 默认口）"
+    if "agent-link" in lowered or "agent_link" in lowered:
+        return "agent_link", "地址里有 agent-link 那段路径（Agent Link 网关）"
+    if ":9119" in lowered or "/api/ws" in lowered:
+        return "hermes", "地址里有 9119 或 /api/ws（Hermes 原生 WS）"
+    return "hermes", "地址里认不出任何网关签名，按历史默认**猜**的"
 
 
 def _endpoint_family_from_text(text: object) -> str:
@@ -724,7 +746,11 @@ def _normalize_llm_contract(value: object) -> dict:
         agent.get("base_url") or agent.get("bridge_url") or ""
     ).strip()
     if raw_kind not in _AGENT_KINDS:
-        raw_kind = "openclaw" if "18789" in raw_base else "hermes"
+        raw_kind, kind_basis = infer_agent_kind(raw_base)
+        _log.warning(
+            f"llm.agent.kind 没写：{kind_basis}，按 {raw_kind} 走"
+            "（要钉住请在 llm.agent.kind 写明 hermes/openclaw/agent_link）"
+        )
     agent["kind"] = raw_kind
 
     # 8642 是 Hermes HTTP API Server，原生 WS 由 ``hermes serve`` 默认在
