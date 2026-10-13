@@ -6,7 +6,8 @@
 `event.ignore()` + `self.hide()`，**不取消首帧预算表**；被压过那一版的 docstring 恰恰明写它
 存在的理由是「避免关闭后被超时回退重新显示」。于是关掉的桌宠可能自己冒回来：表到点 →
 `_on_live2d_startup_timeout` → `_fallback_to_png` → 末尾 `show()`（`show()` 那一跳由
-`tests/test_live2d_startup.py` 覆盖，本文件不重复判）。
+`TestGhostReappearsAfterClose` 用**真的** `_fallback_to_png` 钉住——`tests/test_live2d_startup.py`
+那四处都把它 mock 掉了，函数体压根没跑，指望不上）。
 
 为什么是 L2 而不是真机：这里判的是**哪个定义生效**与**它做了什么**，两者都不需要真实
 合成器；真机那一半只补"关不掉的表征"（该件的臂 A）。本文件不断言任何屏幕位置／上屏行为。
@@ -126,6 +127,57 @@ class TestClosingLeavesTheBudgetRunning(unittest.TestCase):
         timer = _armed(host)
         PetRenderHostMixin._cancel_live2d_startup_timeout(host)
         self.assertFalse(timer.isActive())
+
+
+class _GhostStandin(_CloseStandin):
+    """把回退换成**真**的那一个，其余器官照样替。
+
+    `_CloseStandin._fallback_to_png` 只记 reason——那条链的上半截够用，但臂 A 要的正是
+    函数体末尾那发 `show()`，所以这里把 mixin 的真实现挂回来，只替掉它够到的外部器官。
+    """
+
+    _fallback_to_png = PetRenderHostMixin._fallback_to_png
+    _cancel_live2d_startup_timeout = PetRenderHostMixin._cancel_live2d_startup_timeout
+
+    def __init__(self):
+        super().__init__()
+        self.shows = 0
+        self.raised = 0
+        self.png_inits = 0
+
+    def _init_png_renderer(self):
+        self.png_inits += 1
+
+    def _place_initial_position(self):
+        pass
+
+    def setWindowOpacity(self, _opacity):
+        pass
+
+    def show(self):
+        self.shows += 1
+
+    def raise_(self):
+        self.raised += 1
+
+    def _mark_renderer_ready(self):
+        pass
+
+
+class TestGhostReappearsAfterClose(unittest.TestCase):
+    """臂 A 那一跳：关闭之后表到点，窗口真被 `show()` 回来（当成幽灵，不是崩溃）。"""
+
+    def test_the_real_fallback_re_shows_a_window_that_was_closed(self):
+        host = _GhostStandin()
+        timer = _armed(host)
+        MeaPet.closeEvent(host, _CloseEvent())
+        self.assertEqual(host.shows, 0, "前提：关闭只 hide，没有 show")
+
+        host._on_live2d_startup_timeout()          # 表到点就是这一发
+        self.assertEqual(host.png_inits, 1, "回退确实走到了 PNG 分支")
+        self.assertEqual(host.shows, 1, "关闭后回退照样 show() ⇒ 桌宠冒回来")
+        self.assertEqual(host.raised, 1)
+        self.assertFalse(timer.isActive(), "回退自己会把表停掉（只此一次，不是每帧都冒）")
 
 
 if __name__ == "__main__":
