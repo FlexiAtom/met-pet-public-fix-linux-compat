@@ -231,7 +231,7 @@ class TestCompanionCapture(unittest.IsolatedAsyncioTestCase):
 
 
 class TestCompanionMcpSurface(unittest.IsolatedAsyncioTestCase):
-    async def test_server_exposes_exactly_four_namespaced_tools(self):
+    async def test_server_exposes_exactly_four_underscore_tools(self):
         from meapet.control.broker import CompanionControlBroker
         from meapet.control.mcp_server import build_companion_mcp
 
@@ -241,12 +241,21 @@ class TestCompanionMcpSurface(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {tool.name for tool in tools},
             {
-                "meapet.say",
-                "meapet.express",
-                "meapet.get_state",
-                "meapet.capture_screen",
+                "meapet_say",
+                "meapet_express",
+                "meapet_get_state",
+                "meapet_capture_screen",
             },
         )
+
+    async def test_tool_names_survive_mcp_sanitizers(self):
+        """点号会被 MCP 客户端哈希重命名，模型侧就读不到工具语义。"""
+        from meapet.control.broker import CompanionControlBroker
+        from meapet.control.capabilities import build_companion_capabilities
+
+        registry = build_companion_capabilities(CompanionControlBroker(state=_state()))
+        for tool in registry.tools():
+            self.assertRegex(tool.name, r"^[A-Za-z0-9_-]+$")
 
 
 if __name__ == "__main__":

@@ -61,6 +61,7 @@ $ git show origin/main:meapet/tts/common.py  | grep -c probe_vits_deps  ⇒ 1
 **为什么必须有 B**：R1/R2 那一格要「直接调 `health_check()`」，而产品真身是 GUI 桌宠，
 我没有可用的触发面（见 §10：本机打出来的包里 `agent_control` 的 MCP 端口没起来，
 `meapet.say` 这条无头触发路走不通；Windows UIAutomation 也看不到 Qt 控件树，点不了界面）。
+（本行按实测时点保留原名：2026-10-14 起四个工具名去点号，现为 `meapet_say`／`meapet_express`／`meapet_get_state`／`meapet_capture_screen`。）
 B 与 A 的**唯一差别是入口脚本**：torch 的收集方式、`sys._MEIPASS` 布局、`find_spec` 的可见面完全同形。
 A 栏拿到的两条（选路行、进程内被选中）与 B 栏互相印证。
 
@@ -399,7 +400,7 @@ $ Test-NetConnection 127.0.0.1 -Port 8765   ⇒ False        # 日志说启动�
 `CompanionMcpRuntime.start()` 把 `_serve()` 丢进 `meapet.async_runtime` 的后台 loop，
 **`_future` 没人读**，所以 uvicorn 侧的任何异常都不会落到任何日志文件里——这条可观测性缺口是真的，
 但**根因我没证到**（冻结件里的复现探针写短了 token，被 `auth_token must contain at least 32 characters` 挡在构造阶段，没跑成），
-故只作侧记，不计入 R1–R5。它导致的直接后果是：**产品真身的 `meapet.say` 无头触发路走不通**，
+故只作侧记，不计入 R1–R5。它导致的直接后果是：**产品真身的 `meapet.say` 无头触发路走不通**（现名 `meapet_say`，见 §2 的注），
 R1/R2 只好用 §2 的 B 栏取（见 §2 的口径说明）。
 
 ---

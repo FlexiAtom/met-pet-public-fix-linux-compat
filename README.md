@@ -140,7 +140,7 @@ Agent 模式将 MeaPet 作为纯桌面前端：
 - 内部工具名称和原始参数不会显示在角色气泡中。安全的状态（开始、完成、失败）会进入时间线，诊断详情只写入日志。
 - Agent 模式只使用 WebSocket。Hermes 连接 `hermes serve` 暴露的原生 TUI Gateway，OpenClaw 连接 Gateway v4，自定义后端可以实现 Agent Link v1。HTTP/SSE 模型端点只属于直连模式。
 - 连接会跨轮次复用，支持双向流式传输、取消、ping/pong 以及各协议自己的断线恢复。OpenClaw 使用相同的幂等键重试；Hermes 会恢复已保存的会话并核对历史，而不是盲目重新提交可能已经执行过工具调用的轮次。
-- Agent Link 使用同一个出站连接完成聊天和前端工具调用。握手后 MeaPet 会发布带类型的工具 schema，第三方连接器可以在自己的 Agent 循环中注册这些工具，并主动调用 `meapet.say`。
+- Agent Link 使用同一个出站连接完成聊天和前端工具调用。握手后 MeaPet 会发布带类型的工具 schema，第三方连接器可以在自己的 Agent 循环中注册这些工具，并主动调用 `meapet_say`。
 - Agent 回复必须遵循 MeaPet 的分段输出格式。格式错误会进入明确的格式修复状态；任何 Agent 路径都不会静默回退到 HTTP 模型端点。
 
 本地 `session_id` 用于标识 MeaPet 的时间线范围。OpenClaw 还会持久化其 Gateway `session_key`；Hermes 会持久化服务器返回的 `remote_session_id`，并在重启或重连后使用 `session.resume`。在 Agent 模式中，“清除记忆”会明确启动一个新的上游 Agent 会话。旧时间线仍可读取。
@@ -323,10 +323,10 @@ http(s)://<listen_host>:<port>/mcp
 
 | 工具 | 能力 |
 |------|------|
-| `meapet.say` | 将一个或多个完整回复分段加入队列；不会抢占等待中的用户回复 |
-| `meapet.express` | 请求前端明确支持的情绪或动作；不做隐式映射 |
-| `meapet.get_state` | 读取渲染、TTS 能力、角色状态和好感度摘要；不返回路径、密钥、记忆或完整聊天历史 |
-| `meapet.capture_screen` | 请求截取全屏、区域或应用；每次都需要本地确认，结果绝不写入磁盘 |
+| `meapet_say` | 将一个或多个完整回复分段加入队列；不会抢占等待中的用户回复 |
+| `meapet_express` | 请求前端明确支持的情绪或动作；不做隐式映射 |
+| `meapet_get_state` | 读取渲染、TTS 能力、角色状态和好感度摘要；不返回路径、密钥、记忆或完整聊天历史 |
+| `meapet_capture_screen` | 请求截取全屏、区域或应用；每次都需要本地确认，结果绝不写入磁盘 |
 
 安全约束：
 

@@ -132,7 +132,7 @@ Agent mode treats MeaPet as a pure desktop frontend:
 - Internal tool names and raw parameters are not displayed in character bubbles. Safe status (start, complete, failure) enters the timeline; diagnostic details go to logs only.
 - Agent mode uses WebSocket only. Hermes connects to the native TUI Gateway exposed by `hermes serve`; OpenClaw connects to Gateway v4; a custom backend can implement Agent Link v1. HTTP/SSE model endpoints belong exclusively to direct mode.
 - Connections are reused across turns and carry bidirectional streaming, cancellation, ping/pong, and protocol-specific reconnect recovery. OpenClaw retries with the same idempotency key; Hermes resumes the stored session and reconciles history instead of blindly resubmitting a possibly executed tool turn.
-- Agent Link uses one outbound connection for chat and frontend tool calls. MeaPet publishes typed tool schemas after the handshake, so the third-party connector can register them in its own Agent loop and can proactively call `meapet.say`.
+- Agent Link uses one outbound connection for chat and frontend tool calls. MeaPet publishes typed tool schemas after the handshake, so the third-party connector can register them in its own Agent loop and can proactively call `meapet_say`.
 - Agent responses must follow the MeaPet segmented output format. Malformed output raises an explicit format-repair state; no Agent path silently falls back to an HTTP model endpoint.
 
 The local `session_id` identifies MeaPet's timeline scope. OpenClaw additionally persists its Gateway `session_key`; Hermes persists the server-returned `remote_session_id` and uses `session.resume` after restart or reconnect. "Clear memory" in Agent mode explicitly starts a new upstream Agent session. Old timelines remain readable.
@@ -243,10 +243,10 @@ Only four tools are exposed:
 
 | Tool | Capability |
 |------|-----------|
-| `meapet.say` | Queue one or more complete reply segments; does not preempt pending user replies |
-| `meapet.express` | Request a mood or action the frontend explicitly supports; no implicit mapping |
-| `meapet.get_state` | Read rendering, TTS capability, character state, and affection level summary; does not return paths, secrets, memory, or full chat history |
-| `meapet.capture_screen` | Request a screenshot (fullscreen, region, or application); requires local per-shot confirmation; results never written to disk |
+| `meapet_say` | Queue one or more complete reply segments; does not preempt pending user replies |
+| `meapet_express` | Request a mood or action the frontend explicitly supports; no implicit mapping |
+| `meapet_get_state` | Read rendering, TTS capability, character state, and affection level summary; does not return paths, secrets, memory, or full chat history |
+| `meapet_capture_screen` | Request a screenshot (fullscreen, region, or application); requires local per-shot confirmation; results never written to disk |
 
 Security constraints:
 

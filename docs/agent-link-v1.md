@@ -261,7 +261,7 @@ MeaPet 只会进入 `ONLINE`，如果：
     "revision": 4,
     "tools": [
       {
-        "name": "meapet.get_state",
+        "name": "meapet_get_state",
         "description": "读取不含路径、密钥、记忆和全文的前端能力与状态摘要。",
         "input_schema": {
           "type": "object",
@@ -272,7 +272,7 @@ MeaPet 只会进入 `ONLINE`，如果：
         }
       },
       {
-        "name": "meapet.capture_screen",
+        "name": "meapet_capture_screen",
         "description": "请求一次本机确认后的截图；授权不复用，截图不落盘。",
         "input_schema": {
           "type": "object",
@@ -320,10 +320,13 @@ MeaPet 当前内置：
 
 | 工具 | 作用 |
 |---|---|
-| `meapet.say` | 排队一到多个完整回复分段，用于 Agent 主动向用户说话 |
-| `meapet.express` | 请求当前前端明确支持的 mood 或 motion |
-| `meapet.get_state` | 读取经过裁剪的前端能力和桌宠状态 |
-| `meapet.capture_screen` | 请求一次本机确认后的截图，结果仅在内存中返回 |
+| `meapet_say` | 排队一到多个完整回复分段，用于 Agent 主动向用户说话 |
+| `meapet_express` | 请求当前前端明确支持的 mood 或 motion |
+| `meapet_get_state` | 读取经过裁剪的前端能力和桌宠状态 |
+| `meapet_capture_screen` | 请求一次本机确认后的截图，结果仅在内存中返回 |
+
+工具名不得含点号：MCP 客户端会把含非法字符的名字重写成带哈希前缀的形式，模型侧就读不到名字自己的语义。
+下划线在合法字符集内，因此内置工具一律 `meapet_<动作>`。
 
 ## 6. 工具调用
 
@@ -338,7 +341,7 @@ MeaPet 当前内置：
   "session_id": "meapet-session-1",
   "reply_to": "",
   "payload": {
-    "name": "meapet.express",
+    "name": "meapet_express",
     "arguments": {
       "mood": "happy",
       "motion": ""
@@ -632,7 +635,7 @@ MeaPet 取消时发送 `chat.cancel`，其 `reply_to` 和
 ## 8. Agent 主动消息
 
 Agent 主动说话不需要另一种消息协议，也不需要第二条连接。第三方在任意
-`ONLINE` 时刻调用当前快照中的 `meapet.say`：
+`ONLINE` 时刻调用当前快照中的 `meapet_say`：
 
 ```json
 {
@@ -642,7 +645,7 @@ Agent 主动说话不需要另一种消息协议，也不需要第二条连接�
   "session_id": "meapet-session-1",
   "reply_to": "",
   "payload": {
-    "name": "meapet.say",
+    "name": "meapet_say",
     "arguments": {
       "segments": [
         {

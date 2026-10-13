@@ -364,7 +364,7 @@ class TestAgentLinkAdapter(unittest.IsolatedAsyncioTestCase):
                     make_agent_link_frame(
                         "tool.call",
                         {
-                            "name": "meapet.get_state",
+                            "name": "meapet_get_state",
                             "arguments": {},
                         },
                         message_id="real-tool-1",
@@ -531,7 +531,7 @@ class TestAgentLinkAdapter(unittest.IsolatedAsyncioTestCase):
                     make_agent_link_frame(
                         "tool.call",
                         {
-                            "name": "meapet.get_state",
+                            "name": "meapet_get_state",
                             "arguments": {},
                         },
                         message_id="tool-state-1",

@@ -204,7 +204,7 @@ OpenClaw 配对、认证、权限、限流、超时和服务不可用会映射�
 Agent Link 是 MeaPet 主动建立的一条通用双向 WebSocket。聊天、流式回复、取消、
 Agent 主动消息和前端工具调用均走这条连接；选择它时不会再启动 Companion MCP
 HTTP 监听。握手后 MeaPet 会公布当前工具 Schema，第三方必须把它们注册进自己
-的 Agent Loop。Agent 主动说话就是调用 `meapet.say`，不需要另建消息通道。
+的 Agent Loop。Agent 主动说话就是调用 `meapet_say`，不需要另建消息通道。
 
 仅支持任意 WebSocket JSON 收发并不足够；第三方必须实现固定信封、握手、工具
 快照、请求关联、幂等、取消、离线丢弃和重连约定。完整字段与逐帧示例见
@@ -308,7 +308,7 @@ VITS 引擎有子进程与进程内两条推理路，选哪条、以及模型/�
 
 ### 7.2 截图同意
 
-无论截图来自定时观察还是 `meapet.capture_screen`：
+无论截图来自定时观察还是 `meapet_capture_screen`：
 
 - 每次都弹出本机确认，超时等同拒绝。
 - 同意仅对当前请求有效，不提供“本次会话一直允许”。
@@ -364,15 +364,15 @@ Token 少于 32 个字符时服务拒绝启动。空 Token 会自动生成高熵
 错误契约，不应分别维护两份协议定义。Agent Link 投影会隐藏仅供传输层注入的
 `request_id`，避免第三方模型覆盖幂等键。
 
-#### `meapet.say`
+#### `meapet_say`
 
 输入一个或多个包含五个必需字段的 `segments`。命令进入有界队列；用户回复正在生成时不抢占。`request_id` 用于短期幂等，相同 ID 不会重复说话。
 
-#### `meapet.express`
+#### `meapet_express`
 
 输入 `mood` 和/或 `motion`。值必须出现在 `get_state` 返回的支持列表中；未知值返回 `unsupported`，不做含糊映射。
 
-#### `meapet.get_state`
+#### `meapet_get_state`
 
 只返回：
 
@@ -381,7 +381,7 @@ Token 少于 32 个字符时服务拒绝启动。空 Token 会自动生成高熵
 
 它不返回 API Key、Token、文件路径、截图、记忆内容或对话全文。
 
-#### `meapet.capture_screen`
+#### `meapet_capture_screen`
 
 `scope` 可为 `full_screen`、`region`、`application`。工具会等待本机用户同意；超时返回稳定错误。重复的 `request_id` 共享当前待确认请求，避免反复弹窗。
 
