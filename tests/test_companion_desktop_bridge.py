@@ -152,6 +152,7 @@ class TestControlLifecycle(unittest.TestCase):
         self.assertEqual(runtimes[0].starts, 1)
         self.assertEqual(len(runtimes[0].registry.tools()), 4)
         self.assertTrue(host._control_poll_timer.started)
+        self.assertIsNone(host._idle_status_poll_timer)
 
     def test_agent_link_starts_one_connection_and_does_not_start_legacy_mcp(self):
         import meapet.async_runtime as async_runtime
@@ -216,6 +217,11 @@ class TestControlLifecycle(unittest.TestCase):
         )
         self.assertEqual(len(host._control_capabilities.tools()), 4)
         self.assertTrue(host._control_poll_timer.started)
+        self.assertTrue(host._idle_status_poll_timer.started)
+
+        host._stop_control()
+        self.assertIsNone(host._idle_status_poll_timer)
+        self.assertIsNone(host._control_poll_timer)
 
     def test_rotating_control_token_restarts_listener_and_revokes_old_value(self):
         from meapet.desktop.control_bridge import PetControlBridgeMixin
@@ -423,6 +429,43 @@ class TestControlPresentation(unittest.IsolatedAsyncioTestCase):
             ["第一段", "第二段"],
         )
         self.assertEqual(turn.status, "complete")
+
+    def test_idle_tool_status_reaches_screen_only_between_turns(self):
+        from meapet.agent.base import ToolStatus
+        from meapet.agent.presentation import ShowStatus
+
+        idle = ToolStatus("accepted", "Agent 已接手，正在处理。")
+
+        class Adapter:
+            def __init__(self, statuses):
+                self.pending = list(statuses)
+                self.drains = 0
+
+            def take_idle_tool_statuses(self):
+                self.drains += 1
+                taken, self.pending = tuple(self.pending), []
+                return taken
+
+        host = self._host()
+        shown = []
+        host._apply_agent_action = shown.append
+        host.agent_adapter = Adapter((idle,))
+        host._poll_idle_tool_statuses()
+        self.assertEqual(
+            shown,
+            [ShowStatus("accepted", "Agent 已接手，正在处理。")],
+        )
+
+        in_turn = self._host()
+        in_turn._apply_agent_action = lambda _action: shown.append("抢气泡")
+        in_turn.agent_adapter = Adapter((idle,))
+        in_turn._chat_worker = object()
+        in_turn._poll_idle_tool_statuses()
+        self.assertEqual(in_turn.agent_adapter.drains, 1)
+        self.assertEqual(len(shown), 1)
+
+        no_adapter = self._host()
+        no_adapter._poll_idle_tool_statuses()
 
 
 if __name__ == "__main__":

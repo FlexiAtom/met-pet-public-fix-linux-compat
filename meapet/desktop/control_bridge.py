@@ -19,6 +19,7 @@ from meapet.agent.presentation import (
     FinalizeBubble,
     FinishTurn,
     PlayAudio,
+    ShowStatus,
     SubmitTTS,
     UpdateBubble,
 )
@@ -71,6 +72,7 @@ class PetControlBridgeMixin:
         self._control_runtime = None
         self._control_capabilities = None
         self._control_poll_timer = None
+        self._idle_status_poll_timer = None
         self._agent_link_start_future = None
         self._control_say_active = False
         self._control_presentation = None
@@ -184,6 +186,11 @@ class PetControlBridgeMixin:
         from meapet.async_runtime import submit
 
         self._agent_link_start_future = submit(start())
+        self._idle_status_poll_timer = QTimer(self)
+        self._idle_status_poll_timer.timeout.connect(
+            self._poll_idle_tool_statuses
+        )
+        self._idle_status_poll_timer.start(1000)
         log.info(
             "[control] Agent Link 长连接已启动，"
             f"tools={len(registry.tools())}"
@@ -265,6 +272,22 @@ class PetControlBridgeMixin:
         command = broker.take_ready_say()
         if command is not None:
             self._start_control_say(command)
+
+    def _poll_idle_tool_statuses(self) -> None:
+        """Agent 自主运行（不关联任何 MeaPet 回合）的状态也上屏。"""
+        adapter = getattr(self, "agent_adapter", None)
+        take = getattr(adapter, "take_idle_tool_statuses", None)
+        if not callable(take):
+            return
+        if getattr(self, "_chat_worker", None) is not None:
+            # 回合内的状态走那条回合自己的事件流，这里只清队列、不抢气泡。
+            take()
+            return
+        apply_action = getattr(self, "_apply_agent_action", None)
+        if not callable(apply_action):
+            return
+        for status in take():
+            apply_action(ShowStatus(status.state, status.safe_text))
 
     def _confirm_control_capture(self, request):
         return confirm_capture_scope(
@@ -530,6 +553,14 @@ class PetControlBridgeMixin:
             except Exception:
                 pass
         self._control_poll_timer = None
+        idle_timer = getattr(self, "_idle_status_poll_timer", None)
+        if idle_timer is not None:
+            try:
+                idle_timer.stop()
+                idle_timer.deleteLater()
+            except Exception:
+                pass
+        self._idle_status_poll_timer = None
         self._interrupt_control_say()
 
         broker = getattr(self, "_control_broker", None)

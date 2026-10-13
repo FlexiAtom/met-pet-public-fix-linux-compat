@@ -614,6 +614,255 @@ class TestAgentLinkAdapter(unittest.IsolatedAsyncioTestCase):
             "png",
         )
 
+    async def _connected_adapter_without_registry(self):
+        """只完成握手，用来观察回合外消息；返回 (adapter, socket)。"""
+        from meapet.agent.agent_link import AgentLinkAdapter, AgentLinkConfig
+
+        def handler(socket: _Socket, frame: dict) -> None:
+            if frame["type"] == "control.hello":
+                socket.push(_ready(frame))
+
+        socket = _Socket(handler)
+        adapter = AgentLinkAdapter(
+            AgentLinkConfig(
+                base_url="ws://127.0.0.1:8766/agent-link",
+                device_id="device-test",
+                session_id="session-test",
+                timeout_seconds=2,
+            ),
+            connector=_Connector(socket),
+        )
+        await adapter.probe()
+        return adapter, socket
+
+    async def test_tool_status_without_an_active_turn_is_queued(self):
+        from meapet.agent.base import ToolStatus
+        from meapet.agent.link_protocol import make_agent_link_frame
+
+        adapter, socket = await self._connected_adapter_without_registry()
+        try:
+            socket.push(
+                make_agent_link_frame(
+                    "chat.tool_status",
+                    {"state": "started", "safe_text": "Agent 正在自主处理。"},
+                    message_id="idle-1",
+                    session_id="session-test",
+                    reply_to="turn-absent",
+                )
+            )
+            socket.push(
+                make_agent_link_frame(
+                    "control.ping",
+                    message_id="barrier",
+                    session_id="session-test",
+                )
+            )
+            for _ in range(100):
+                await asyncio.sleep(0.02)
+                if any(
+                    frame["type"] == "control.pong" for frame in socket.sent
+                ):
+                    break
+            taken = adapter.take_idle_tool_statuses()
+        finally:
+            await adapter.close()
+
+        self.assertEqual(
+            taken,
+            (ToolStatus("started", "Agent 正在自主处理。"),),
+        )
+        self.assertEqual(adapter.take_idle_tool_statuses(), ())
+        self.assertNotIn(
+            "control.error",
+            [frame["type"] for frame in socket.sent],
+        )
+
+    async def test_idle_tool_status_queue_keeps_only_the_recent_burst(self):
+        from meapet.agent.link_protocol import make_agent_link_frame
+
+        adapter, socket = await self._connected_adapter_without_registry()
+        try:
+            for index in range(1, 21):
+                socket.push(
+                    make_agent_link_frame(
+                        "chat.tool_status",
+                        {"state": "running", "safe_text": f"状态-{index}"},
+                        message_id=f"idle-{index}",
+                        session_id="session-test",
+                        reply_to="turn-absent",
+                    )
+                )
+            socket.push(
+                make_agent_link_frame(
+                    "control.ping",
+                    message_id="barrier",
+                    session_id="session-test",
+                )
+            )
+            for _ in range(100):
+                await asyncio.sleep(0.02)
+                if any(
+                    frame["type"] == "control.pong" for frame in socket.sent
+                ):
+                    break
+            taken = adapter.take_idle_tool_statuses()
+        finally:
+            await adapter.close()
+
+        self.assertEqual(len(taken), 16)
+        self.assertEqual(taken[0].safe_text, "状态-5")
+        self.assertEqual(taken[-1].safe_text, "状态-20")
+
+    async def test_required_chat_frame_without_a_turn_returns_protocol_error(
+        self,
+    ):
+        from meapet.agent.link_protocol import make_agent_link_frame
+
+        adapter, socket = await self._connected_adapter_without_registry()
+        try:
+            socket.push(
+                make_agent_link_frame(
+                    "chat.delta",
+                    {"seq": 1, "text": "无回合增量", "required": True},
+                    message_id="delta-orphan",
+                    session_id="session-test",
+                    reply_to="turn-absent",
+                )
+            )
+            socket.push(
+                make_agent_link_frame(
+                    "control.ping",
+                    message_id="barrier",
+                    session_id="session-test",
+                )
+            )
+            for _ in range(100):
+                await asyncio.sleep(0.02)
+                if any(
+                    frame["type"] == "control.error" for frame in socket.sent
+                ):
+                    break
+        finally:
+            await adapter.close()
+
+        errors = [
+            frame for frame in socket.sent if frame["type"] == "control.error"
+        ]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["reply_to"], "delta-orphan")
+        self.assertEqual(errors[0]["payload"]["code"], "NO_ACTIVE_TURN")
+        self.assertIs(errors[0]["payload"]["retryable"], False)
+
+    async def test_optional_chat_frame_without_a_turn_stays_silent(self):
+        from meapet.agent.link_protocol import make_agent_link_frame
+
+        adapter, socket = await self._connected_adapter_without_registry()
+        try:
+            socket.push(
+                make_agent_link_frame(
+                    "chat.delta",
+                    {"seq": 1, "text": "无回合增量"},
+                    message_id="delta-optional",
+                    session_id="session-test",
+                    reply_to="turn-absent",
+                )
+            )
+            socket.push(
+                make_agent_link_frame(
+                    "control.ping",
+                    message_id="barrier",
+                    session_id="session-test",
+                )
+            )
+            for _ in range(100):
+                await asyncio.sleep(0.02)
+                if any(
+                    frame["type"] == "control.pong" for frame in socket.sent
+                ):
+                    break
+            taken = adapter.take_idle_tool_statuses()
+        finally:
+            await adapter.close()
+
+        self.assertEqual(taken, ())
+        self.assertNotIn(
+            "control.error",
+            [frame["type"] for frame in socket.sent],
+        )
+
+    async def test_chat_accepted_surfaces_as_a_status(self):
+        from meapet.agent.base import ToolStatus
+        from meapet.agent.link_protocol import make_agent_link_frame
+
+        def handler(socket: _Socket, frame: dict) -> None:
+            if frame["type"] == "control.hello":
+                socket.push(_ready(frame))
+            elif frame["type"] == "chat.submit":
+                socket.push(
+                    make_agent_link_frame(
+                        "chat.accepted",
+                        {},
+                        session_id=frame["session_id"],
+                        reply_to=frame["id"],
+                    )
+                )
+                socket.push(
+                    make_agent_link_frame(
+                        "chat.accepted",
+                        {"safe_text": "Agent 已接手，正在调用工具。"},
+                        session_id=frame["session_id"],
+                        reply_to=frame["id"],
+                    )
+                )
+                socket.push(
+                    make_agent_link_frame(
+                        "chat.delta",
+                        {"seq": 1, "text": _reply()},
+                        session_id=frame["session_id"],
+                        reply_to=frame["id"],
+                    )
+                )
+                socket.push(
+                    make_agent_link_frame(
+                        "chat.final",
+                        {},
+                        session_id=frame["session_id"],
+                        reply_to=frame["id"],
+                    )
+                )
+
+        from meapet.agent.agent_link import AgentLinkAdapter, AgentLinkConfig
+
+        socket = _Socket(handler)
+        adapter = AgentLinkAdapter(
+            AgentLinkConfig(
+                base_url="ws://127.0.0.1:8766/agent-link",
+                device_id="device-test",
+                session_id="session-test",
+                timeout_seconds=2,
+            ),
+            connector=_Connector(socket),
+        )
+        try:
+            events = [
+                event
+                async for event in adapter.stream_turn(
+                    AgentTurnRequest(turn_id="turn-1", user_text="你好")
+                )
+            ]
+        finally:
+            await adapter.close()
+
+        accepted = [
+            event.safe_text
+            for event in events
+            if isinstance(event, ToolStatus) and event.state == "accepted"
+        ]
+        self.assertEqual(
+            accepted,
+            ["Agent 已接手，正在处理。", "Agent 已接手，正在调用工具。"],
+        )
+
     async def test_reconnect_resends_active_chat_with_same_id(self):
         from meapet.agent.agent_link import AgentLinkAdapter, AgentLinkConfig
         from meapet.agent.link_protocol import make_agent_link_frame

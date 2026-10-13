@@ -504,7 +504,8 @@ MeaPet 发起一轮聊天：
 ```
 
 第三方可以先返回可选的 `chat.accepted`，其 `reply_to` 必须等于
-`chat.submit.id`。
+`chat.submit.id`。MeaPet 把它作为一条系统状态上屏，用来区分「还在排队」和
+「Agent 已接手」；`payload.safe_text` 缺失时使用「Agent 已接手，正在处理。」。
 
 ### 7.2 `chat.delta`
 
@@ -548,6 +549,12 @@ MeaPet 发起一轮聊天：
 ```
 
 不得在 `safe_text` 中包含内部工具参数、密钥、推理过程或未经清洗的工具结果。
+
+`chat.tool_status` 也可以不关联任何 MeaPet 回合（`reply_to` 指向一个不存在的
+回合），用于 Agent 自主运行时的进度播报。MeaPet 不丢弃这类消息，而是记入
+回合外状态队列并同样上屏；该队列只保留最近 16 条，超出后最旧一条被挤掉。
+其它 `chat.*` 在没有对应活跃回合时会被丢弃；若该消息 `payload.required=true`，
+MeaPet 返回 `control.error`，错误码为 `NO_ACTIVE_TURN`，`retryable=false`。
 
 ### 7.3 `chat.final`
 
@@ -675,6 +682,9 @@ MeaPet 返回 `control.pong`，并以 `reply_to=ping-1` 关联。
 第三方发送 `tools.refresh` 时，MeaPet 返回当前完整 `tools.snapshot`。未知的
 可选消息会被忽略；若未知消息在 `payload.required=true`，MeaPet 返回
 `control.error`，错误码为 `UNSUPPORTED_MESSAGE`。
+
+`chat.*` 在没有可承接的活跃回合、且 `payload.required=true` 时同样返回
+`control.error`，错误码为 `NO_ACTIVE_TURN`，`retryable=false`（见 7.2）。
 
 ## 10. MeaPet 能力如何转为 MCP 和 Agent Link Tool
 

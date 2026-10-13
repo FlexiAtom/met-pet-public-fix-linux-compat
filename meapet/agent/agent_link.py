@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections import OrderedDict
+import threading
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Any, AsyncIterator, Mapping
@@ -72,6 +73,7 @@ _SAFE_CATEGORIES = frozenset(
     }
 )
 _MAX_TERMINAL_TOOL_RESULTS = 32
+_MAX_IDLE_TOOL_STATUSES = 16
 
 
 def _package_version() -> str:
@@ -224,6 +226,10 @@ class AgentLinkAdapter:
         self._cancelled_turns: set[str] = set()
         self._tool_tasks: dict[str, asyncio.Task] = {}
         self._tool_terminal: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._idle_statuses: deque[ToolStatus] = deque(
+            maxlen=_MAX_IDLE_TOOL_STATUSES
+        )
+        self._idle_status_lock = threading.Lock()
         self._registry_sync_tasks: set[asyncio.Task] = set()
         self._transport = PersistentJsonWebSocket(
             config.base_url,
@@ -577,6 +583,25 @@ class AgentLinkAdapter:
             or str(frame.payload.get("request_id") or "").strip()
         )
 
+    def _tool_status_from_payload(
+        self,
+        payload: Mapping[str, object],
+    ) -> ToolStatus | None:
+        state_name = _safe_text(payload.get("state"), limit=64)
+        safe_status = _safe_text(payload.get("safe_text"), limit=300)
+        if not state_name or not safe_status:
+            return None
+        return ToolStatus(state_name, safe_status)
+
+    def take_idle_tool_statuses(self) -> tuple[ToolStatus, ...]:
+        """回合外 chat.tool_status 的出口；入队在读任务、出队在 Qt 主线程，故加锁。"""
+        with self._idle_status_lock:
+            if not self._idle_statuses:
+                return ()
+            taken = tuple(self._idle_statuses)
+            self._idle_statuses.clear()
+            return taken
+
     async def _dispatch_frame(self, raw: object) -> None:
         frame = AgentLinkFrame.parse(raw)
         if frame.session_id != self._remote_session_id:
@@ -618,10 +643,33 @@ class AgentLinkAdapter:
             self._cancel_tool_call(frame)
             return
         if frame.type.startswith("chat."):
-            target = self._frame_target(frame)
-            state = self._active.get(target)
+            state = self._active.get(self._frame_target(frame))
             if state is not None:
                 await state.queue.put(frame)
+                return
+            if frame.type == "chat.tool_status":
+                status = self._tool_status_from_payload(frame.payload)
+                if status is not None:
+                    with self._idle_status_lock:
+                        self._idle_statuses.append(status)
+                    return
+            if bool(frame.payload.get("required", False)):
+                await self._send_protocol(
+                    make_agent_link_frame(
+                        "control.error",
+                        {
+                            "code": "NO_ACTIVE_TURN",
+                            "safe_message": (
+                                "MeaPet 当前没有可承接该消息的回合。"
+                            ),
+                            "retryable": False,
+                        },
+                        session_id=self._remote_session_id,
+                        reply_to=frame.id,
+                        extensions=self.config.extensions,
+                    ),
+                    timeout=5.0,
+                )
             return
         if frame.type == "control.error":
             target = self._frame_target(frame)
@@ -997,18 +1045,18 @@ class AgentLinkAdapter:
                 if not isinstance(item, AgentLinkFrame):
                     continue
                 if item.type == "chat.accepted":
+                    yield ToolStatus(
+                        "accepted",
+                        _safe_text(
+                            item.payload.get("safe_text"), limit=300
+                        )
+                        or "Agent 已接手，正在处理。",
+                    )
                     continue
                 if item.type == "chat.tool_status":
-                    state_name = _safe_text(
-                        item.payload.get("state"),
-                        limit=64,
-                    )
-                    safe_status = _safe_text(
-                        item.payload.get("safe_text"),
-                        limit=300,
-                    )
-                    if state_name and safe_status:
-                        yield ToolStatus(state_name, safe_status)
+                    status = self._tool_status_from_payload(item.payload)
+                    if status is not None:
+                        yield status
                     continue
                 if item.type == "chat.delta":
                     sequence = item.payload.get("seq")
