@@ -5,8 +5,9 @@
 存在配置文件来判断是否是第一次使用）」——那句免责只有首用停留 10 秒才有人读得到，两件事是同一格。
 所以这里钉四件事：
 ① 文案逐字等于原话（我不许自己润色）；② 加载弹窗与关于页**都**挂着，且两处是同一句话；
-③ 版位没坏——关于页那句不设宽度约束时会把弹窗从 360 px 撑到 573 px（实测），长 URL 当可见文本时
-又需要 618 px 高而被 600 px 的屏夹出 8 px 重叠（实测），两种崩法都得有断言挡着；
+③ 版位没坏——关于页那句不设宽度约束时会把弹窗从 360 px 撑到 573 px（实测），长 URL 按默认字号
+铺成可见文本时又需要 618 px 高而被 600 px 的屏夹出 8 px 重叠（实测），两种崩法都得有断言挡着；
+URL 现在仍要在字面上看得见，但走的是次级行 `<small>`＋去 scheme 那一档（实测 387×583）；
 ④ 那句话在源码里只有**一处**字面量，防止有人复制一份后各自漂移。
 """
 from __future__ import annotations
@@ -175,9 +176,12 @@ class AcquisitionChannelsTest(unittest.TestCase):
     """关于页「获取渠道」那三条：人工 2026-10-10 点名的原话，一条不多一条不少。
 
     钉两件事：① 内容逐字（群号是人工 2026-10-10T15:34:59 点名的**审核群**那一个，更早流传的那个
-    号他判为过期，四处落点的收敛由下面 `GroupNumberConsistencyTest` 单独钉）；② 版位没坏。把 URL 当可见文本时关于页需要 618 px 高，offscreen
-    那块 600 px 的屏会把弹窗夹到 581 而使免责句与上一条**重叠 8 px**（实测），所以两条仓库
-    链接按上方致谢的同构形态渲染——URL 在 href 里，不在字面上。
+    号他判为过期，四处落点的收敛由下面 `GroupNumberConsistencyTest` 单独钉）；② 版位没坏。
+    URL 要能在字面上读出来（只挂在 href 里时，人不知道这一点会进哪家仓库），但按默认字号把长 URL
+    铺成可见文本时实测关于页需要 618 px 高，offscreen 那块 600 px 的屏会把弹窗夹到 581 而使免责句
+    与上一条**重叠 8 px**。现在的形态是次级行 `<small>`＋去掉 `https://`：实测 387×583（改前
+    360×581），行高仍压在 44 px 的触摸目标里——`test_url_is_visible_text_without_growing_the_dialog`
+    钉这一格。
     """
 
     EXPECTED = (
@@ -221,6 +225,28 @@ class AcquisitionChannelsTest(unittest.TestCase):
         for row, (_, url) in zip((trunk, linux), self.EXPECTED[1:]):
             self.assertIn(f'href="{url}"', row.text())
             self.assertTrue(row.openExternalLinks())
+
+    def test_url_is_visible_text_without_growing_the_dialog(self) -> None:
+        """URL 整串在字面上读得到，同时关于页不被撑高（次级行那一档）。"""
+        from meapet.desktop.dialogs import MIN_TARGET_SIZE
+
+        rows = self._rows()
+        for row, (_, url) in zip(rows[1:], self.EXPECTED[1:]):
+            with self.subTest(channel=row.accessibleName()):
+                self.assertIn(url.removeprefix("https://"), row.text())
+                self.assertIn(f'href="{url}"', row.text())
+                self.assertLessEqual(
+                    row.sizeHint().height(),
+                    MIN_TARGET_SIZE + 1,
+                    f"{row.accessibleName()} 两行小字越过 {MIN_TARGET_SIZE} px 触摸目标，"
+                    "关于页会长高、被那块屏夹出重叠",
+                )
+        self.assertLessEqual(
+            self.dialog.sizeHint().height(),
+            600,
+            f"关于页 sizeHint 高 {self.dialog.sizeHint().height()} px，"
+            "超过 offscreen 那块屏就会被夹",
+        )
 
     def test_no_row_is_clipped_or_overlapped(self) -> None:
         rows = self._rows() + [_notice_labels(self.dialog)[0]]

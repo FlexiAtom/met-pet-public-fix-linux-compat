@@ -1233,7 +1233,12 @@ class AboutDialog(QDialog):
 
         for label, value in ACQUISITION_CHANNELS:
             if value.startswith("http"):
-                row = QLabel(f'<a href="{value}">{label}</a>')
+                # URL 整串得看得见：只挂在 href 上时，人不知道这一点会进哪家仓库，也没法抄下来。
+                # 次级行 `<small>` 且去掉 `https://`：实测那行长 353 px，关于页 387×583（改前
+                # 360×581，只高 2 px）；留着 scheme 是 400 px 一行，关于页要宽到 427，越过
+                # `test_the_notice_does_not_bloat_the_dialog` 那条 400 px 守卫。
+                visible_url = value[len("https://"):] if value.startswith("https://") else value
+                row = QLabel(f'<a href="{value}">{label}</a><br><small>{visible_url}</small>')
                 row.setTextInteractionFlags(Qt.TextBrowserInteraction)
                 row.setOpenExternalLinks(True)
             else:
