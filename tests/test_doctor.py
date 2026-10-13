@@ -9,7 +9,8 @@
 - **探测自身失败要变成一行读数**，不许把 traceback 递给调用方（"无头"两个字判的就是这一格）；
 - **stdout 只有报告**——产品侧那些函数里有直接 print 的，取证期间得串到 stderr；
 - **两路 TTS 各一条，且吃 diagnostics 那一份真值**——doctor 里重算就是第二套真值；
-- **会碰外设的两档都要显式开关**（`--speech-latency` 起推理落 wav、`--probe-agent` 问 TCP 后
+- **会碰外设的每一档都要显式开关**（`--speech-latency` 起推理落 wav、`--speech-repetition`
+  再落一发 wav 另加一次只读 ASR 加载、`--probe-agent` 问 TCP 后
   才开一次 WebSocket 且只连回路）——默认档一格不动、一个包不发。
 
 除 `_port_open` 那条（它要的是真 socket，绑在回环上、不出这台机器）之外，全部遮掉真健康检查
@@ -51,6 +52,11 @@ BASE_ITEMS = [
     "input_thresholds",
     "log_tail",
 ]
+
+
+def _tts_reading_rows(names):
+    """`tts.` 前缀里的**读数**格；冲突回执不算（它专门在 skip 时才出现）。"""
+    return [n for n in names if n.startswith("tts.") and n != "tts.skipped_on_request"]
 
 
 class DoctorRequestedTest(unittest.TestCase):
@@ -121,7 +127,7 @@ class SpeechLatencyRowTest(unittest.TestCase):
             "meapet.tts.diagnostics.speech_latency", side_effect=AssertionError("skip 了就不该起")
         ):
             names = [item.name for item in doctor.collect({}, skip_tts=True, measure_speech=True)]
-        self.assertFalse([n for n in names if n.startswith("tts.")], names)
+        self.assertEqual(_tts_reading_rows(names), [], "跳过那一块时只许留冲突回执，不许留读数")
 
     def test_the_cli_flag_reaches_the_collector(self) -> None:
         self.assertTrue(doctor._parse_args(["--doctor", "--speech-latency"]).speech_latency)
@@ -131,6 +137,95 @@ class SpeechLatencyRowTest(unittest.TestCase):
         ):
             self.assertEqual(doctor.main(["--doctor", "--speech-latency"]), 0)
         self.assertTrue(collect.call_args.kwargs["measure_speech"])
+
+
+class SpeechRepetitionRowTest(unittest.TestCase):
+    """`--speech-repetition` 那两格：丁档读数，只挂在本入口上（菜单那一侧故意不调，见 diagnostics）。
+
+    钉的四件事与延迟那格同族，另加一条这一族独有的：**仪器起不来时一发合成都不能起**
+    （那一发 60–135 s，换不回任何读数）。判据本体在 diagnostics，这里只钉接线。
+    """
+
+    def test_default_run_never_enters_the_synth_or_the_asr(self) -> None:
+        with mock.patch(
+            "meapet.tts.diagnostics.speech_repetition",
+            side_effect=AssertionError("默认档不该起合成"),
+        ):
+            names = [item.name for item in doctor.collect({}, skip_tts=False, skip_layer=True)]
+        self.assertFalse([n for n in names if n.startswith("tts.repetition.")], names)
+
+    def test_the_flag_adds_one_row_per_engine_after_the_prerequisites(self) -> None:
+        with mock.patch("meapet.tts.service.MeaTTS.health_check", lambda self: False):
+            items = doctor.collect(
+                {}, skip_tts=False, skip_layer=True, measure_repetition=True
+            )
+        self.assertEqual(
+            [item.name for item in items if item.name.startswith("tts.")],
+            [
+                "tts.gpt_sovits",
+                "tts.vits",
+                "tts.repetition.gpt_sovits",
+                "tts.repetition.vits",
+            ],
+            "复读格排在两格前置之后：前面任何一格炸了都不该先付两分钟的合成钱",
+        )
+        for item in items:
+            if item.name.startswith("tts.repetition."):
+                self.assertTrue(item.judge, f"{item.name} 缺判据")
+                self.assertIn("未测：前置不齐", item.value)
+
+    def test_the_judge_names_both_what_it_reads_and_what_it_cannot(self) -> None:
+        """这一格最容易被读成"零复读＝念对了"，判据里必须当场写清它看不见哪一格。"""
+        with mock.patch("meapet.tts.service.MeaTTS.health_check", lambda self: False):
+            items = doctor.collect(
+                {}, skip_tts=False, skip_layer=True, measure_repetition=True
+            )
+        row = next(i for i in items if i.name == "tts.repetition.gpt_sovits")
+        for must in ("字种", "最长单字连读", "15/5/12", "1.02", "人耳", "中文"):
+            self.assertIn(must, row.judge, f"{must} 该写在判据里：读数脱了参照带与失读声明就没有读法")
+
+    def test_skip_tts_skips_the_most_expensive_rows_too(self) -> None:
+        with mock.patch(
+            "meapet.tts.diagnostics.speech_repetition",
+            side_effect=AssertionError("skip 了就不该起"),
+        ):
+            names = [
+                item.name for item in doctor.collect({}, skip_tts=True, measure_repetition=True)
+            ]
+        self.assertEqual(_tts_reading_rows(names), [], "跳过那一块时只许留冲突回执，不许留读数")
+
+    def test_the_cli_flag_reaches_the_collector(self) -> None:
+        self.assertTrue(
+            doctor._parse_args(["--doctor", "--speech-repetition"]).speech_repetition
+        )
+        self.assertFalse(doctor._parse_args(["--doctor"]).speech_repetition)
+        with mock.patch.object(doctor, "collect", return_value=[]) as collect, mock.patch(
+            "meapet.config.store.load_config", return_value={}
+        ):
+            self.assertEqual(doctor.main(["--doctor", "--speech-repetition"]), 0)
+        self.assertTrue(collect.call_args.kwargs["measure_repetition"])
+
+    def test_skip_tts_with_a_speech_flag_answers_instead_of_swallowing_the_request(self) -> None:
+        """两格合成住在 `not skip_tts` 里，只带 `--skip-tts` 时会整块跳过。
+
+        把显式请求静默吞掉正是本入口要消灭的形状（"点了没反应"），所以它自己占一行，
+        写成**冲突回执**而不是读数。
+        """
+        for flags in ({"measure_speech": True}, {"measure_repetition": True},
+                      {"measure_speech": True, "measure_repetition": True}):
+            with self.subTest(**flags):
+                items = doctor.collect({}, skip_tts=True, **flags)
+                names = [item.name for item in items]
+                self.assertIn("tts.skipped_on_request", names)
+                row = next(i for i in items if i.name == "tts.skipped_on_request")
+                self.assertIn("--skip-tts", row.value)
+                self.assertTrue(row.judge, "冲突回执也要有判据：它同样会被读成一条读数")
+
+    def test_plain_skip_tts_still_stays_out_of_the_tts_business(self) -> None:
+        """不带那两个开关时，`--skip-tts` 的形状一个字都不能变（那一格是默认排障路径）。"""
+        names = [item.name for item in doctor.collect({}, skip_tts=True)]
+        self.assertNotIn("tts.skipped_on_request", names)
+        self.assertEqual(names, BASE_ITEMS)
 
 
 class AgentChannelProbeTest(unittest.TestCase):

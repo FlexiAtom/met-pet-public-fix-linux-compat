@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 import types
 
@@ -21,7 +22,11 @@ from meapet.paths import (
     find_voice_asr_model_dir,
     normalize_voice_asr_precision,
 )
-from meapet.voice.engine import VoiceEngine, list_input_devices
+from meapet.voice.engine import (
+    VOICE_INPUT_SAMPLE_RATE,
+    VoiceEngine,
+    list_input_devices,
+)
 
 
 # ----------------------------------------------------------------------
@@ -395,3 +400,240 @@ def test_engine_receives_both_new_keys_from_config(monkeypatch):
         "precision": "fp32",
         "input_device_index": 7,
     }
+
+
+# ----------------------------------------------------------------------
+# 取证用的那副耳朵：模型构造与"转写盘上一个 wav"
+# ----------------------------------------------------------------------
+
+
+class _FakeStream:
+    def __init__(self, sink: dict):
+        self._sink = sink
+
+    def accept_waveform(self, sample_rate, samples):
+        self._sink["sample_rate"] = sample_rate
+        self._sink["samples"] = samples
+        self._sink["peak"] = float(max(abs(float(v)) for v in samples)) if len(samples) else 0.0
+
+    def input_finished(self):
+        # 补静音会让流式模型复读；取证那一发悄悄补了尾，读到的连读长度就是假的
+        self._sink["input_finished"] = True
+
+
+class _FakeRecognizer:
+    """只记"喂进来什么"，转写串由外部给定。
+
+    `is_ready` 只放行一次：解码循环真跑一轮，读数才有"确实解过"的形状，而不是桩自己返回的。
+    """
+
+    def __init__(self, result: str = "你好"):
+        self._result = result
+        self.sink: dict = {"input_finished": False, "decodes": 0}
+        self._ready = 1
+
+    def create_stream(self):
+        return _FakeStream(self.sink)
+
+    def is_ready(self, _stream):
+        return self._ready > 0
+
+    def decode_stream(self, _stream):
+        self._ready -= 1
+        self.sink["decodes"] += 1
+
+    def get_result(self, _stream):
+        return self._result
+
+
+def _install_fake_sherpa(monkeypatch, sink: dict):
+    """把 `sherpa_onnx` 换成只记参数的桩，返回被调用的 kwargs。"""
+
+    class _OnlineRecognizer:
+        @staticmethod
+        def from_transducer(**kwargs):
+            sink.update(kwargs)
+            return _FakeRecognizer()
+
+    module = types.SimpleNamespace(OnlineRecognizer=_OnlineRecognizer)
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", module)
+    return sink
+
+
+def test_build_recognizer_uses_the_product_parameters_not_a_headless_copy(tmp_path, monkeypatch):
+    """无头取证与录音那一路**共用这一枚构造**：换掉任何一项参数就换一种坏法。
+
+    这里钉的是那五项实测出来的形状（greedy_search / feature_dim=80 / provider=cpu /
+    num_threads=4 / 采样率），不是"看起来像"。
+    """
+    from meapet.voice import engine as engine_module
+
+    tier = VOICE_ASR_PRECISION_DEFAULT
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    sink = _install_fake_sherpa(monkeypatch, {})
+    monkeypatch.setattr(engine_module, "find_voice_asr_model_dir", lambda _p: str(model_dir))
+
+    engine_module.build_recognizer(tier)
+
+    files = VOICE_ASR_MODEL_FILES[tier]
+    for key in ("encoder", "decoder", "joiner", "tokens"):
+        assert sink[key] == os.path.join(str(model_dir), files[key])
+    assert sink["decoding_method"] == "greedy_search"
+    assert sink["feature_dim"] == 80
+    assert sink["provider"] == "cpu"
+    assert sink["num_threads"] == 4
+    assert sink["sample_rate"] == VOICE_INPUT_SAMPLE_RATE
+
+
+def test_build_recognizer_names_the_missing_tier_instead_of_returning_none(monkeypatch):
+    """`None` 与"缺哪一档"是两种处置（下模型 / 重装），取证侧要把它们分开报。"""
+    from meapet.voice import engine as engine_module
+
+    monkeypatch.setattr(engine_module, "find_voice_asr_model_dir", lambda _p: None)
+    with pytest.raises(engine_module.AsrModelMissing, match="int8"):
+        engine_module.build_recognizer("int8")
+
+
+def test_record_path_and_forensics_share_one_decode(monkeypatch, tmp_path):
+    """红线：**不许出现第二套解码**。两处各写一份，录音与取证就各按各的坏法出串。"""
+    from meapet.voice import engine as engine_module
+
+    calls: list = []
+    monkeypatch.setattr(
+        engine_module,
+        "_decode_samples",
+        lambda recognizer, samples, sample_rate: calls.append(len(samples)) or "同一个桩",
+    )
+    wav = _write_wav(tmp_path / "a.wav", rate=VOICE_INPUT_SAMPLE_RATE, frames=8000)
+
+    assert engine_module.transcribe_wav(wav, _FakeRecognizer()) == "同一个桩"
+
+    thread = engine_module.VoiceEngine()
+    thread._recognizer = _FakeRecognizer()
+    thread._audio_frames = [b"\0\0" * 8000]
+    assert thread._transcribe() == "同一个桩"
+    assert len(calls) == 2, "两路都该走 _decode_samples，而不是各解各的"
+
+
+def test_transcribe_wav_resamples_the_artifact_to_the_models_rate(tmp_path):
+    """合成产物是 22.05/32/44.1 kHz，模型只吃 16 kHz。
+
+    不重采样也能跑，但读出来的串是"模型被喂了错采样率之后吐出来的"，不是这台仪器的读数。
+    """
+    from meapet.voice import engine as engine_module
+
+    wav = _write_wav(tmp_path / "32k.wav", rate=32000, frames=32000)  # 1 秒
+    recognizer = _FakeRecognizer()
+
+    assert engine_module.transcribe_wav(wav, recognizer) == "你好"
+    assert recognizer.sink["sample_rate"] == VOICE_INPUT_SAMPLE_RATE
+    assert abs(len(recognizer.sink["samples"]) - 16000) <= 1, "1 s @32k 该重采成 16k"
+    assert recognizer.sink["input_finished"] is True
+    assert recognizer.sink["decodes"] == 1
+
+
+def test_transcribe_wav_scales_int16_to_float_and_averages_channels(tmp_path):
+    """`-32768..32767 → -1..1` 是 sherpa 那一侧的口径；立体声取均值，不是取左声道。"""
+    from meapet.voice import engine as engine_module
+
+    mono = _write_wav(tmp_path / "mono.wav", rate=16000, frames=16000, value=16384)
+    recognizer = _FakeRecognizer()
+    engine_module.transcribe_wav(mono, recognizer)
+    assert recognizer.sink["peak"] == pytest.approx(0.5, abs=1e-4)
+
+    stereo = _write_wav(
+        tmp_path / "stereo.wav", rate=16000, frames=16000, channels=2, value=16384
+    )
+    recognizer = _FakeRecognizer()
+    engine_module.transcribe_wav(stereo, recognizer)
+    assert len(recognizer.sink["samples"]) == 16000, "两声道要折成一路，不能喂 32000 点"
+    assert recognizer.sink["peak"] == pytest.approx(0.5, abs=1e-4)
+
+
+def test_transcribe_wav_strips_the_sil_token(tmp_path):
+    from meapet.voice import engine as engine_module
+
+    wav = _write_wav(tmp_path / "a.wav", rate=16000, frames=16000)
+    assert engine_module.transcribe_wav(wav, _FakeRecognizer("你好 SIL 我是")) == "你好我是"
+
+
+def test_transcribe_wav_returns_empty_for_audio_shorter_than_the_record_path(tmp_path):
+    """不足 0.25 s 与录音那一路同判：不喂。
+
+    这一格必须有：塌到 1 s 以内那几发读的是"一个字都没念出来"，而"太短不读"与"模型没出声"
+    在报告里不能长成同一句话——所以短到不喂也要**认得出是没喂**（空串），不是异常。
+    """
+    from meapet.voice import engine as engine_module
+
+    wav = _write_wav(tmp_path / "tiny.wav", rate=16000, frames=1600)  # 0.1 s
+    recognizer = _FakeRecognizer()
+    assert engine_module.transcribe_wav(wav, recognizer) == ""
+    assert recognizer.sink["decodes"] == 0
+
+
+def test_transcribe_wav_refuses_a_bit_depth_it_cannot_read(tmp_path):
+    """认不出的位深读出来是"字种 0/0"那种假读数，不如当场说清格式不对。"""
+    import wave as _wave
+
+    path = str(tmp_path / "float.wav")
+    with _wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(3)  # 24-bit
+        handle.setframerate(16000)
+        handle.writeframes(b"\0\0\0" * 16000)
+    from meapet.voice import engine as engine_module
+
+    with pytest.raises(ValueError, match="24-bit"):
+        engine_module.transcribe_wav(path, _FakeRecognizer())
+
+
+def test_transcribe_wav_reads_the_float32_artifact_vits_actually_writes(tmp_path):
+    """这一格是**真读数踩出来的**：VITS 那一路的产物是 `fmt=3`（32-bit float），stdlib `wave`
+    当场抛 `Error: unknown format: 3`，于是这台仪器在口径里唯一保证正常的那一臂上是瞎的
+    （`只保证VITS的zh正常`）——只剩塌句那一臂，参照带就没法比。
+
+    这里同时钉两件事：float 样本**不能再除 32768**（除了就成静音，读数是"零复读"的假清白），
+    以及 `wav_duration_seconds` 读同一份文件要给出秒数而不是 0.00s。
+    """
+    from meapet.tts.diagnostics import wav_duration_seconds
+    from meapet.voice import engine as engine_module
+
+    path = _write_float_wav(tmp_path / "vits.wav", rate=16000, samples=[0.25] * 16000)
+    recognizer = _FakeRecognizer("你好")
+    assert engine_module.transcribe_wav(path, recognizer) == "你好"
+    assert recognizer.sink["peak"] == pytest.approx(0.25), "float 样本被当整数缩放了"
+    assert recognizer.sink["decodes"] == 1
+    assert wav_duration_seconds(path) == pytest.approx(1.0)
+
+
+def _write_float_wav(path, *, rate, samples):
+    """按 VITS 那一路的形状手写一份 `fmt=3` wav（stdlib `wave` 写不出 float）。"""
+    import struct
+
+    payload = b"".join(struct.pack("<f", float(v)) for v in samples)
+    header = (
+        b"RIFF"
+        + struct.pack("<I", 36 + len(payload))
+        + b"WAVE"
+        + b"fmt "
+        + struct.pack("<IHHIIHH", 16, 3, 1, rate, rate * 4, 4, 32)
+        + b"data"
+        + struct.pack("<I", len(payload))
+    )
+    path.write_bytes(header + payload)
+    return str(path)
+
+
+def _write_wav(path, *, rate, frames, channels=1, value=0):
+    import wave as _wave
+
+    import numpy as np
+
+    raw = np.full(frames * channels, value, dtype=np.int16)
+    with _wave.open(str(path), "wb") as handle:
+        handle.setnchannels(channels)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(raw.tobytes())
+    return str(path)

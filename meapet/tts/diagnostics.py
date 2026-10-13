@@ -114,6 +114,33 @@ def speech_test_language_label(lang: object = "") -> str:
     return SPEECH_TEST_LANGUAGE_LABELS.get(code, code)
 
 
+def repetition_facts(text: object) -> str:
+    """把一段 ASR 转写折成两列：`字种 不同/总数` 与 `最长单字连读`。
+
+    来源是 `~/.Athena/projects/meapet/pool/gsv-chinese-output-token-repetition.md` §2 那张表的
+    最后两列（人工 2026-10-13T05:35 未拦的**丁档**：只把这条读数挂进取证面，选路与资产都不动）。
+    这两列量的是**复读崩环**——默认短参考那三发是 15/5/12，补长参考后整族掉到 1–2。
+
+    **它量不到的那一格更要写清楚**：(h) 那发读数是 9/9、最长连读 1（**零复读**），而人工耳朵判
+    「后半存在崩坏」⇒ 零复读不等于念对，更不等于念全。调用方把这串当**初筛**贴，别当判据。
+    """
+    chars = [ch for ch in str(text or "") if not ch.isspace()]
+    if not chars:
+        return "字种 空（转写为空）· 最长单字连读 0"
+    longest_char = chars[0]
+    longest_run = 1
+    run_char = chars[0]
+    run = 1
+    for ch in chars[1:]:
+        if ch == run_char:
+            run += 1
+        else:
+            run_char, run = ch, 1
+        if run > longest_run:
+            longest_char, longest_run = run_char, run
+    return f"字种 {len(set(chars))}/{len(chars)} · 最长单字连读 {longest_run}（{longest_char}）"
+
+
 #: 延迟那格每引擎烧几发。写两发不是为了取平均，是为了把"模型加载"和"页缓存暖了"这两笔
 #: 成本分开看——见 `speech_latency` 的说明。
 SPEECH_LATENCY_RUNS = 2
@@ -150,4 +177,85 @@ def speech_latency(engine: str, tts) -> str:
         + f" · 配置: 文本={lang}:{len(sentence)}字"
         + f" timeout={getattr(tts, 'timeout', None)}/{getattr(tts, 'gsv_timeout', '—')}"
         + f" · {speech_facts(engine, tts)}"
+    )
+
+
+#: 复读读数**钉 zh 那一句**，不跟着 `tts.voice_lang` 取句：仓里这台是 **zh-en 双语** zipformer
+#: （`meapet/paths.py:60`），日文那档「这台仪器既不能证也不能伪」（池项 §6.4）。拿它转写日文产物
+#: 读出来的"零复读"是仪器失读，不是模型的清白——所以这一格只在中文上说话。
+REPETITION_PROBE_SENTENCE = SPEECH_TEST_SENTENCES["zh"]
+
+
+def wav_duration_seconds(path: object) -> float:
+    """wav 秒数，读不出来给 0.0。**本案那张表的第一列**：塌到 1.02 s 那种判据全靠它。
+
+    走 `meapet.voice.engine.read_wav_samples` 那一份头解析，不在这里再开一个 `wave`：
+    两臂的产物格式不同（GSV=16-bit PCM、VITS=32-bit float），stdlib `wave` 只读得动前者，
+    于是"秒数"这一列会在**唯一保证正常的那一臂**上静默报 0.00s——那是读数不成立却长得像成立。
+    """
+    from meapet.voice.engine import read_wav_samples
+
+    try:
+        samples, rate = read_wav_samples(str(path))
+    except Exception:  # noqa: BLE001 - 取证面不往外递异常
+        return 0.0
+    return samples.size / rate if rate > 0 else 0.0
+
+
+def speech_repetition(engine: str, tts, config: dict) -> str:
+    """合成一句中文 → 用仓内那台 ASR 转写 → 报「字种/连读」两列（丁档：只加读数，不动选路）。
+
+    两道闸都在合成**之前**，因为这一发在这台 CPU 上是 60–135 s（池项 §2 墙钟实测）：
+    前置不齐不发（注定失败的合成不是读数），ASR 起不来也不发（没仪器就别付合成的钱）。
+    转写走 `meapet.voice.engine` 那**一副**参数（`build_recognizer`/`transcribe_wav`），
+    doctor 侧不另立第二套 `from_transducer`——换参数就换一种坏法，两处各写等于两只耳朵。
+
+    **串里没有"可懂度"**：这台只数得出复读塌没塌，数不出念对没有（(h) 那发 9/9 零复读而耳朵判
+    「后半存在崩坏」，池项 §6.4）。那一格的主判据是人工的耳朵，读数只负责决定值不值得去听。
+
+    **菜单那一侧故意不调它**（丁档写的是「`--doctor` / 菜单气泡」，我落前者）：`build_recognizer`
+    要在调用进程里加载一份 zipformer，菜单跑在 GUI 进程，点一下调试键就多吃几秒与几百 MB；
+    而菜单已经给他**耳朵**那一格了，读数再挤进同一个气泡只会被读成判词。
+    """
+    if not getattr(tts, "enabled", False) or not tts.health_check():
+        return "未测：前置不齐（起一发要 60–135 s，注定失败的那一发不开）"
+
+    from meapet.voice.engine import AsrModelMissing, build_recognizer, transcribe_wav
+
+    precision = ((config or {}).get("voice_input") or {}).get("precision")
+    try:
+        recognizer = build_recognizer(precision)
+    except AsrModelMissing as exc:
+        return f"未测：{exc}（一发合成都没烧）"
+    except Exception as exc:  # noqa: BLE001 - 取证面不往外递异常
+        return f"未测：ASR 起不来 {type(exc).__name__}: {exc}（一发合成都没烧）"
+
+    sentence = REPETITION_PROBE_SENTENCE
+    started = time.monotonic()
+    try:
+        result = tts.speak(sentence)
+    except Exception as exc:  # noqa: BLE001 - 取证面不往外递异常
+        return f"未产出：探测自身失败 {type(exc).__name__}: {exc}"
+    synth_seconds = time.monotonic() - started
+    path = result[0] if isinstance(result, tuple) and result else None
+    if not path or not os.path.isfile(path):
+        return (
+            f"未产出（合成 {synth_seconds:.1f}s）：那一发没落盘 ⇒ 没有可转写的东西，"
+            f"复读读数不成立 · {speech_facts(engine, tts)}"
+        )
+
+    asr_started = time.monotonic()
+    try:
+        transcript = transcribe_wav(path, recognizer)
+    except Exception as exc:  # noqa: BLE001 - 取证面不往外递异常
+        return (
+            f"转写失败 {type(exc).__name__}: {exc} · 产物={os.path.basename(path)}"
+            f"({os.path.getsize(path)}B/{wav_duration_seconds(path):.2f}s)"
+        )
+    asr_seconds = time.monotonic() - asr_started
+    return (
+        f"{repetition_facts(transcript)} · 转写=「{transcript or '空'}」"
+        f" · 产物={os.path.basename(path)}({os.path.getsize(path)}B/{wav_duration_seconds(path):.2f}s)"
+        f" · 配置: 文本=zh:{len(sentence)}字 合成={synth_seconds:.1f}s ASR={asr_seconds:.1f}s"
+        f" · {speech_facts(engine, tts)}"
     )

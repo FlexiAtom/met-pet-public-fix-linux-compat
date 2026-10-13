@@ -6,7 +6,9 @@
   import/模块规格探测。（`--with-gui` 会建一个 Qt 应用对象去取屏幕几何与输入阈值那两格——那是显式
   opt-in，默认关着：无显示服务时建 Qt 应用不是抛异常，是 abort，catch 不到。）
   唯一的**写侧**例外是 `--speech-latency`：它真起推理子进程并往 `tts.output_dir` 落 wav
-  （合成不播放，所以不出声）。默认档一条都不跑，因为那一发按引擎是十几秒到两分钟。
+  （合成不播放，所以不出声）。`--speech-repetition` 走的是**同一个消费者**（再落一发 wav），
+  另加一道只读外设：加载仓内那台 sherpa-onnx 中文模型把产物转成字面串。默认档一条都不跑，
+  因为那一发按引擎是十几秒到两分钟。
   另有一档**外设**例外是 `--probe-agent`：它先问一次 TCP 端口在不在听，在听才真开一次 WebSocket
   去问 gateway 在不在场，且**只连回路**（127.0.0.1/::1/localhost），非回路端点报"未连接"而不去连——
   往外发请求不在这个入口的授权里。默认档同样一次都不发。
@@ -96,6 +98,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--speech-latency",
         action="store_true",
         help="每路引擎再各真合成两发并报逐发秒数（本入口唯一的写侧：起推理子进程 + 落 wav，不播放）",
+    )
+    parser.add_argument(
+        "--speech-repetition",
+        action="store_true",
+        help="每路引擎各真合成一发**中文**并用仓内 ASR 转写，报「字种/最长单字连读」两列"
+             "（复读崩环初筛；除落 wav 外还加载一次只读 ASR 模型，两档都要显式带）",
     )
     parser.add_argument(
         "--probe-agent",
@@ -420,6 +428,12 @@ def _tts_latency(config: dict, engine: str) -> str:
     from meapet.tts.diagnostics import speech_latency, tts_for_engine
 
     return speech_latency(engine, tts_for_engine(config, engine))
+
+
+def _tts_repetition(config: dict, engine: str) -> str:
+    from meapet.tts.diagnostics import speech_repetition, tts_for_engine
+
+    return speech_repetition(engine, tts_for_engine(config, engine), config)
 
 
 #: `--probe-agent` 那一发的总预算（秒）。三家适配器自己的 `timeout_seconds` 是内层闸，
@@ -883,13 +897,15 @@ def _log_tail(lines: int = 5) -> str:
 
 def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             skip_layer: bool = False, measure_speech: bool = False,
+            measure_repetition: bool = False,
             probe_agent: bool = False, probe_sources: tuple[str, ...] = (),
             probe_posts: tuple[str, ...] = (), probe_body: str = "",
             probe_headers: tuple[str, ...] = (), probe_family: str = "auto",
             allow_egress: bool = False) -> list[Item]:
     """跑一遍探测，返回逐项读数（任何一项坏都会变成一行文本，不抛）。
 
-    带 `measure_speech` / `probe_agent` / `probe_sources`|`probe_posts` 那三档时才跑会动手的格
+    带 `measure_speech` / `measure_repetition` / `probe_agent` / `probe_sources`|`probe_posts`
+    那几档时才跑会动手的格
     （起子进程落 wav / 真开一次 WebSocket / 真发一次 GET 或 POST）；默认三档都不动，一格不碰、
     一个包不发。`probe_sources` 与 `probe_posts` 只连回路，除非同时显式带 `allow_egress`
     （那是"新增外联"，须人工点头）。
@@ -978,6 +994,17 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
     ]
     if skip_layer:
         items = [item for item in items if item.name != "layer_shim"]
+    if skip_tts and (measure_speech or measure_repetition):
+        # 这两个开关的格子住在 `not skip_tts` 那一块里，只带 `--skip-tts` 时会被整块跳过。
+        # 静默吞掉 explicit 请求正是本入口要消灭的那个形状（"点了没反应"），所以它得自己占一行。
+        items.append(
+            Item(
+                name="tts.skipped_on_request",
+                value="没跑：--skip-tts 把 --speech-latency / --speech-repetition 要的格一起跳了",
+                judge="这一格是**冲突回执**不是读数：两个开关都要真起合成，而 --skip-tts 说的正是"
+                      "「一行 TTS 都不要」。想拿这两格的读数就别带 --skip-tts；带着它就是放弃它们",
+            )
+        )
     if not skip_tts:
         # 两路各探一次：engine 那格在配置里只能是一个值，而两路的坏法完全不同
         # （GSV 坏在解释器与依赖，VITS 坏在权重水化），合起来看只会互相遮蔽。
@@ -1001,6 +1028,25 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                         "每发都含模型加载（两引擎都是每句新起进程），第二发暖的只是页缓存；"
                         "秒数必须与同一串里的配置一起读，换个选路/权重/CPU 或 GPU 这数就翻几倍",
                         lambda eng=engine: _tts_latency(config, eng),
+                    )
+                )
+        if measure_repetition:
+            # 与延迟同一格位置：它也烧一发真合成（60–135 s），所以同样排在所有便宜格之后。
+            for engine in ("gpt_sovits", "vits"):
+                items.append(
+                    _probe(
+                        f"tts.repetition.{engine}",
+                        "丁档读数（池项 gsv-chinese-output-token-repetition §6.2）：真合成**一句中文**、"
+                        "再用仓内那台 zh-en 流式 zipformer 转写成字面串，报两列——"
+                        "「字种 不同/总」与「最长单字连读」。**参照带**：这台随包短参考默认档是 15/5/12，"
+                        "补到 ≥6.3 s 的参考后整族掉到 1–2（治复读）；塌句的另一格看**产物秒数**，"
+                        "同一句四枚 seed 里有三枚停在 1.02 s。"
+                        "**这一格看不见的**：可懂度与「念全没有」——(h) 那发 9/9 零复读而人耳判「后半存在崩坏」，"
+                        "① 那发命中两组词而只念出半句。所以它只回答「值不值得去听一次」，"
+                        "内容那一档的主判据仍是人工耳朵（口径「只保证VITS的zh正常，其他的只保证出动静」）。"
+                        "转写只认 zh/en：日文产物在这台仪器上的「零复读」是仪器失读、不是模型的清白，"
+                        "所以这一格钉死中文句、不跟着 tts.voice_lang 走",
+                        lambda eng=engine: _tts_repetition(config, eng),
                     )
                 )
     if probe_agent:
@@ -1073,7 +1119,8 @@ def main(argv: list[str] | None = None) -> int:
     with contextlib.redirect_stdout(sys.stderr):
         items = collect(
             config, with_gui=args.with_gui, skip_tts=args.skip_tts, skip_layer=args.skip_layer,
-            measure_speech=args.speech_latency, probe_agent=args.probe_agent,
+            measure_speech=args.speech_latency, measure_repetition=args.speech_repetition,
+            probe_agent=args.probe_agent,
             probe_sources=tuple(args.probe_source), probe_posts=tuple(args.probe_post),
             probe_body=args.probe_body, probe_headers=tuple(args.probe_header),
             probe_family=args.probe_family, allow_egress=args.allow_egress,

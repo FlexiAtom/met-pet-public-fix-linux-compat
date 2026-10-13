@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 import traceback
 from typing import Optional
 
@@ -26,6 +27,122 @@ log = get_color_logger("voice")
 
 # 识别器与采集共用的采样率：设备的可用性按它探测，向导文案也按它标注，别两处各写一个数。
 VOICE_INPUT_SAMPLE_RATE = 16000
+
+
+class AsrModelMissing(RuntimeError):
+    """档位对应的模型不在盘上。取证侧要把它与"加载失败"分开报——处置完全不同（下模型 / 重装）。"""
+
+
+def build_recognizer(precision: object = None, sample_rate: int = VOICE_INPUT_SAMPLE_RATE):
+    """按产品那一份模型表造流式识别器；模型缺席抛 `AsrModelMissing`，sherpa 没装抛 `ImportError`。
+
+    录音那一路（`VoiceEngine._load_model`）与无头取证（`tts.diagnostics.speech_repetition`）
+    共用这一枚：`from_transducer` 那几项（int8 档、greedy_search、feature_dim=80）换掉任何一项，
+    转写串就换一种坏法，两处各写一份等于给同一只耳朵立两副参数。
+    """
+    import sherpa_onnx
+
+    chosen = normalize_voice_asr_precision(precision)
+    model_dir = find_voice_asr_model_dir(chosen)
+    if model_dir is None:
+        raise AsrModelMissing(f"语音识别模型缺失（{chosen} 档）")
+    files = VOICE_ASR_MODEL_FILES[chosen]
+    log.info(f"[voice] loading sherpa-onnx zipformer zh-en model ({chosen})...")
+    recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+        encoder=os.path.join(model_dir, files["encoder"]),
+        decoder=os.path.join(model_dir, files["decoder"]),
+        joiner=os.path.join(model_dir, files["joiner"]),
+        tokens=os.path.join(model_dir, files["tokens"]),
+        num_threads=4,
+        provider="cpu",
+        sample_rate=sample_rate,
+        feature_dim=80,
+        decoding_method="greedy_search",
+    )
+    log.info("[voice] model loaded successfully")
+    return recognizer
+
+
+def _decode_samples(recognizer, samples, sample_rate: int) -> str:
+    """把 float32 单声道样本整块喂进去，取回转写串（SIL 清掉）。
+
+    流式模型走"全量 + `input_finished`"，**不补额外静音**——补了会让它复读（这一格是实测踩出来的，
+    见 `meapet/voice/engine.py` 旧版注释），取证那一发要是悄悄补了尾，读到的连读长度就是假的。
+    """
+    stream = recognizer.create_stream()
+    stream.accept_waveform(sample_rate, samples)
+    stream.input_finished()
+    while recognizer.is_ready(stream):
+        recognizer.decode_stream(stream)
+    result = recognizer.get_result(stream).strip()
+    # 清理 SIL token（\b 对中文无效，直接用简单替换）
+    return re.sub(r"\s*SIL\s*", "", result).strip()
+
+
+def read_wav_samples(wav_path: str):
+    """把一个 wav 读成 `(float32 单声道 [-1,1], 采样率)`——RIFF chunk 自己走一遍。
+
+    不用 stdlib `wave`，因为它到这一格就不够了：VITS 那一路的产物是 `fmt=3`（32-bit IEEE float），
+    `wave.open` 直接抛 `Error: unknown format: 3`。而这台仪器偏偏要读**两臂**——口径
+    「只保证VITS的zh正常」里那一臂就是它读不了的这份。认两种就够：16-bit PCM（GSV 那一路）、
+    32-bit float（VITS 那一路）；**其余按 `fmt`/位深报出去，不静默回零**。
+    """
+    import numpy as np
+
+    with open(wav_path, "rb") as handle:
+        blob = handle.read()
+    if len(blob) < 12 or blob[:4] != b"RIFF" or blob[8:12] != b"WAVE":
+        raise ValueError("不是 RIFF/WAVE 文件")
+    fmt = data = None
+    pos = 12
+    while pos + 8 <= len(blob):
+        tag = blob[pos:pos + 4]
+        size = int.from_bytes(blob[pos + 4:pos + 8], "little")
+        body = blob[pos + 8:pos + 8 + size]
+        if tag == b"fmt " and fmt is None:
+            fmt = body
+        elif tag == b"data" and data is None:
+            data = body
+        pos += 8 + size + (size & 1)
+    if fmt is None or data is None or len(fmt) < 16:
+        raise ValueError("这份 wav 缺 fmt 或 data chunk")
+    form = int.from_bytes(fmt[0:2], "little")
+    channels = max(int.from_bytes(fmt[2:4], "little"), 1)
+    rate = int.from_bytes(fmt[4:8], "little")
+    bits = int.from_bytes(fmt[14:16], "little")
+    frame_bytes = channels * max(bits // 8, 1)
+    if frame_bytes > 1:
+        # 尾上那半帧不收：`frombuffer`/`reshape` 都会为它抛，而抛出来的不是"这份截断了"
+        data = data[: len(data) - len(data) % frame_bytes]
+    if form == 1 and bits == 16:
+        samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+    elif form == 3 and bits == 32:
+        samples = np.frombuffer(data, dtype="<f4").astype(np.float32)
+    else:
+        raise ValueError(f"只支持 16-bit PCM 与 32-bit float，这份是 fmt={form} {bits}-bit")
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+    return samples.astype(np.float32), rate
+
+
+def transcribe_wav(wav_path: str, recognizer, sample_rate: int = VOICE_INPUT_SAMPLE_RATE) -> str:
+    """转写**盘上的一个 wav**（取证用），与录音那一路共用同一个识别器与同一段解码。
+
+    取样走 `read_wav_samples`（GSV 是 16-bit PCM、VITS 是 32-bit float，两种都得读）。
+    采样率不同就线性插值到 `sample_rate`——合成产物是 22.05/32 kHz，模型只吃 16 kHz，
+    这一步不做的话读数不是"这台仪器读出来的"，是"模型被喂了错采样率之后吐出来的"。
+    太短（不足 0.25 s）与录音那一路同判，返回空串。
+    """
+    import numpy as np
+
+    samples, rate = read_wav_samples(wav_path)
+    if rate != sample_rate and rate > 0 and samples.size:
+        points = np.linspace(0, samples.size - 1, int(samples.size * sample_rate / rate))
+        samples = np.interp(points, np.arange(samples.size), samples).astype(np.float32)
+    if samples.size < sample_rate // 4:
+        log.warning("[voice] audio too short, skipping")
+        return ""
+    return _decode_samples(recognizer, samples, sample_rate)
 
 
 def _device_supports_input(p_audio, index: int, sample_rate: int, channels: int) -> bool:
@@ -262,34 +379,14 @@ class VoiceEngine(QThread):
             return True
 
         try:
-            import sherpa_onnx
-
-            model_dir = find_voice_asr_model_dir(self._precision)
-            if model_dir is None:
-                self.error.emit(
-                    f"语音识别模型缺失（{self._precision} 档），请在配置页下载"
-                )
-                return False
-            files = VOICE_ASR_MODEL_FILES[self._precision]
-            log.info(
-                f"[voice] loading sherpa-onnx zipformer zh-en model ({self._precision})..."
-            )
-            self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
-                encoder=os.path.join(model_dir, files["encoder"]),
-                decoder=os.path.join(model_dir, files["decoder"]),
-                joiner=os.path.join(model_dir, files["joiner"]),
-                tokens=os.path.join(model_dir, files["tokens"]),
-                num_threads=4,
-                provider="cpu",
-                sample_rate=self._sample_rate,
-                feature_dim=80,
-                decoding_method="greedy_search",
-            )
-            log.info("[voice] model loaded successfully")
+            self._recognizer = build_recognizer(self._precision, self._sample_rate)
             return True
 
         except ImportError:
             self.error.emit("sherpa-onnx 未安装，请在配置页下载依赖")
+            return False
+        except AsrModelMissing as exc:
+            self.error.emit(f"{exc}，请在配置页下载")
             return False
         except Exception as exc:
             self.error.emit(f"模型加载失败: {exc}")
@@ -318,18 +415,7 @@ class VoiceEngine(QThread):
                 .astype(np.float32)
                 / 32768.0
             )
-
-            # 流式模型：全量喂入 + input_finished，不补额外静音（避免复读）
-            stream = self._recognizer.create_stream()
-            stream.accept_waveform(self._sample_rate, samples)
-            stream.input_finished()
-            while self._recognizer.is_ready(stream):
-                self._recognizer.decode_stream(stream)
-
-            result = self._recognizer.get_result(stream).strip()
-            # 清理 SIL token（\b 对中文无效，直接用简单替换）
-            import re
-            result = re.sub(r'\s*SIL\s*', '', result).strip()
+            result = _decode_samples(self._recognizer, samples, self._sample_rate)
 
             log.info(
                 f"[voice] transcribed: "
