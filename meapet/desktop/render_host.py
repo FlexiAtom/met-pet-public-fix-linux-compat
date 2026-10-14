@@ -2404,6 +2404,12 @@ class PetRenderHostMixin:
             return
         pixmap = self.renderer.get_current_pixmap()
         if pixmap.isNull():
+            if not getattr(self, "_sprite_empty_noticed", False):
+                self._sprite_empty_noticed = True
+                safe_print(
+                    "[png] 立绘解码为空 ⇒ 窗口停在默认尺寸，屏上不会有立绘"
+                    "（上一条 [png] 行给的是解码失败的具体那张件）"
+                )
             return
         target_w = int(pixmap.width() * self._scale * self._size_factor)
         target_h = int(pixmap.height() * self._scale * self._size_factor)

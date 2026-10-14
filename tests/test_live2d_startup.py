@@ -302,7 +302,9 @@ class PNGStartupTests(unittest.TestCase):
         loaded_frames = []
 
         def load_pixmap(path):
-            frame = object()
+            # 桩要长得像真 QPixmap：_load_pixmap 先问 isNull() 才决定要不要走 Pillow 兜底
+            frame = mock.Mock()
+            frame.isNull.return_value = False
             loaded_frames.append((path, frame))
             return frame
 
