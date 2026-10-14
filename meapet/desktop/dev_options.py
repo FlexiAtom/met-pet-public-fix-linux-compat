@@ -10,6 +10,10 @@
 前置与选路，共用一个键就只能测到配置当前选中的那一个），菜单因此是六条。
 每个键下面再按语言分三档（人工 2026-10-12 要求加中文与英文：两档此前没有入口，
 取句跟着配置 `tts.voice_lang` 走，想换语言得先改产品配置）。
+
+**「语音输入测试」的每一格读数都进终端**（人工 2026-10-14：只看气泡判不出成功与否）：
+请求录音、真开录（含模型加载耗时）、停录、识别到几个字、链路报错、两档超时——缺一格
+就明写缺哪格。「朗读测试」本来就印 `[dev] 朗读测试 …`，不在这条改动的范围内。
 """
 from __future__ import annotations
 
@@ -43,6 +47,13 @@ DEV_UNLOCK_WINDOW_S = 10.0
 EXPORTS_DIR = "exports"
 
 DEV_VOICE_SECONDS = 4
+#: 点下去到录音真开始之间的等待上限。模型加载跑在录音线程里（`engine.run` 第一步），
+#: 这之前一个字节都录不到，所以"4 秒后停"必须由 `recording_started` 来排，不能按点击排。
+DEV_VOICE_LOAD_WAIT_S = 30.0
+#: 停录后等回执的上限。CPU 上解码几秒音频远用不满这一格，留的是"没回执"这句话的代价。
+DEV_VOICE_RESULT_WAIT_S = 15.0
+#: 印进终端的识别文本上限：长句只留这一段，字数照全文报。
+DEV_VOICE_PRINT_CHARS = 200
 DEV_UNLOCKED_HINT = "开发者选项已解锁（本次运行有效）"
 # 日志导出里除了 LOG_DIR，还想要这几个（同属数据目录，散在旁边）
 DATA_LOG_FILES = ("chat_errors.log", "meapet_boot.log", "meapet_fault.log")
@@ -75,6 +86,11 @@ class PetDevOptionsMixin:
 
     _dev_unlocked = False
     _dev_click_times: tuple = ()
+    #: 本次语音测试走到哪一格（None=没收口）；读数与超时都按它判，别在槽里另立一份状态。
+    _dev_voice_phase = None
+    _dev_voice_requested_at = None
+    #: 已经挂过读数的引擎，按对象身份认——重复点同一台引擎不该把同一行印两遍。
+    _dev_voice_watched = None
 
     # ------------------------------------------------------------------ 解锁
     def _dev_note_version_click(self) -> str:
@@ -148,7 +164,12 @@ class PetDevOptionsMixin:
 
     # -------------------------------------------------------------- ① 语音输入
     def _dev_voice_input_test(self) -> None:
-        """把"这台设备能不能录、录完认不认得出"一次跑完，全程本地。"""
+        """把"这台设备能不能录、录完认不认得出"一次跑完，全程本地。
+
+        每一格都往终端印一行（人工 2026-10-14：只进气泡判不出成功与否）。产品那条链在
+        **转写为空串时一个信号都不发**（`voice/engine.py` 里 `if text: emit`），"没反应"
+        与"录到了但没认出字"于是长得一样——那一格只能由超时这一支说出口。
+        """
         from meapet.voice.engine import VOICE_INPUT_SAMPLE_RATE, list_input_devices
 
         cfg = self.config.get("voice_input") or {}
@@ -173,17 +194,106 @@ class PetDevOptionsMixin:
             self._start_voice_engine(cfg)
             engine = getattr(self, "_voice_engine", None)
         if engine is None or engine.isRunning():
+            log.info(
+                f"[dev] 语音输入测试: 没起来——engine={type(engine).__name__ if engine else None} "
+                f"isRunning={engine.isRunning() if engine else None}"
+            )
             self._dev_say("语音引擎起不来或正在录音")
             return
+
+        self._dev_voice_attach(engine)
+        self._dev_voice_phase = "等录音开始"
+        self._dev_voice_requested_at = time.monotonic()
         self._dev_say(f"开始录音 {DEV_VOICE_SECONDS} 秒，请说话")
+        log.info(
+            f"[dev] 语音输入测试: 已请求录音，等模型加载（上限 {DEV_VOICE_LOAD_WAIT_S} s），"
+            f"真开录后念 {DEV_VOICE_SECONDS} s"
+        )
         engine.toggle()
+        QTimer.singleShot(
+            int(DEV_VOICE_LOAD_WAIT_S * 1000), self._dev_voice_load_timeout
+        )
+
+    def _dev_voice_attach(self, engine) -> None:
+        """读数挂在既有信号上，产品那一路的连接与回调一个字不改。
+
+        按对象身份去重：`_start_voice_engine` 每次新建引擎，连接天然是新的；复用同一台时
+        不重连，否则同一条读数会印两遍。
+        """
+        if getattr(self, "_dev_voice_watched", None) is engine:
+            return
+        self._dev_voice_watched = engine
+        engine.recording_started.connect(self._dev_voice_recording_started)
+        engine.recording_stopped.connect(self._dev_voice_recording_stopped)
+        engine.result_ready.connect(self._dev_voice_transcribed)
+        engine.error.connect(self._dev_voice_failure)
+
+    def _dev_voice_recording_started(self) -> None:
+        """4 秒倒计时从这里排：模型加载跑在录音线程里，按点击排会把它耗掉、只录到空。"""
+        waited = time.monotonic() - (self._dev_voice_requested_at or time.monotonic())
+        if self._dev_voice_phase != "等录音开始":
+            log.info(
+                f"[dev] 语音输入测试: 录音这会儿才开始（等了 {waited:.2f} s），"
+                f"本次已收口，不重排倒计时"
+            )
+            return
+        self._dev_voice_phase = "录音中"
+        log.info(
+            f"[dev] 语音输入测试: 录音已开始（模型+开流耗时 {waited:.2f} s），"
+            f"请说 {DEV_VOICE_SECONDS} s"
+        )
         QTimer.singleShot(DEV_VOICE_SECONDS * 1000, self._dev_stop_voice_test)
 
+    def _dev_voice_recording_stopped(self) -> None:
+        if self._dev_voice_phase not in ("录音中", "等回执"):
+            return
+        log.info("[dev] 语音输入测试: 录音已停止，等识别回执")
+
+    def _dev_voice_transcribed(self, text: str) -> None:
+        self._dev_voice_phase = None
+        clipped = text[:DEV_VOICE_PRINT_CHARS]
+        log.info(
+            f"[dev] 语音输入测试: 识别到 {len(text)} 字 →「{clipped}"
+            f"{'…' if len(text) > DEV_VOICE_PRINT_CHARS else ''}」"
+        )
+
+    def _dev_voice_failure(self, message: str) -> None:
+        self._dev_voice_phase = None
+        log.info(f"[dev] 语音输入测试: 链路报错 →{message}")
+
+    def _dev_voice_load_timeout(self) -> None:
+        """到点还没开录：模型没加载起来（缺件/加载失败）或设备开不了流，两种都在下面那行里。"""
+        if self._dev_voice_phase != "等录音开始":
+            return
+        self._dev_voice_phase = None
+        log.info(
+            f"[dev] 语音输入测试: {DEV_VOICE_LOAD_WAIT_S} s 内没开始录音——"
+            f"模型没加载起来或那台设备开不了流（看同批 [voice] 行）"
+        )
+
+    def _dev_voice_result_timeout(self) -> None:
+        if self._dev_voice_phase != "等回执":
+            return
+        self._dev_voice_phase = None
+        log.info(
+            f"[dev] 语音输入测试: 停录后 {DEV_VOICE_RESULT_WAIT_S} s 内没有任何回执——"
+            f"转写为空串与音频太短在产品链路里都不发信号，所以这一格读不到字"
+        )
+
     def _dev_stop_voice_test(self) -> None:
-        """停录 → 识别；结果沿既有链路进输入框或气泡，失败也会由那条链出声。"""
+        """停录 → 识别；结果沿既有链路进输入框或气泡，这里另印一份到终端。"""
         engine = getattr(self, "_voice_engine", None)
         if engine is not None and engine.isRunning():
             engine.toggle()
+        if self._dev_voice_phase != "录音中":
+            return
+        self._dev_voice_phase = "等回执"
+        log.info(
+            f"[dev] 语音输入测试: 已发停录，等回执（上限 {DEV_VOICE_RESULT_WAIT_S} s）"
+        )
+        QTimer.singleShot(
+            int(DEV_VOICE_RESULT_WAIT_S * 1000), self._dev_voice_result_timeout
+        )
 
     # ---------------------------------------------------------------- ② 朗读
     def _dev_tts_for_engine(self, engine: str):

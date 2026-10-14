@@ -28,6 +28,9 @@ from meapet.desktop.dev_options import (  # noqa: E402
     DEV_UNLOCK_CLICKS,
     DEV_UNLOCK_WINDOW_S,
     DEV_UNLOCKED_HINT,
+    DEV_VOICE_LOAD_WAIT_S,
+    DEV_VOICE_RESULT_WAIT_S,
+    DEV_VOICE_SECONDS,
     EXPORTS_DIR,
     PetDevOptionsMixin,
     dev_unlock_hint,
@@ -72,10 +75,28 @@ class DevHost(QWidget, PetDevOptionsMixin):
         self._voice_engine = FakeEngine()
 
 
+class FakeSignal:
+    """`pyqtSignal` 的最小形状：这里只验接线与读数，不验 Qt 的线程投递。"""
+
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, slot):
+        self.slots.append(slot)
+
+    def emit(self, *args):
+        for slot in self.slots:
+            slot(*args)
+
+
 class FakeEngine:
     def __init__(self, running=False):
         self.running = running
         self.toggles = 0
+        self.recording_started = FakeSignal()
+        self.recording_stopped = FakeSignal()
+        self.result_ready = FakeSignal()
+        self.error = FakeSignal()
 
     def isRunning(self):
         return self.running
@@ -144,7 +165,36 @@ class UnlockTests(unittest.TestCase):
         )
 
 
+def _scheduled(ms: int) -> list:
+    """取出按这个时长排上的回调（本文件用假 QTimer，回调由测试自己点火）。"""
+    return [slot for recorded_ms, slot in FakeQTimer.calls if recorded_ms == ms]
+
+
+def _printed(captured) -> str:
+    return "\n".join(captured.output)
+
+
 class VoiceTestTests(unittest.TestCase):
+    def setUp(self) -> None:
+        FakeQTimer.calls = []
+        # QTimer 遮整个测试而不只遮那一下点击：开录之后的两发排期也得落到假表里，
+        # 否则测试会把真定时器排进 Qt 事件循环，读到的却是空表。
+        patcher = mock.patch("meapet.desktop.dev_options.QTimer", FakeQTimer)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.devices = [(3, "麦克风", 1, True)]
+        self.cfg = {"enabled": False, "input_device_index": 3, "precision": "int8"}
+        self.host = DevHost(config={"voice_input": dict(self.cfg)})
+
+    def _click(self, host=None) -> DevHost:
+        """点一次「语音输入测试」：设备枚举遮掉，只留接线。"""
+        host = self.host if host is None else host
+        with mock.patch(
+            "meapet.voice.engine.list_input_devices", return_value=self.devices
+        ):
+            host._dev_voice_input_test()
+        return host
+
     def test_no_devices_says_so_and_starts_nothing(self) -> None:
         host = DevHost()
         with mock.patch(
@@ -157,18 +207,98 @@ class VoiceTestTests(unittest.TestCase):
 
     def test_it_builds_the_engine_from_config_without_flipping_the_switch(self) -> None:
         """调试入口只借链路：`voice_input.enabled` 是产品开关，不该被它顺手改掉。"""
-        devices = [(3, "麦克风", 1, True)]
-        cfg = {"enabled": False, "input_device_index": 3, "precision": "int8"}
-        host = DevHost(config={"voice_input": cfg})
-        with mock.patch(
-            "meapet.voice.engine.list_input_devices", return_value=devices
-        ), mock.patch("meapet.desktop.dev_options.QTimer", FakeQTimer):
-            FakeQTimer.calls = []
-            host._dev_voice_input_test()
-        self.assertEqual(host.started_voice_cfg, [cfg])
+        host = DevHost(config={"voice_input": self.cfg})
+        self._click(host)
+        self.assertEqual(host.started_voice_cfg, [self.cfg])
         self.assertEqual(host.config["voice_input"]["enabled"], False)
         self.assertEqual(host._voice_engine.toggles, 1, "建完就该开始录")
-        self.assertEqual(FakeQTimer.calls[0][0], 4000, "录满 4 秒要排上停")
+        self.assertEqual(host.bubbles[-1], f"开始录音 {DEV_VOICE_SECONDS} 秒，请说话")
+
+    def test_the_four_seconds_start_counting_when_the_mic_really_opens(self) -> None:
+        """模型加载跑在录音线程里：倒计时按点击排＝加载多久少录多久，甚至只录到空。
+
+        这一格是 2026-10-14「判不出成功与否」那次的第二个成因，读数里也得看见它。
+        """
+        host = self._click()
+        self.assertEqual(
+            _scheduled(DEV_VOICE_SECONDS * 1000), [], "点击那一下不该排 4 秒"
+        )
+        self.assertEqual(len(_scheduled(int(DEV_VOICE_LOAD_WAIT_S * 1000))), 1)
+
+        host._voice_engine.recording_started.emit()
+        self.assertEqual(len(_scheduled(DEV_VOICE_SECONDS * 1000)), 1, "开录才排 4 秒")
+
+    def test_recognition_result_is_printed_to_the_terminal(self) -> None:
+        """他要的是终端里能读出「成了、认出了什么」，不是只有气泡那一句。"""
+        host = self._click()
+        host._voice_engine.recording_started.emit()
+        with self.assertLogs("dev", level="INFO") as captured:
+            _scheduled(DEV_VOICE_SECONDS * 1000)[0]()
+            host._voice_engine.result_ready.emit("今天天气不错")
+        printed = _printed(captured)
+        self.assertIn("识别到 6 字", printed)
+        self.assertIn("「今天天气不错」", printed)
+        self.assertIsNone(host._dev_voice_phase, "收了回执就收口，别让超时再补一句")
+
+    def test_silence_after_stop_is_reported_as_no_receipt(self) -> None:
+        """产品那条链在空转写时一个信号都不发（`if text: emit`）——只能由超时说出口。"""
+        host = self._click()
+        host._voice_engine.recording_started.emit()
+        _scheduled(DEV_VOICE_SECONDS * 1000)[0]()
+        with self.assertLogs("dev", level="INFO") as captured:
+            _scheduled(int(DEV_VOICE_RESULT_WAIT_S * 1000))[0]()
+        self.assertIn("没有任何回执", _printed(captured))
+        self.assertIn("空串", _printed(captured))
+
+    def test_a_receipt_arrived_makes_the_timeout_silent(self) -> None:
+        """回执已经印过之后再点一次超时点火：不能追一句"没回执"，那是假读数。"""
+        host = self._click()
+        host._voice_engine.recording_started.emit()
+        _scheduled(DEV_VOICE_SECONDS * 1000)[0]()
+        host._voice_engine.result_ready.emit("好")
+        with self.assertNoLogs("dev", level="INFO"):
+            _scheduled(int(DEV_VOICE_RESULT_WAIT_S * 1000))[0]()
+
+    def test_load_timeout_says_the_recording_never_started(self) -> None:
+        host = self._click()
+        with self.assertLogs("dev", level="INFO") as captured:
+            _scheduled(int(DEV_VOICE_LOAD_WAIT_S * 1000))[0]()
+        self.assertIn("内没开始录音", _printed(captured))
+        self.assertIsNone(host._dev_voice_phase)
+
+    def test_a_late_start_after_the_load_timeout_does_not_restart_the_window(self) -> None:
+        """收口之后模型才加载完：印一句"这会儿才开始"，但不重排 4 秒（那会变成第二次测试）。"""
+        host = self._click()
+        _scheduled(int(DEV_VOICE_LOAD_WAIT_S * 1000))[0]()
+        with self.assertLogs("dev", level="INFO") as captured:
+            host._voice_engine.recording_started.emit()
+        self.assertIn("这会儿才开始", _printed(captured))
+        self.assertEqual(_scheduled(DEV_VOICE_SECONDS * 1000), [])
+
+    def test_engine_error_is_printed_not_only_bubbled(self) -> None:
+        host = self._click()
+        with self.assertLogs("dev", level="INFO") as captured:
+            host._voice_engine.error.emit("sherpa-onnx 未安装，请在配置页下载依赖")
+        self.assertIn("链路报错", _printed(captured))
+        self.assertIn("sherpa-onnx 未安装", _printed(captured))
+
+    def test_clicking_twice_on_the_same_engine_wires_the_reading_once(self) -> None:
+        """复用同一台引擎时重复连接会把每行印两遍——读数一旦翻倍，"几字"这种数就没意义了。"""
+        host = self._click()
+        engine = host._voice_engine
+        self._click(host)
+        self.assertEqual(len(engine.result_ready.slots), 1)
+        self.assertEqual(len(engine.error.slots), 1)
+
+    def test_long_transcript_is_clipped_but_counted_in_full(self) -> None:
+        host = self._click()
+        host._voice_engine.recording_started.emit()
+        _scheduled(DEV_VOICE_SECONDS * 1000)[0]()
+        text = "啊" * 260
+        with self.assertLogs("dev", level="INFO") as captured:
+            host._voice_engine.result_ready.emit(text)
+        self.assertIn("识别到 260 字", _printed(captured))
+        self.assertNotIn("啊" * 201, _printed(captured))
 
     def test_stop_only_toggles_a_running_engine(self) -> None:
         host = DevHost()
