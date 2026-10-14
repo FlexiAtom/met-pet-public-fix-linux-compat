@@ -41,7 +41,11 @@ import platform
 import sys
 import time
 from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:  # 只为那一格的读数排版；运行期这模块不 import 产品侧适配器
+    from meapet.agent.base import ToolStatus
 
 DOCTOR_FLAG = "--doctor"
 
@@ -605,6 +609,21 @@ def _agent_channel(config: dict) -> str:
 AGENT_SCRIPT_TOKEN_ENVS = ("MEA_PET_AGENT_LINK_TOKEN", "MEA_PET_AGENT_TOKEN")
 
 
+def _counter_note(status: ToolStatus) -> str:
+    """把 `chat.tool_status` 那三个可选计数排成 `#1·250ms·40tok`，缺的那一项**不印 0**。
+
+    印 0 会把「Agent 没给」说成「给了但是零」——那一格在界面上是要人看出差别的。
+    """
+    parts = []
+    if status.call_index is not None:
+        parts.append(f"#{status.call_index}")
+    if status.elapsed_ms is not None:
+        parts.append(f"{status.elapsed_ms}ms")
+    if status.tokens is not None:
+        parts.append(f"{status.tokens}tok")
+    return "·".join(parts)
+
+
 def _agent_script(config: dict, script_path: str = "") -> str:
     """假 Agent 端跑一趟：剧本发帧，读数说**这端的客户端搬了几发**。
 
@@ -615,6 +634,8 @@ def _agent_script(config: dict, script_path: str = "") -> str:
 
     分母由假端按 `state`/`safe_text` 都非空来算（与客户端 `_tool_status_from_payload` 同判据），
     所以「落队 0/4」是搬运坏了，「落队 0/0」是剧本压根没发到——两种坏在读数里不同形。
+    「计数」那一格的分母更直接：假端调的就是客户端那个 `safe_counter`，不是抄一份，所以
+    「计数 0/2」只可能是解析那一步坏了，不会读成判据漂移。
     """
     from meapet.agent.fake_agent import (
         DEFAULT_SCRIPT,
@@ -676,9 +697,12 @@ def _agent_script(config: dict, script_path: str = "") -> str:
     tokens = "·".join(str(length) for length in result.hello_token_lengths) or "无握手"
     codes = "·".join(result.error_codes) or "无"
     first = f"（首帧 {idle[0].state}·{idle[0].safe_text}）" if idle else ""
+    counted = [status for status in idle if _counter_note(status)]
+    note = f"（{_counter_note(counted[0])}）" if counted else ""
     return (
         f"{label} · 发出 {result.sent} 帧 · 入站 {len(result.received_types)} 帧 · "
-        f"落队 {len(idle)}/{result.queueable_sent}{first} · 回执 {codes} · "
+        f"落队 {len(idle)}/{result.queueable_sent}{first} · "
+        f"计数 {len(counted)}/{result.counter_sent}{note} · 回执 {codes} · "
         f"快照 {result.snapshot_seen} · 屏障 "
         f"{'pong' if result.barrier_acked else '未到齐'} · token 长度 {tokens}"
         f"（预算 {AGENT_PROBE_BUDGET_SECONDS}s）"
@@ -1206,6 +1230,12 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                 "（`state` 与 `safe_text` 都非空）应当让它认的帧数。分母从假端那侧算，所以 "
                 "**N=0 而 M=4 是搬运坏了**，**M=0 是这一趟压根没有该入队的帧**（剧本里那些不是"
                 "可解析的 `chat.tool_status`，或压根没发到），两种坏在读数里不同形；"
+                "「计数 N/M」= 搬回来的那些状态里**至少带出一个可解析计数**的条数 / 假端按客户端"
+                "同一个 `safe_counter` 判据应当带出的条数——那是载荷上三个可选键 `call_index`/"
+                "`elapsed_ms`/`tokens`（协议文档 §7.2）。桌宠不替 Agent 数、也不把坏值报成 0，所以 "
+                "**N=0 而 M>0 是解析坏了**，**M=0 是剧本压根没挂计数**；内置剧本只在头两发挂——"
+                "四发全带时这一格会退化成把「落队」再抄一遍。`…40tok` 是**载荷里的 token 计数**，"
+                "与末尾「token 长度」那枚握手凭据的**长度**是两回事；"
                 "「回执」= 客户端发回来的 `control.error` 的 code，内置剧本里那一发**解析不出且"
                 " required** 的帧要的就是 `NO_ACTIVE_TURN`，而**能解析**的那四发按 "
                 "`agent_link.py:649-655` 只入队、**不该**有回执——多出回执同样是读数；"

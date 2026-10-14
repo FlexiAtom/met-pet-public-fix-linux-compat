@@ -177,6 +177,63 @@ class TestAgentLinkEnvelope(unittest.TestCase):
                     AgentLinkFrame.parse({**valid, "version": malformed})
 
 
+class TestToolStatusCounters(unittest.TestCase):
+    """`chat.tool_status` 载荷上那三个可选计数（协议文档 §7.2）：**只收、不猜、不拦队**。
+
+    缺席与坏值都归 None，而不是 0——把坏值报成 0 会让「Agent 没给」读成「给了但是零」，
+    那一句在界面上是两回事。
+    """
+
+    def setUp(self):
+        from meapet.agent.agent_link import AgentLinkAdapter, AgentLinkConfig
+
+        # 那两枚 ID 是配置自己校验的必填项，与本案那三个计数无关，给个常量把构造走通。
+        self.adapter = AgentLinkAdapter(
+            AgentLinkConfig(
+                device_id="device-counter",
+                session_id="session-counter",
+            )
+        )
+
+    def _parse(self, payload: dict):
+        return self.adapter._tool_status_from_payload(payload)
+
+    def test_whole_counters_are_carried(self):
+        from meapet.agent.base import ToolStatus
+
+        self.assertEqual(
+            self._parse(
+                {
+                    "state": "running",
+                    "safe_text": "正在查资料",
+                    "call_index": 2,
+                    "elapsed_ms": 1450,
+                    "tokens": 310,
+                }
+            ),
+            ToolStatus("running", "正在查资料", 2, 1450, 310),
+        )
+
+    def test_a_fractional_elapsed_ms_is_rounded_not_dropped(self):
+        # JS 网关那一路 `performance.now()` 出来就带小数；按"不是整数"拒掉，真端点这一格会永远读成没给。
+        self.assertEqual(self._parse({"state": "running", "safe_text": "x", "elapsed_ms": 500.6}).elapsed_ms, 501)
+
+    def test_values_that_are_not_counts_are_absent(self):
+        for bad in (-1, True, False, "310", float("nan"), float("inf"), 10 ** 13, None, {"n": 1}):
+            with self.subTest(value=bad):
+                self.assertIsNone(self._parse({"state": "running", "safe_text": "x", "tokens": bad}).tokens)
+
+    def test_a_bad_counter_does_not_drop_the_status_text(self):
+        # 入队判据只看 state/safe_text（`_tool_status_from_payload` 那早退那一道），计数只跟着走。
+        status = self._parse({"state": "running", "safe_text": "正在查资料", "call_index": -5})
+        self.assertIsNotNone(status)
+        self.assertEqual(status.safe_text, "正在查资料")
+        self.assertIsNone(status.call_index)
+
+    def test_counters_do_not_make_an_unreadable_status_readable(self):
+        self.assertIsNone(self._parse({"state": "", "safe_text": "", "call_index": 1, "tokens": 9}))
+
+
 class TestCapabilityRegistry(unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_hides_request_id_and_call_injects_transport_id(self):
         from meapet.control.capabilities import CapabilityRegistry

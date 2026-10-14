@@ -419,9 +419,10 @@ class AgentScriptRowTest(unittest.TestCase):
     """`--agent-script` 那一格：就地起假端，量的是**这端客户端那段搬运**。
 
     真协议那一趟在 `tests/test_fake_agent.py`（真 `AgentLinkAdapter`、真 WebSocket）。这里把
-    假端服务器与产品工厂换成桩，只钉 doctor 这侧的四件事：**默认档一台不起**；带开关时那一格
+    假端服务器与产品工厂换成桩，只钉 doctor 这侧的五件事：**默认档一台不起**；带开关时那一格
     追加在末尾且不改动前面那些格的形状；判据自己说清它看见到哪为止；跑这一趟时那两枚 token
-    env 真被摘掉、跑完原样还回去，读数里只有长度。
+    env 真被摘掉、跑完原样还回去，读数里只有长度；**「计数」那一格的分子与分母不同源**——
+    分子来自客户端搬回来的 `ToolStatus` 字段，分母来自假端那一份引用，所以坏了哪一头都读得出来。
     """
 
     @staticmethod
@@ -437,14 +438,22 @@ class AgentScriptRowTest(unittest.TestCase):
             "barrier_acked": True,
             "replays": 0,
             "queueable_sent": 4,
+            "counter_sent": 2,
             "hello_token_lengths": (0,),
         }
         fields.update(overrides)
         return FakeAgentResult(**fields)
 
-    def _patches(self, sink, result):
+    def _patches(self, sink, result, statuses=None):
         """把假端与工厂换成桩，同时把探针期间的环境记进 `sink`。"""
         from meapet.agent.base import ToolStatus
+
+        # 搬回来的那些：默认带上计数，钉的是「客户端给了数就印得出来」这一头。
+        idle = (
+            [ToolStatus(state="running", safe_text="桩帧", call_index=3, elapsed_ms=1450, tokens=310)]
+            if statuses is None
+            else statuses
+        )
 
         class _Server:
             url = "ws://127.0.0.1:1/agent-link"
@@ -465,7 +474,7 @@ class AgentScriptRowTest(unittest.TestCase):
                 }
 
             def take_idle_tool_statuses(self):
-                return [ToolStatus(state="running", safe_text="桩帧")]
+                return idle
 
             async def close(self):
                 sink["closed"] = True
@@ -481,9 +490,9 @@ class AgentScriptRowTest(unittest.TestCase):
             ),
         ]
 
-    def _run(self, sink, *, config=None, script_path="", result=None):
+    def _run(self, sink, *, config=None, script_path="", result=None, statuses=None):
         with contextlib.ExitStack() as stack:
-            for patcher in self._patches(sink, result or self._result()):
+            for patcher in self._patches(sink, result or self._result(), statuses):
                 stack.enter_context(patcher)
             return doctor._agent_script(
                 {} if config is None else config, script_path=script_path
@@ -515,6 +524,8 @@ class AgentScriptRowTest(unittest.TestCase):
             "淘汰",                          # 队列上限 16 那一格不测
             "agent_channel",                 # 它不说他配的那条真端点会发这些帧
             "落队",
+            "计数",
+            "safe_counter",                # 那一格的分母调的就是客户端那一个函数，不是抄一份
             "未到齐",                        # 屏障没等到就印这句，不猜一个数
             "不印任何凭据",
         ):
@@ -551,9 +562,46 @@ class AgentScriptRowTest(unittest.TestCase):
         text = self._run({})
         self.assertIn("落队 1/4", text)
         self.assertIn("（首帧 running·桩帧）", text)
+        self.assertIn("计数 1/2（#3·1450ms·310tok）", text)
         self.assertIn("回执 NO_ACTIVE_TURN", text)
         self.assertIn("快照 2", text)
         self.assertIn("屏障 pong", text)
+
+    def test_the_counter_arm_distinguishes_broken_parse_from_an_empty_script(self) -> None:
+        """「计数」那两头的坏法不同形，所以钉成两发：客户端没搬出数 vs 剧本压根没挂。
+
+        第一发分子为 0、分母仍 2 ⇒ **解析/搬运**坏了（假端那侧按同一 `safe_counter` 数过）；
+        第二发分子分母都 0 ⇒ 这一趟的剧本里就没有带计数的帧，不是哪里坏了。
+        """
+        from meapet.agent.base import ToolStatus
+
+        bare = self._run({}, statuses=[ToolStatus(state="running", safe_text="桩帧")])
+        self.assertIn("落队 1/4", bare, "计数坏不许顺带把落队那一格也改掉")
+        self.assertIn("计数 0/2", bare)
+        self.assertNotIn("计数 0/2（", bare, "分子为 0 时没有首帧可印，括号应当整个不出现")
+
+        none_at_all = self._run(
+            {},
+            statuses=[ToolStatus(state="running", safe_text="桩帧")],
+            result=self._result(counter_sent=0),
+        )
+        self.assertIn("计数 0/0", none_at_all)
+
+    def test_the_counter_note_prints_only_what_arrived(self) -> None:
+        """只带了 `elapsed_ms` 那一发：缺的那两项**不印 0**，也不留分隔点。
+
+        印 0 会把「Agent 没给」说成「给了但是零」——那一格正是要人看出差别的地方。
+        """
+        from meapet.agent.base import ToolStatus
+
+        text = self._run(
+            {},
+            statuses=[ToolStatus(state="running", safe_text="桩帧", elapsed_ms=501)],
+            result=self._result(counter_sent=1),
+        )
+        self.assertIn("计数 1/1（501ms）", text)
+        self.assertNotIn("0tok", text)
+        self.assertNotIn("ms·", text)
 
     def test_a_missing_barrier_prints_that_word_instead_of_a_number(self) -> None:
         text = self._run({}, result=self._result(barrier_acked=False))

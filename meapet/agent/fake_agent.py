@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from meapet.agent.agent_link import COUNTER_FIELDS, safe_counter
 from meapet.agent.link_protocol import AgentLinkFrame, make_agent_link_frame
 
 #: 假端的监听路径——与出厂 `DEFAULT_AGENT_LINK_WS_URL` 同一条，读数看着眼熟。
@@ -59,6 +60,7 @@ class FakeAgentResult:
     barrier_acked: bool
     replays: int
     queueable_sent: int
+    counter_sent: int
     hello_token_lengths: tuple[int, ...]
 
 
@@ -81,6 +83,19 @@ def _is_queueable_tool_status(frame: Mapping[str, Any]) -> bool:
         isinstance(payload.get(key), str) and bool(str(payload.get(key)).strip())
         for key in ("state", "safe_text")
     )
+
+
+def _carries_counter(frame: Mapping[str, Any]) -> bool:
+    """这一发是否**应当**至少带出一个可解析计数——判据直接调客户端那一个 `safe_counter`。
+
+    与上一条同一个道理：分母自己抄一份就会与客户端漂移，那串读数会开始说谎。
+    """
+    if str(frame.get("type") or "") != "chat.tool_status":
+        return False
+    payload = frame.get("payload")
+    if not isinstance(payload, Mapping):
+        return False
+    return any(safe_counter(payload.get(name)) is not None for name in COUNTER_FIELDS)
 
 
 def _ready_payload() -> dict[str, Any]:
@@ -107,12 +122,24 @@ def _default_script() -> tuple[ScriptStep, ...]:
 
     队列型帧刻意压在 4 发（`_MAX_IDLE_TOOL_STATUSES = 16`）——贴着淘汰线会把「落队 N」
     揉成「N 封顶」，那一格就读不出东西了。
+
+    计数只挂在头两发（`call_index`/`elapsed_ms`/`tokens`，见协议文档 §7.2）：四发全带的话
+    「计数 4」与「落队 4」同形，那一格就退化成把上一个个数再抄一遍。第 2 发刻意用带小数的
+    `elapsed_ms`——JS 网关那一路的常态，顺带证明四舍五入那支真走通了。
     """
+
+    payloads = {
+        1: {"state": "running", "safe_text": "假过程帧 #1",
+            "call_index": 1, "elapsed_ms": 250, "tokens": 40},
+        2: {"state": "running", "safe_text": "假过程帧 #2",
+            "call_index": 2, "elapsed_ms": 500.6},
+    }
 
     def status(index: int) -> dict[str, Any]:
         return make_agent_link_frame(
             "chat.tool_status",
-            {"state": "running", "safe_text": f"假过程帧 #{index}"},
+            payloads.get(index)
+            or {"state": "running", "safe_text": f"假过程帧 #{index}"},
             message_id=f"fake-status-{index}",
         )
 
@@ -242,6 +269,7 @@ class _Run:
         self.sent = 0
         self.replays = 0
         self.queueable_sent = 0
+        self.counter_sent = 0
         self.barrier_acked = False
         self.expects_barrier = any(
             str(frame.get("type") or "") == "control.ping"
@@ -282,6 +310,7 @@ class _Run:
             barrier_acked=self.barrier_acked,
             replays=self.replays,
             queueable_sent=self.queueable_sent,
+            counter_sent=self.counter_sent,
             hello_token_lengths=tuple(self.token_lengths),
         )
 
@@ -440,6 +469,8 @@ async def _send_script(websocket: Any, run: _Run) -> None:
                     run.sent += 1
                     if _is_queueable_tool_status(frame):
                         run.queueable_sent += 1
+                        if _carries_counter(frame):
+                            run.counter_sent += 1
                     if step.repeat > 1:
                         run.replays += 1
     except Exception:  # noqa: BLE001 - 连接断了就收尾，那格读数由 barrier 说

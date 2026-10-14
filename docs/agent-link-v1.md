@@ -545,13 +545,30 @@ MeaPet 发起一轮聊天：
   "reply_to": "turn-unique-001",
   "payload": {
     "state": "started",
-    "safe_text": "正在使用 Agent 能力处理请求。"
+    "safe_text": "正在使用 Agent 能力处理请求。",
+    "call_index": 2,
+    "elapsed_ms": 1450,
+    "tokens": 310
   },
   "extensions": {}
 }
 ```
 
 不得在 `safe_text` 中包含内部工具参数、密钥、推理过程或未经清洗的工具结果。
+这条边界管的是整个载荷，不只 `safe_text` 那一个键：`thought`、`args`、`progress`、
+工具名与 `cost_cny` 都**不是** `chat.tool_status` 的字段，MeaPet 不读它们，也不因为
+对端发了就替它们编一个值。
+
+`call_index`、`elapsed_ms`、`tokens` 三个键都是**可选**的，值由 Agent 写：
+
+- 含义依次是「本回合内第几次工具调用（从 1 起）」「这次调用截至本帧已经花掉的毫秒数」
+  「这次调用消耗的 token 计数」。
+- MeaPet 只接受非负整数（带小数的四舍五入到整数，JS 侧 `performance.now()` 那一类常态）；
+  负数、布尔、字符串、NaN/Inf 与超过 `10^12` 的值一律按「没给」处理——既不夹到上界，
+  也不代填 0，因为「Agent 没给」和「给了但是零」是两句不同的话。
+- 缺席就是缺席：桌面上不出现那一项，MeaPet 不自己数。
+- 这三个键**不改变**这一帧能否被接收。入队判据仍然只看 `state` 与 `safe_text` 都非空
+  （见下），载荷里带一个坏数字不该把整条状态文本一起丢掉。
 
 `chat.tool_status` 也可以不关联任何 MeaPet 回合（`reply_to` 指向一个不存在的
 回合），用于 Agent 自主运行时的进度播报。MeaPet 不丢弃这类消息，而是记入

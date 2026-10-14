@@ -7,13 +7,16 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import unittest
 from pathlib import Path
 
 import pytest
 
-from meapet.agent.agent_link import AgentLinkAdapter, AgentLinkConfig
+from meapet.agent import agent_link
+from meapet.agent.agent_link import COUNTER_FIELDS, AgentLinkAdapter, AgentLinkConfig
+from meapet.agent.base import ToolStatus
 from meapet.agent.fake_agent import (
     DEFAULT_SCRIPT,
     FakeAgentScriptError,
@@ -54,6 +57,12 @@ class DefaultScriptTest(unittest.IsolatedAsyncioTestCase):
         assert len(idle) == 4, f"落队 {len(idle)} 与分母 {result.queueable_sent} 不一致＝搬运坏了"
         assert idle[0].state == "running"
         assert idle[0].safe_text == "假过程帧 #1", "内容没跟着走，那串数字只是计数"
+        # **计数也得到客户端那侧**，且只在剧本挂了的那两发上出现：四发全带的话这一格
+        # 会退化成把上面那个「落队」再抄一遍。第 2 发那个带小数的 elapsed_ms 是 JS 网关常态。
+        assert result.counter_sent == 2, "剧本挂在头两发的计数，分母应当是 2"
+        assert (idle[0].call_index, idle[0].elapsed_ms, idle[0].tokens) == (1, 250, 40)
+        assert (idle[1].call_index, idle[1].elapsed_ms, idle[1].tokens) == (2, 501, None)
+        assert (idle[2].call_index, idle[2].elapsed_ms, idle[2].tokens) == (None, None, None)
         # **能解析**的那四发只入队、不发回执（agent_link.py:649-655）；唯一那一发回执
         # 来自"解析不出 + required"那一步。多出任何一发都要当场看见。
         assert result.error_codes == ("NO_ACTIVE_TURN",)
@@ -83,6 +92,36 @@ class EnqueueBreakageTest(unittest.IsolatedAsyncioTestCase):
 
         assert len(idle) == 0
         assert result.queueable_sent == 4, "分子被打坏了，分母必须还是 4——否则这句读不出是坏了"
+
+
+class CounterBreakageTest(unittest.IsolatedAsyncioTestCase):
+    """上面那一格的计数版：把 `safe_counter` 打坏，分子归 0、分母不动。
+
+    假端在 `import` 时就把 `safe_counter` 这个名字绑到了自己那份引用，所以这里只打得到
+    客户端那一份——正好是要的形状：`计数 0/2` 而不是 `0/0`。
+    """
+
+    async def test_a_broken_counter_parser_reads_zero_of_two_not_zero_of_zero(self):
+        original = agent_link.safe_counter
+        agent_link.safe_counter = lambda value: None
+        try:
+            async with scripted_agent_server() as server:
+                adapter = _adapter(server.url)
+                try:
+                    await adapter.probe()
+                    result = await server.wait_result(5)
+                    idle = adapter.take_idle_tool_statuses()
+                finally:
+                    await adapter.close()
+        finally:
+            agent_link.safe_counter = original
+
+        assert [(status.call_index, status.elapsed_ms, status.tokens) for status in idle] == [
+            (None, None, None)
+        ] * 4
+        assert len(idle) == 4, "计数解析坏了不该把整条状态文本也丢掉——入队只看 state/safe_text"
+        assert result.queueable_sent == 4
+        assert result.counter_sent == 2, "分母是假端那一份引用，不该跟着客户端那侧一起归零"
 
 
 class CredentialSurfaceTest(unittest.IsolatedAsyncioTestCase):
@@ -242,6 +281,19 @@ class ScriptShapeTest(unittest.TestCase):
     def test_the_last_default_step_is_the_ping_barrier(self):
         """屏障必须真的是最后一步：串行派发下，pong 到了才说前面都跑完了。"""
         assert DEFAULT_SCRIPT[-1].frames[-1]["type"] == "control.ping"
+
+    def test_the_counter_names_on_the_wire_match_the_carrier_fields(self):
+        """载荷键名、`_tool_status_from_payload` 取的那串、`ToolStatus` 上的字段名是同一件事写三处。
+
+        这里钉住后两处（第一处由协议文档 §7.2 与上面那条真 WebSocket 测试钉）：漂移的后果是
+        某个计数静默变成 None，而读数那一格看不出区别。
+        """
+        carried = {
+            field.name
+            for field in dataclasses.fields(ToolStatus)
+            if field.name not in ("state", "safe_text")
+        }
+        assert set(COUNTER_FIELDS) == carried
 
     def test_frames_are_built_envelope_valid_at_definition_time(self):
         from meapet.agent.link_protocol import AgentLinkFrame
