@@ -141,6 +141,8 @@ def main() -> int:
                          "C=穿透态切Live2D之后有没有人重新请求surface尺寸")
     ap.add_argument("--settle", type=float, default=12.0,
                     help="等 Live2D 首帧的最长秒数（本机冷启动实测可达 9 s 量级）")
+    ap.add_argument("--fidus", action="store_true",
+                    help="按 config.json 里 fidus.enabled 的原值跑（默认强制关掉，让挂载走直发那一支）")
     args = ap.parse_args()
 
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -169,7 +171,8 @@ def main() -> int:
     from meapet.desktop.render_host import PetRenderHostMixin
 
     config = normalize_config(json.loads((ROOT / "config.json").read_text(encoding="utf-8")))
-    config.setdefault("fidus", {})["enabled"] = False   # 挂载走直发那一支，不起 fidus 抓屏
+    if not args.fidus:
+        config.setdefault("fidus", {})["enabled"] = False   # 挂载走直发那一支，不起 fidus 抓屏
 
     resize_log: list[dict] = []
 
