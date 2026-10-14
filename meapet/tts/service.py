@@ -877,7 +877,11 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         log.info(f"[tts] 合成原文 chars={len(clean)}")
         log.trace(lambda value=clean: f"[tts] 合成原文:\n{value}")
         if action == "skip":
-            log.warning(f"TTS: 跳过语音 reason={reason}")
+            # 只写 reason 的话，手输 voice_lang: "auto" 的人看不出该改哪个键。
+            log.warning(
+                f"TTS: 跳过语音 reason={reason} target={target_lang or '(空)'} "
+                f"supported={'/'.join(self.supported_languages()) or '(空)'}"
+            )
             return None
         if action == "direct":
             log.info(
@@ -1041,7 +1045,11 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         log.info(f"[tts] 合成原文 chars={len(clean)}")
         log.trace(lambda value=clean: f"[tts] 合成原文:\n{value}")
         if action == "skip":
-            log.warning(f"TTS: 跳过语音 reason={reason}")
+            # 只写 reason 的话，手输 voice_lang: "auto" 的人看不出该改哪个键。
+            log.warning(
+                f"TTS: 跳过语音 reason={reason} target={target_lang or '(空)'} "
+                f"supported={'/'.join(self.supported_languages()) or '(空)'}"
+            )
             return None
         if action == "direct":
             log.info(
