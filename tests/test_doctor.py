@@ -16,8 +16,10 @@
 除 `_port_open` 那条（它要的是真 socket，绑在回环上、不出这台机器）之外，全部遮掉真健康检查
 （`MeaTTS.health_check` 在本机 19s）与真连接，要钉的是接线与红线。
 """
+import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import time
@@ -411,6 +413,177 @@ class AgentChannelProbeTest(unittest.TestCase):
         ):
             self.assertEqual(doctor.main(["--doctor", "--probe-agent"]), 0)
         self.assertTrue(collect.call_args.kwargs["probe_agent"])
+
+
+class AgentScriptRowTest(unittest.TestCase):
+    """`--agent-script` 那一格：就地起假端，量的是**这端客户端那段搬运**。
+
+    真协议那一趟在 `tests/test_fake_agent.py`（真 `AgentLinkAdapter`、真 WebSocket）。这里把
+    假端服务器与产品工厂换成桩，只钉 doctor 这侧的四件事：**默认档一台不起**；带开关时那一格
+    追加在末尾且不改动前面那些格的形状；判据自己说清它看见到哪为止；跑这一趟时那两枚 token
+    env 真被摘掉、跑完原样还回去，读数里只有长度。
+    """
+
+    @staticmethod
+    def _result(**overrides):
+        """服务器侧那份事实的桩——doctor 只是把它的计数字符化，不参与算。"""
+        from meapet.agent.fake_agent import FakeAgentResult
+
+        fields = {
+            "sent": 7,
+            "received_types": ("control.hello", "control.pong"),
+            "error_codes": ("NO_ACTIVE_TURN",),
+            "snapshot_seen": 2,
+            "barrier_acked": True,
+            "replays": 0,
+            "queueable_sent": 4,
+            "hello_token_lengths": (0,),
+        }
+        fields.update(overrides)
+        return FakeAgentResult(**fields)
+
+    def _patches(self, sink, result):
+        """把假端与工厂换成桩，同时把探针期间的环境记进 `sink`。"""
+        from meapet.agent.base import ToolStatus
+
+        class _Server:
+            url = "ws://127.0.0.1:1/agent-link"
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def wait_result(self, _timeout):
+                return result
+
+        class _Adapter:
+            async def probe(self):
+                sink["during"] = {
+                    key: os.environ.get(key) for key in doctor.AGENT_SCRIPT_TOKEN_ENVS
+                }
+
+            def take_idle_tool_statuses(self):
+                return [ToolStatus(state="running", safe_text="桩帧")]
+
+            async def close(self):
+                sink["closed"] = True
+
+        return [
+            mock.patch(
+                "meapet.agent.fake_agent.scripted_agent_server",
+                side_effect=lambda script=None: _Server(),
+            ),
+            mock.patch(
+                "meapet.agent.factory.create_agent_adapter_from_config",
+                side_effect=lambda config: _Adapter(),
+            ),
+        ]
+
+    def _run(self, sink, *, config=None, script_path="", result=None):
+        with contextlib.ExitStack() as stack:
+            for patcher in self._patches(sink, result or self._result()):
+                stack.enter_context(patcher)
+            return doctor._agent_script(
+                {} if config is None else config, script_path=script_path
+            )
+
+    def test_default_run_starts_no_server(self) -> None:
+        with mock.patch.object(
+            doctor, "_agent_script", side_effect=AssertionError("默认档不该起服务器")
+        ):
+            names = [item.name for item in doctor.collect({}, skip_tts=True)]
+        self.assertNotIn("agent_script", names)
+        self.assertEqual(names, BASE_ITEMS)
+
+    def test_the_flag_appends_the_row_after_the_rest(self) -> None:
+        with mock.patch.object(doctor, "_agent_script", return_value="在场"):
+            items = doctor.collect({}, skip_tts=True, agent_script="")
+        names = [item.name for item in items]
+        self.assertEqual(names[-1], "agent_script")
+        self.assertEqual(names[:-1], BASE_ITEMS, "追加那一格不许改动前面那些格的形状")
+        self.assertTrue(items[-1].judge)
+
+    def test_the_judge_says_where_the_reading_stops(self) -> None:
+        """判据不许只说"通了"：它得自己讲清最深读到哪、那段看不见的是什么。"""
+        with mock.patch.object(doctor, "_agent_script", return_value="在场"):
+            judge = doctor.collect({}, skip_tts=True, agent_script="")[-1].judge
+        for needle in (
+            "take_idle_tool_statuses",       # 最深处
+            "control_bridge",                # 再往后那一段（QTimer→气泡）无头跑不起来
+            "淘汰",                          # 队列上限 16 那一格不测
+            "agent_channel",                 # 它不说他配的那条真端点会发这些帧
+            "落队",
+            "未到齐",                        # 屏障没等到就印这句，不猜一个数
+            "不印任何凭据",
+        ):
+            self.assertIn(needle, judge)
+
+    def test_the_token_envs_are_popped_for_the_run_and_restored_after(self) -> None:
+        """`factory._resolve_secret` 把这两枚 env 排在**任何** config 字面量之前。
+
+        所以 `auth_token=""` 拦不住它们：不摘，客户端就把这台机器上真那枚 token 递进就地起的
+        监听器。这里钉的是摘与还——**跑的时候不在、跑完原样在**，读数里只有长度。
+        """
+        sentinel = "真那枚 token：它进假端就是往外递"
+        previous = {key: os.environ.get(key) for key in doctor.AGENT_SCRIPT_TOKEN_ENVS}
+        for key in doctor.AGENT_SCRIPT_TOKEN_ENVS:
+            os.environ[key] = sentinel
+        sink: dict = {}
+        try:
+            text = self._run(sink)
+            during = sink["during"]
+            after = {key: os.environ.get(key) for key in doctor.AGENT_SCRIPT_TOKEN_ENVS}
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        self.assertEqual(during, dict.fromkeys(doctor.AGENT_SCRIPT_TOKEN_ENVS))
+        self.assertEqual(after, dict.fromkeys(doctor.AGENT_SCRIPT_TOKEN_ENVS, sentinel))
+        self.assertNotIn(sentinel, text)
+        self.assertIn("token 长度 0", text)
+
+    def test_the_reading_counts_enqueue_from_the_client_not_the_script(self) -> None:
+        """分子是 `take_idle_tool_statuses()` 真拿回来的条数，分母是假端按同一判据算的应认数。"""
+        text = self._run({})
+        self.assertIn("落队 1/4", text)
+        self.assertIn("（首帧 running·桩帧）", text)
+        self.assertIn("回执 NO_ACTIVE_TURN", text)
+        self.assertIn("快照 2", text)
+        self.assertIn("屏障 pong", text)
+
+    def test_a_missing_barrier_prints_that_word_instead_of_a_number(self) -> None:
+        text = self._run({}, result=self._result(barrier_acked=False))
+        self.assertIn("屏障 未到齐", text)
+
+    def test_a_broken_script_is_a_reading_and_starts_no_server(self) -> None:
+        """剧本读不出来 ⇒ 假端压根不起，读数自陈这一步停了。"""
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        missing = str(Path(folder.name) / "不存在.json")
+        with mock.patch(
+            "meapet.agent.fake_agent.scripted_agent_server",
+            side_effect=AssertionError("剧本坏了还起了服务器"),
+        ):
+            text = doctor._agent_script({}, script_path=missing)
+        self.assertIn("假端未起", text)
+        self.assertIn("不存在.json", text)
+
+    def test_the_cli_flag_reaches_the_collector(self) -> None:
+        self.assertIsNone(doctor._parse_args(["--doctor"]).agent_script)
+        self.assertEqual(doctor._parse_args(["--doctor", "--agent-script"]).agent_script, "")
+        self.assertEqual(
+            doctor._parse_args(["--doctor", "--agent-script", "/tmp/x.json"]).agent_script,
+            "/tmp/x.json",
+        )
+        with mock.patch.object(doctor, "collect", return_value=[]) as collect, mock.patch(
+            "meapet.config.store.load_config", return_value={}
+        ):
+            self.assertEqual(doctor.main(["--doctor", "--agent-script"]), 0)
+        self.assertEqual(collect.call_args.kwargs["agent_script"], "")
 
 
 class SourceProbeTest(unittest.TestCase):

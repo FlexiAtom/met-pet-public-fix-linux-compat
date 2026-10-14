@@ -17,6 +17,10 @@
   明确点头，这一档就是为那句留的闸。`--probe-family {auto,ipv4,ipv6}` 管那一发走哪一族地址栈，
   读数里另印**实连的对端地址**：本机 IPv6 出口不稳，不分家族的"连不上"读数判不了案（见坑「网络
   取证的"连不上"必须分 IP 家族重测」）。
+  第四档 `--agent-script [PATH]` 动的是**反方向**：不往外连，而是就地起一台**只监听 127.0.0.1** 的
+  假 Agent 端（`meapet/agent/fake_agent.py`），让产品自己那个客户端适配器连上来，按剧本发几发
+  回合外的帧，报"这端搬了几发"。它因此不占 `--allow-egress` 那道闸——起服务器不等于外联，
+  而剧本里写地址/会话那类键是直接拒的。默认档同样一台不起。
 - **每一项后面直接跟判据**（这条在说什么 / 什么算坏）。否则"这台机器没有 layer-shell"和
   "我们的桥接层没编进包"会被读成同一句话——那正是本入口要消灭的形状。
 - **探测项一律调产品侧那一个函数**，这里不重算。重算就是第二套真值，doctor 会开始自证。
@@ -109,6 +113,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--probe-agent",
         action="store_true",
         help="额外探一次 agent 通道（gateway）在场性：先问 TCP 再真连 WebSocket，**只连回路**，非回路端点不连",
+    )
+    parser.add_argument(
+        "--agent-script",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="就地起一台**只监听 127.0.0.1** 的假 Agent 端，按剧本往产品那个客户端适配器发几发"
+        "回合外帧，报「落队 N/M」等计数（测的是这端那段搬运，不是他那条真端点）。"
+        "不带 PATH 用内置剧本，带 PATH 读那份 JSON（剧本里写地址/会话键一律拒）",
     )
     parser.add_argument(
         "--probe-source",
@@ -585,6 +599,92 @@ def _agent_channel(config: dict) -> str:
     return f"{label} · 在场：{_capabilities_summary(caps)}（{AGENT_PROBE_BUDGET_SECONDS}s 内握手完成）"
 
 
+#: 假端那一趟要**临时摘掉**的凭据 env。`factory._resolve_secret`（`factory.py:30-33`）把这两个
+#: 名字排在**任何** config 字面量之前，所以在合成配置里写 `auth_token=""` 拦不住它们——不摘，
+#: 客户端会把这台机器上真那枚 token 递进就地起的监听器。摘在 try/finally 里，跑完原样还回去。
+AGENT_SCRIPT_TOKEN_ENVS = ("MEA_PET_AGENT_LINK_TOKEN", "MEA_PET_AGENT_TOKEN")
+
+
+def _agent_script(config: dict, script_path: str = "") -> str:
+    """假 Agent 端跑一趟：剧本发帧，读数说**这端的客户端搬了几发**。
+
+    与 `--probe-agent` 那格分工明确：那一格判的是"他那条真端点在不在场"，这一格判的是
+    "帧真到了的时候，客户端那段搬运（`agent_link.py:649-655` 入队 → `take_idle_tool_statuses`）
+    有没有跑"。端点是就地起在 127.0.0.1 上的假端（`meapet/agent/fake_agent.py`），
+    客户端仍走产品工厂那一条构造路径。
+
+    分母由假端按 `state`/`safe_text` 都非空来算（与客户端 `_tool_status_from_payload` 同判据），
+    所以「落队 0/4」是搬运坏了，「落队 0/0」是剧本压根没发到——两种坏在读数里不同形。
+    """
+    from meapet.agent.fake_agent import (
+        DEFAULT_SCRIPT,
+        FakeAgentScriptError,
+        load_script,
+        scripted_agent_server,
+    )
+    from meapet.agent.factory import create_agent_adapter_from_config
+
+    probe_config = copy.deepcopy(config or {})
+    llm = probe_config.get("llm")
+    if not isinstance(llm, dict):
+        llm = {}
+        probe_config["llm"] = llm
+    agent = llm.get("agent")
+    if not isinstance(agent, dict):
+        agent = {}
+        llm["agent"] = agent
+    configured_kind = agent.get("kind")
+    # 这一趟走的是 agent_link 那套信封，所以 kind 由本案定，不跟着他配的 hermes/openclaw 飘。
+    agent["kind"] = "agent_link"
+    agent["auth_token"] = ""
+    agent["api_key"] = ""
+
+    try:
+        steps = DEFAULT_SCRIPT if not script_path else load_script(script_path)
+    except (OSError, FakeAgentScriptError, UnicodeDecodeError) as exc:
+        return f"假端未起：剧本读不出来 {type(exc).__name__}: {exc}"
+    source = "内置剧本" if not script_path else f"外部 {script_path}"
+    label = f"{source} · 配置 kind={configured_kind or '未设'}（本格强制 agent_link）"
+
+    async def _run_once():
+        async with scripted_agent_server(script=steps) as server:
+            agent["base_url"] = server.url
+            adapter = create_agent_adapter_from_config(probe_config)
+            try:
+                # 握手调的是产品侧那一个函数（`adapter.probe()`），不在这里重演 handshake 逻辑。
+                started = time.monotonic()
+                await asyncio.wait_for(adapter.probe(), AGENT_PROBE_BUDGET_SECONDS)
+                spent = time.monotonic() - started
+                result = await server.wait_result(
+                    max(0.5, AGENT_PROBE_BUDGET_SECONDS - spent)
+                )
+                idle = adapter.take_idle_tool_statuses()
+            finally:
+                await adapter.close()
+        return result, idle
+
+    saved = {key: os.environ.pop(key, None) for key in AGENT_SCRIPT_TOKEN_ENVS}
+    try:
+        result, idle = asyncio.run(_run_once())
+    except Exception as exc:  # noqa: BLE001 - 跑不通是本案要的那条读数，不是 traceback
+        return f"{label} · 不在场：{_failure_chain(exc)}（预算 {AGENT_PROBE_BUDGET_SECONDS}s）"
+    finally:
+        for key, value in saved.items():
+            if value is not None:
+                os.environ[key] = value
+
+    tokens = "·".join(str(length) for length in result.hello_token_lengths) or "无握手"
+    codes = "·".join(result.error_codes) or "无"
+    first = f"（首帧 {idle[0].state}·{idle[0].safe_text}）" if idle else ""
+    return (
+        f"{label} · 发出 {result.sent} 帧 · 入站 {len(result.received_types)} 帧 · "
+        f"落队 {len(idle)}/{result.queueable_sent}{first} · 回执 {codes} · "
+        f"快照 {result.snapshot_seen} · 屏障 "
+        f"{'pong' if result.barrier_acked else '未到齐'} · token 长度 {tokens}"
+        f"（预算 {AGENT_PROBE_BUDGET_SECONDS}s）"
+    )
+
+
 #: 内容源探针的**每次操作**超时（秒），同时兼**延迟判定线**——判定线只判不切：超了照样把成功
 #: 读数报出来，人要知道的是"这源能用但要 3.2 s"，不是"它在 3.0 s 被我弄死了"（后者会把可用源
 #: 误读成不可用）。这一格存在的理由就是**覆盖**客户端那个默认值
@@ -901,7 +1001,7 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
             probe_agent: bool = False, probe_sources: tuple[str, ...] = (),
             probe_posts: tuple[str, ...] = (), probe_body: str = "",
             probe_headers: tuple[str, ...] = (), probe_family: str = "auto",
-            allow_egress: bool = False) -> list[Item]:
+            allow_egress: bool = False, agent_script: str | None = None) -> list[Item]:
     """跑一遍探测，返回逐项读数（任何一项坏都会变成一行文本，不抛）。
 
     带 `measure_speech` / `measure_repetition` / `probe_agent` / `probe_sources`|`probe_posts`
@@ -909,6 +1009,9 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
     （起子进程落 wav / 真开一次 WebSocket / 真发一次 GET 或 POST）；默认三档都不动，一格不碰、
     一个包不发。`probe_sources` 与 `probe_posts` 只连回路，除非同时显式带 `allow_egress`
     （那是"新增外联"，须人工点头）。
+
+    `agent_script` 那档动手的方式不同：起的是**本机回路上**一台假 Agent 端（不是往外面连），
+    所以不占 `allow_egress` 那道闸；None 时这一格整格不存在，`""`=内置剧本，其余=那份文件。
     """
     items = [
         _probe(
@@ -1093,6 +1196,34 @@ def collect(config: dict, *, with_gui: bool = False, skip_tts: bool = False,
                 ),
             )
         )
+    if agent_script is not None:
+        items.append(
+            _probe(
+                "agent_script",
+                "**假端那一趟**：就地起一台只监听 127.0.0.1 的脚本化 Agent Link 服务器，"
+                "让**产品自己那个客户端适配器**连上来，按剧本发几发**回合外**的帧，报四件事——"
+                "「落队 N/M」= 客户端 `_tool_status_from_payload` 认下来的帧数 / 假端按同一判据"
+                "（`state` 与 `safe_text` 都非空）应当让它认的帧数。分母从假端那侧算，所以 "
+                "**N=0 而 M=4 是搬运坏了**，**M=0 是这一趟压根没有该入队的帧**（剧本里那些不是"
+                "可解析的 `chat.tool_status`，或压根没发到），两种坏在读数里不同形；"
+                "「回执」= 客户端发回来的 `control.error` 的 code，内置剧本里那一发**解析不出且"
+                " required** 的帧要的就是 `NO_ACTIVE_TURN`，而**能解析**的那四发按 "
+                "`agent_link.py:649-655` 只入队、**不该**有回执——多出回执同样是读数；"
+                "「快照」= 客户端发出的 `tools.snapshot` 数，内置剧本 `tools.refresh` 那一步要看它"
+                "从 1 变 2；「屏障」= 最后一发 `control.ping` 有没有换来 pong——入站在 `_supervise` "
+                "里是**串行** `await _dispatch_frame`，所以 pong 到了才说前三步真的都跑完了，"
+                "没到就印「未到齐」，不猜一个数。"
+                "**这一格看不见的**：① `take_idle_tool_statuses()` 是这一段能读到而不用撒谎的最深处，"
+                "再往后那"
+                "一段（`control_bridge.py:189-193` 那个 1 s QTimer → 气泡）无头跑不起来，"
+                "所以这一格**不**说明气泡真亮过；② 它不说他配的那条真端点会发这些帧（那是 "
+                "`agent_channel` 那一格）；③ 队列上限 16 的**淘汰**行为不测，内置剧本刻意把队列型"
+                "帧压在 4 发。握手调 `adapter.probe()`（产品侧那一个函数），凭据走 factory，"
+                "但 `MEA_PET_AGENT_LINK_TOKEN` / `MEA_PET_AGENT_TOKEN` 在这一趟里临时摘掉、跑完还回去，"
+                "读数只印 token 的**长度**（应当是 0）与帧的 type，不印任何凭据值",
+                lambda: _agent_script(config, script_path=agent_script),
+            )
+        )
     return items
 
 
@@ -1124,6 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
             probe_sources=tuple(args.probe_source), probe_posts=tuple(args.probe_post),
             probe_body=args.probe_body, probe_headers=tuple(args.probe_header),
             probe_family=args.probe_family, allow_egress=args.allow_egress,
+            agent_script=args.agent_script,
         )
     elapsed = time.monotonic() - started
     if args.doctor_format == "json":

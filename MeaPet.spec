@@ -119,6 +119,12 @@ a = Analysis(
         "meapet.agent.agent_link",
         "meapet.agent.openclaw",
         "meapet.agent.hermes",
+        # doctor 那一格 `--agent-script` 用的假 Agent 端。它**不在** `tests/`（PyInstaller 不收
+        # 那目录），而是在产品侧 `meapet/agent/`，所以冻结包里也得带上；它走的是 websockets 的
+        # **服务器**侧，上面那三行只带了 client——漏了这一行，冻结版跑到那一格是
+        # ModuleNotFoundError，不是读数。
+        "meapet.agent.fake_agent",
+        "websockets.asyncio.server",
         # in-process VITS
         "meapet.tts.engines.vits_runtime",
         "scipy",
