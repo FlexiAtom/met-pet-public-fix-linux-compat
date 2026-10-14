@@ -1121,7 +1121,10 @@ class TestConfigAndWiring(unittest.TestCase):
         self.assertIn("frame", seen)
         self.assertEqual(
             seen[seen.index("frame") + 1], "拿不到当前画面，定位不了位置")
-        self.assertIn("拿不到当前离屏帧", log.call_args[0][0])
+        logged = log.call_args[0][0]
+        self.assertIn("拿不到当前帧", logged)
+        self.assertIn("PNG 模式没有离屏渲染这一步", logged)
+        self.assertNotIn("离屏渲染不可用", logged)
         self.assertFalse(getattr(host, "_fidus_busy", False))
 
 

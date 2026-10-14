@@ -503,5 +503,62 @@ class Live2DStartupBudgetTests(unittest.TestCase):
         fallback.assert_called_once_with("等待 Live2D 首帧超时")
 
 
+class CanvasSizeReadoutTests(unittest.TestCase):
+    """画布到底读没读到：单位口径 vs 像素口径（人工 2026-10-15 第二条 BUG 的根因那一半）。
+
+    L1 探针量到的现状是：`GetCanvasSize()` 给 (1.7241379, 2.4137931)（**模型单位**），
+    `int()` 之后是 (1, 2) ⇒ 被 `MIN_CANVAS_SIZE` 判死 ⇒ 每一步几何都落在硬编码 1024 方画布上。
+    真像素口径是 `GetCanvasSizePixel()`=(5000.0, 7000.0)（`GetPixelsPerUnit()`=2900）。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_loaded_model_reports_pixels_normalized_to_the_reference_edge(self) -> None:
+        from meapet.desktop.live2d_widget import Live2DModel
+
+        class SdkModel:
+            def GetCanvasSize(self):                     # 单位口径：不该再被用
+                return (1.7241379022598267, 2.4137930870056152)
+
+            def GetCanvasSizePixel(self):
+                return (5000.0, 7000.0)
+
+        with tempfile.TemporaryDirectory() as model_dir:
+            Path(model_dir, "mea.model3.json").write_text("{}")
+            l2d = Live2DModel(model_dir)
+            l2d.model = SdkModel()
+            self.assertEqual(l2d.get_suggested_size(), (731, 1024))
+
+    def test_unloaded_model_keeps_the_placeholder(self) -> None:
+        from meapet.desktop.live2d_widget import Live2DModel, PLACEHOLDER_CANVAS
+
+        with tempfile.TemporaryDirectory() as model_dir:
+            Path(model_dir, "mea.model3.json").write_text("{}")
+            self.assertEqual(Live2DModel(model_dir).get_suggested_size(),
+                             PLACEHOLDER_CANVAS)
+
+    def test_landscape_canvas_normalizes_its_long_edge_too(self) -> None:
+        from meapet.desktop.live2d_widget import normalize_canvas_to_reference_edge
+
+        self.assertEqual(normalize_canvas_to_reference_edge(4000, 2000), (1024, 512))
+        self.assertEqual(normalize_canvas_to_reference_edge(0, 1234), (1024, 1024))
+
+    def test_canvas_out_of_range_still_falls_back_to_config(self) -> None:
+        """读数不落在 MIN..MAX 就不采，回退那两层（config → 硬编码）照旧活着。"""
+        host = _RenderHost("")
+        self.addCleanup(host.deleteLater)
+        host.config = {"live2d": {"default_canvas_size": [800, 1000]}}
+
+        class Narrow:
+            def get_suggested_size(self):
+                return (1024, 100)          # 极窄模型：短边 100 < MIN_CANVAS_SIZE
+
+        self.assertIsNone(host._read_canvas_size_from_model(Narrow()))
+        host._l2d_model = Narrow()
+        self.assertEqual(host._live2d_base_size(), (800, 1000))
+
+
 if __name__ == "__main__":
     unittest.main()

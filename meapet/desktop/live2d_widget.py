@@ -34,6 +34,29 @@ log = get_color_logger("live2d_widget")
 ZONE_CLICK_MAX_DISTANCE_PX = 35
 ZONE_CLICK_MAX_HOLD_SECONDS = 0.4
 
+#: 画布归一的参照长边（px）。产品拿 `get_suggested_size()` 的产物去算 viewport 几何，
+#: 而 live2d-py 的 `GetCanvasSize()` 返回的是**模型单位**——本机 mea_live2d 实测
+#: `(1.7241379, 2.4137931)`，`GetPixelsPerUnit()=2900.0`，`GetCanvasSizePixel()=(5000.0, 7000.0)`。
+#: 直接 `int()` 就是 `(1, 2)`，被 `MIN_CANVAS_SIZE` 判死 ⇒ 画布从来没被读到过，每一步几何
+#: 都落在硬编码方画布上（人工 2026-10-15「PNG切换到Live2D需要重新请求窗口大小」的根因）。
+#: 参照边取 1024 是为了与那份被替换掉的硬编码值**同高**：`model.Resize(w, h)` 只按高缩放
+#: （实测 widget 366x512 与 512x512 画出的立绘同高 353 px），所以高不变＝屏上人物一寸不变，
+#: 换掉的只是那个假方形-vs-真 5:7 的宽高比。
+CANVAS_REFERENCE_EDGE = 1024
+
+#: 模型还没加载时的占位画布（`.moc3` 的画布尺寸要到 `initializeGL` 里加载完才读得到）。
+#: 525x735 与本机那份真画布的 5:7 同形，所以首帧前后只是等比放大，不改变形状。
+PLACEHOLDER_CANVAS = (525, 735)
+
+
+def normalize_canvas_to_reference_edge(w: float, h: float,
+                                       edge: int = CANVAS_REFERENCE_EDGE) -> tuple[int, int]:
+    """把画布按**长边**缩到参照边长，宽高比原样带走。"""
+    if w <= 0 or h <= 0:
+        return (edge, edge)
+    scale = edge / max(w, h)
+    return (max(1, round(w * scale)), max(1, round(h * scale)))
+
 
 class Live2DModel:
     """Live2D 模型控制器，提供与 SpriteRenderer 兼容的接口"""
@@ -68,12 +91,21 @@ class Live2DModel:
         return self.model
 
     def get_suggested_size(self) -> tuple:
-        """返回建议显示尺寸（模型加载后）"""
-        # 优先使用模型实际画布大小；未加载时返回默认
-        if self.model:
-            canvas_w, canvas_h = self.model.GetCanvasSize()
-            return (int(canvas_w), int(canvas_h))
-        return (525, 735)
+        """建议显示尺寸（模型加载后）：真画布**像素**尺寸归一到参照长边。
+
+        读的是 `GetCanvasSizePixel()`；`GetCanvasSize()` 那一对是模型单位，拿它当像素用会读出
+        (1, 2)（见 `CANVAS_REFERENCE_EDGE` 上那段）。读不到像素口径就退回占位值，让调用方
+        照旧走配置/硬编码那两层回退。
+        """
+        if self.model is None:
+            return PLACEHOLDER_CANVAS
+        try:
+            canvas_w, canvas_h = self.model.GetCanvasSizePixel()
+        except Exception as exc:
+            print(f"[live2d] ✗ GetCanvasSizePixel 读不到画布: {type(exc).__name__}: {exc}",
+                  flush=True)
+            return PLACEHOLDER_CANVAS
+        return normalize_canvas_to_reference_edge(canvas_w, canvas_h)
 
     # ====== 兼容 SpriteRenderer 的接口 ======
 

@@ -134,10 +134,14 @@ class _GhostStandin(_CloseStandin):
 
     `_CloseStandin._fallback_to_png` 只记 reason——那条链的上半截够用，但臂 A 要的正是
     函数体末尾那发 `show()`，所以这里把 mixin 的真实现挂回来，只替掉它够到的外部器官。
+    链尾还有一发「换引擎后重挂」：这里同样挂**真**那一对（`_remount_layer_after_render_switch`
+    与其谓词），它靠 `_layer_backend` 缺席自行早退——关闭态没有 surface 可重发，正该是 no-op。
     """
 
     _fallback_to_png = PetRenderHostMixin._fallback_to_png
     _cancel_live2d_startup_timeout = PetRenderHostMixin._cancel_live2d_startup_timeout
+    _remount_layer_after_render_switch = PetRenderHostMixin._remount_layer_after_render_switch
+    _layer_penetrating = PetRenderHostMixin._layer_penetrating
 
     def __init__(self):
         super().__init__()

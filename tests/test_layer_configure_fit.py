@@ -500,8 +500,9 @@ class TestMountRequestsTheContour(unittest.TestCase):
     def test_no_frame_speaks_and_mounts_the_canvas(self):
         host, log = self._mount(None)
         self.assertEqual(host._layer_backend.enabled, [self.CANVAS])
-        self.assertIn("量不到轮廓", log)
+        self.assertIn("PNG 模式没有离屏渲染这一步", log)
         self.assertIn("按整画布挂", log)
+        self.assertNotIn("离屏渲染不可用", log)
 
     def test_a_contour_too_small_to_be_the_pet_is_refused_out_loud(self):
         """贴在右下角的一小坨 ⇒ 夹完只剩 27 宽，那不是轮廓而是噪声，不认（不拿它去请求挂载）。"""

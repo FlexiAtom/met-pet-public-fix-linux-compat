@@ -48,6 +48,10 @@ class FakeTimer:
     def stop(self):
         self.active = False
 
+    def isActive(self):
+        """真 QTimer 有这一个符号：`_layer_penetrating()` 判的就是它。"""
+        return self.active
+
 
 class FakeBackend:
     def __init__(self):
@@ -220,7 +224,22 @@ class TestPNGModeReachesTheMount(unittest.TestCase):
         host.sprite_label = type("PngWidget", (), {})()   # 真 PNG 控件没有 render_offscreen
         region = host._layer_surface_region(461, 614)
         self.assertEqual(region, (0, 0, 461, 614), "按 alpha 解轮廓＝偷做热区")
-        self.assertIn("量不到轮廓", self._surface_log(host))
+        log = self._surface_log(host)
+        self.assertIn("PNG 模式没有离屏渲染这一步", log)
+        # 「离屏渲染不可用？」在那一侧指向一个不存在的开关（人工 2026-10-15 报的这句）
+        self.assertNotIn("离屏渲染不可用", log)
+
+    def test_live2d_names_its_own_reason_for_the_same_action(self):
+        """同一动作、不同事实：Live2D 有离屏通道，拿不到帧是首帧未到，不能说成 PNG 那句。"""
+        host, _RH = self._host()
+        host._use_live2d = True
+        host._fidus_current_frame = lambda: None
+        region = host._layer_surface_region(461, 614)
+        self.assertEqual(region, (0, 0, 461, 614))
+        log = self._surface_log(host)
+        self.assertIn("Live2D 离屏这一轮没给帧", log)
+        self.assertIn("下一轮挂载再量轮廓", log)
+        self.assertNotIn("PNG 模式没有离屏渲染这一步", log)
 
     @staticmethod
     def _push(host):
@@ -268,9 +287,145 @@ class TestModeSwitchCancelsThePendingMeasure(unittest.TestCase):
         host._show_bubble = lambda *_a, **_k: None
         host._save_config = lambda: None
         host._standby = False
+        host._remount_layer_after_render_switch = lambda reason: host.calls.append(
+            ("remount", reason))
         host._toggle_render_mode()
-        self.assertEqual(host.calls, ["cancel", "png"],
-                         "先作废再换画布，否则那一发的读数与挂载矩形落到新画布上")
+        self.assertEqual(host.calls, ["cancel", "png", ("remount", "PNG")],
+                         "先作废再换画布，否则那一发的读数与挂载矩形落到新画布上；"
+                         "重挂排最后——挂载自己会 hide，落在中间会被后续 show 盖回来")
+
+
+class TestEngineSwitchRemountsTheSurface(unittest.TestCase):
+    """换渲染引擎时**重发一次挂载请求**（人工 2026-10-15「PNG切换到Live2D需要重新请求
+    窗口大小，而不是直接切」）。
+
+    L1 探针丙臂（`scripts/engine_switch_size_probe.py`）量的现状：穿透态里切引擎之后
+    `enable_calls 总数=1`、`set_size 调用=[]`，configure 停在 PNG 那块的 130x260，而新画布
+    是 366x512 ⇒ 新引擎每一帧都被裁进旧尺寸那块 surface。交互态没这一格（`resize()` 直接生效），
+    所以缺的只有"重发 enable"这一步。
+    """
+
+    class Widget:
+        def __init__(self, w, h, offset=(-88, 0)):
+            from PyQt5.QtCore import QPoint
+
+            self._size = (w, h)
+            self._offset = QPoint(*offset)
+            self._proxy_rect = None
+
+        def width(self):
+            return self._size[0]
+
+        def height(self):
+            return self._size[1]
+
+        def mapTo(self, _parent, _point):
+            return self._offset
+
+    def _host(self, *, active=True, widget=None):
+        import meapet.desktop.render_host as RH
+
+        host = object.__new__(RH.PetRenderHostMixin)
+        host.backend = FakeBackend()
+        host._layer_backend = host.backend
+        host.config = {}
+        host._layer_window_pos = (10, 20)      # 进穿透前窗口还可见时记下的左上角
+        host._layer_timer = FakeTimer()
+        if active:
+            host._layer_timer.start()
+        host.sprite_label = widget if widget is not None else self.Widget(366, 512)
+        host.calls = []
+        host.hide = lambda: host.calls.append("hide")
+        host._layer_fit_cancel = lambda: host.calls.append("fit-cancel")
+        host._layer_fit_start = lambda *a, **k: host.calls.append(("fit", a, k))
+        host._fidus_current_frame = lambda: None   # 量不出轮廓 ⇒ 整画布挂，尺寸最好认
+        return host
+
+    def test_interactive_switch_asks_for_nothing(self):
+        """没挂着 surface 就没有要重发的东西：不该凭空建一只 layer。"""
+        host = self._host(active=False)
+        host._remount_layer_after_render_switch("Live2D")
+        self.assertEqual(host.backend.enabled, [])
+        self.assertEqual(host.calls, [])
+
+    def test_remount_asks_the_compositor_for_the_new_canvas(self):
+        """这一断言钉的是丙臂那个数：enable 的宽高必须换成**新**画布。"""
+        host = self._host()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            host._remount_layer_after_render_switch("Live2D")
+        # 画布矩形 = (10-88, 20+0, 366, 512)，负坐标按挂载口径夹到 0
+        self.assertEqual(host.backend.enabled, [(0, 20, 366, 512)],
+                         "surface 还是旧引擎那块 ⇒ 新引擎的帧被裁进去")
+        self.assertEqual(host._layer_timer.active, True, "重挂后推帧得继续")
+        self.assertIn("fit-cancel", host.calls, "上一轮的夹移还活着就会跟新一轮抢")
+
+    def test_remount_does_not_pay_a_fidus_round(self):
+        """换引擎不该触发「量完再挂」：那一发最坏 13.5 s，还可能弹模态要人按 Mod+V。"""
+        host = self._host()
+        with contextlib.redirect_stderr(io.StringIO()):
+            host._remount_layer_after_render_switch("Live2D")
+        fit = [c for c in host.calls if c[0] == "fit"][0]
+        self.assertEqual(fit[2], {"measured": False})
+        self.assertFalse(getattr(host, "_pending_mount", None))
+
+    def test_first_frame_hook_is_the_live2d_side_of_the_switch(self):
+        """钩子真在首帧那一步上：`_on_live2d_first_frame` 走完后 enable 收到了新尺寸。"""
+        host = self._host()
+        host._l2d_pending = True
+        host._use_live2d = True
+        host._cancel_live2d_startup_timeout = lambda: None
+        host._fit_window_to_model = lambda: None
+        host._restore_pet_position = lambda: None
+        host._reveal_live2d_window = lambda: None
+        host._mark_renderer_ready = lambda: None
+        host.width = lambda: 219
+        host.height = lambda: 410
+        host.x = lambda: 10
+        host.y = lambda: 20
+        with contextlib.redirect_stderr(io.StringIO()):
+            host._on_live2d_first_frame()
+        self.assertEqual(host.backend.enabled, [(0, 20, 366, 512)])
+
+    def test_fallback_remounts_after_show_not_before(self):
+        """回退 PNG 那条链也会把顶层 show 回来：重挂必须在 `show()/raise_()` **之后**。
+
+        这一格是 L1 探针丙臂实测出来的岔口：钩子原先挂在 `_init_png_renderer` 里面，
+        回退收尾 `visible=True` 而 `enable_calls 总数=2` ⇒ 窗口与 surface 同时上屏，
+        桌宠画两份。挂载动作自己会 `hide()`，所以它得站在链尾。
+        """
+        host = self._host()
+        host.calls = []
+        host._cancel_live2d_startup_timeout = lambda: None
+        host._init_png_renderer = lambda: host.calls.append("png")
+        host._place_initial_position = lambda: None
+        host.setWindowOpacity = lambda *_a: None
+        host.show = lambda: host.calls.append("show")
+        host.raise_ = lambda: host.calls.append("raise")
+        host._mark_renderer_ready = lambda: host.calls.append("ready")
+        host._remount_layer_after_render_switch = lambda reason: host.calls.append(
+            ("remount", reason))
+
+        class OldGLWidget:
+            def shutdown(self):
+                pass
+
+            def hide(self):
+                pass
+
+            def deleteLater(self):
+                pass
+
+        host.sprite_label = OldGLWidget()
+        with contextlib.redirect_stderr(io.StringIO()):
+            host._fallback_to_png("探针：首帧未到")
+        self.assertEqual(
+            host.calls,
+            ["png", "show", "raise", "ready", ("remount", "Live2D 不可用，回退 PNG")],
+            "重挂排在 show 之前 = 窗口留在屏上")
+        self.assertLess(host.calls.index("show"),
+                        host.calls.index(("remount", "Live2D 不可用，回退 PNG")))
+        self.assertEqual(host._use_live2d, False)
 
 
 if __name__ == "__main__":
