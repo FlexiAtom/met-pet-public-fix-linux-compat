@@ -1826,13 +1826,24 @@ class PetRenderHostMixin:
         # 「放大窗口 + 至多四发 × 0.9–13.5 s + 桌宠在屏上滑动 + 20 s 预算」。
         edges = sorted({c.edge for c in FP.iter_candidates(frame)}, reverse=True)
         if not any(e >= FP.PREMOUNT_MIN_EDGE for e in edges):
+            # 两种必拒的形状要说两种话：有候选但全在小档 ⇒ 真撞档限；一个候选都没有 ⇒
+            # `select_template` 连档限那一步都到不了（每档要么装不下、要么覆盖率不过）。
+            # 后一格把「停在档限」写进去就是假判语——本案拆的正是这种判语。
+            if edges:
+                why = (f"画布 {w}x{h}：可测的贴片档只有 {edges}，全部低于定位下限 "
+                       f"{FP.PREMOUNT_MIN_EDGE}² ⇒ `select_template` 在第一次注册之前就停在档限"
+                       "（位移闭环一条都没跑，别说它没过）")
+                bubble = ("这个尺寸的立绘量不出可信位置（可用的贴片档比定位下限还小），没切穿透")
+            else:
+                why = (f"画布 {w}x{h}：{FP.SIZES} 各档**一个候选都造不出**"
+                       "（每一档要么装不下、要么覆盖率不过 "
+                       f"`MIN_COVERAGE={FP.MIN_COVERAGE}`）⇒ `select_template` 连档限那一步"
+                       "都到不了，位移闭环一条没跑（别说它没过）")
+                bubble = ("这个尺寸的立绘量不出可信位置（一处可信的贴片都造不出来），没切穿透")
             self._premount_refuse(
-                f"画布 {w}x{h}：可测的贴片档只有 {edges or '无'}，全部低于定位下限 "
-                f"{FP.PREMOUNT_MIN_EDGE}² ⇒ `select_template` 在第一次注册之前就停在档限"
-                "（位移闭环一条都没跑，别说它没过）",
-                "这个尺寸的立绘量不出可信位置（可用的贴片档比定位下限还小），没切穿透"
-                "；到「设置与数据 ▸ 桌宠窗口大小」把桌宠调到 75% 或以上再点，"
-                "调大之后能不能量准还得现场看")
+                why,
+                bubble + "；到「设置与数据 ▸ 桌宠窗口大小」把桌宠调到 75% 或以上再点，"
+                         "调大之后能不能量准还得现场看")
             return
         if not self._confirm_float_first():
             self._premount_refuse("人没确认窗口已切成浮动（平铺下量不准）",

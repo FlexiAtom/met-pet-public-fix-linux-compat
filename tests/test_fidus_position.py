@@ -576,6 +576,10 @@ class TestPremountOrdering(unittest.TestCase):
         elif frame == "tiny":
             # 轮廓只有 70×70 ⇒ `iter_candidates` 造得出 64² 而造不出 96²：§A 预检闸门的拒绝档
             host._fidus_current_frame = lambda: contour_frame(70, 70, h=160, w=160)
+        elif frame == "dot":
+            # 轮廓 50×50 ⇒ 比最小的 64² 还短：**一档候选都造不出**（每档都在"装不下"那格 continue）。
+            # 这一格要说另一种话——把"停在档限"写进去就是假判语，压根没有候选去撞档限。
+            host._fidus_current_frame = lambda: contour_frame(50, 50, h=160, w=160)
         else:
             # 「ok」过去是 `np.zeros`——全透明帧连一只盒都造不出。那些用例钉的是**顺序**，
             # `request_locate` 被 mock，帧内容没人读，所以一直没人发现。§A 之后产品自己读帧
@@ -1011,6 +1015,25 @@ class TestPremountPreflightGate(unittest.TestCase):
         self.assertIn("停在档限", joined, f"log 里要说清停在哪儿：{host.printed}")
         self.assertIn("75%", spoken[0], "出口是那条现成的菜单，得把路说出来")
 
+    def test_no_candidate_at_all_doesnt_claim_the_tier_gate(self):
+        """一档候选都没有时那句"停在档限"是假话——本案拆的就是这种判语，不能自己再造一句。
+
+        `edges == []` 与 `edges == [64]` 是两种必拒的形状：前者每档都在"装不下"那格被
+        `iter_candidates` 自己挡掉（`select_template` 连档限那一步都到不了），后者才是撞档限。
+        """
+        host = self._host("dot")
+        self._run(host)
+        self.assertEqual(host.posted, [], "同样不必花钱")
+        self.assertEqual(host.backend.enabled, [], "拒了就是不切")
+        self.assertIsNone(getattr(host, "_probe_saved", None), "窗口不该被放大过")
+        joined = " ".join(host.printed)
+        self.assertIn("一个候选都造不出", joined, f"零候选要说零候选的实话：{host.printed}")
+        self.assertNotIn("停在档限", joined, "没有候选就没有档限可撞，那句在这里是假的")
+        spoken = [b for b in host.bubbles if not b.startswith("正在定位")]
+        self.assertEqual(len(spoken), 1, f"只该出一句：{host.bubbles}")
+        self.assertNotIn("位移闭环", spoken[0])
+        self.assertIn("75%", spoken[0], "出口仍是那条现成的菜单")
+
     def test_solid_canvas_still_goes_through(self):
         """反证的那一半：闸门不许把**量得动**的画布也拦下来——那一发该照旧去量。"""
         host = self._host("ok")
@@ -1049,7 +1072,7 @@ class TestPremountPreflightGate(unittest.TestCase):
         这条把"判据不是新立的"钉成断言——两边同读 `iter_candidates` 那两条闸与同一个
         `min_edge`，所以闸门永远不可能比 `select_template` 更早判死。
         """
-        for frame in ("ok", "tiny"):
+        for frame in ("ok", "tiny", "dot"):
             with self.subTest(frame):
                 real = TestPremountOrdering._host(self, frame=frame)._fidus_current_frame()
                 gate_refuses = not any(
