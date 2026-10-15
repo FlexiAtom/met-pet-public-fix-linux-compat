@@ -833,6 +833,15 @@ def main():
     except Exception as exc:
         log.warning(f"[boot] OpenGL surface defaults skipped: {exc}")
 
+    # Qt 平台插件闸门必须排在 QApplication **之前**：那一发是 qFatal → abort()，
+    # 下面的 try/except 接不住——话要说在死之前，能窄修的也只在这一刻还来得及改本进程的环境。
+    from meapet.desktop.qpa_guard import ensure_platform_plugins_loadable
+
+    try:
+        ensure_platform_plugins_loadable(lambda line: log.warning(line))
+    except Exception:
+        log.warning(f"[qpa] 闸门自己没跑起来:\n{traceback.format_exc()}")
+
     try:
         app = QApplication(sys.argv)
     except Exception:

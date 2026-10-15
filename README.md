@@ -72,6 +72,8 @@ python -m meapet --doctor --skip-tts | grep audio_playback
 
 `绑定=在场 底层=可加载` 说明 Qt 那一路起得来、音量档生效；`底层=加载失败：<原因>` 就照那个原因补系统包，Arch 系缺的是 `qt5-multimedia`。不做重指向（保留 wheel 自带那一族）同样能跑，两条路都能出声，区别在音量档归谁负责、那族库随 pip 还是随系统升级。
 
+**一个进程里混了两套 Qt 会 abort（2026-10-16 现量）**：如果只做了上面那两个链接的一半，或把 `QT_PLUGIN_PATH` 指向系统 `/usr/lib/qt/plugins` 而 `libQt5Core` 仍从 wheel 自带那一族加载，Qt 就会去加载**系统那套**的平台插件。系统插件要的 `Qt_5_PRIVATE_API` 符号只有 `/usr/lib/libQt5Gui.so.5` 导出，打包那一族里一个都没有 ⇒ 插件 `dlopen` 失败 ⇒ Qt 直接 `qFatal + abort()`：终端先打两行 `qt.qpa.plugin: Could not load the Qt platform plugin "xcb"/"wayland" ... even though it was found.`，随后 `已中止（核心已转储）`，Python 侧的 `try/except` **接不住**。程序里的闸门（`meapet/desktop/qpa_guard.py`）会在 `QApplication` **之前**把这件事说实话，并把**本进程**的 `QT_QPA_PLATFORM_PLUGIN_PATH` 指回与已加载那一套同一路的 `platforms`——`QT_PLUGIN_PATH` 原样不动，那里挂着 fcitx5/ibus 输入法插件，撤掉会让输入框打不出中文。不想让闸门动环境就设 `MEA_PET_QPA_NO_REPAIR=1`（只说不改，那道 abort 照原样发生）。两条永久出口任一即可：**用项目自己的 `.venv/bin/python` 起**（它就是上面那套完整重指向，与系统同路），或 `env -u QT_PLUGIN_PATH python pet.py`。
+
 随时可以通过桌宠右键菜单中的“打开设置...”再次打开配置向导。保存后，新后端会立即生效，旧后端仍在进行的生成任务会被取消。
 
 中文故障排查步骤见 [`docs/troubleshooting.zh-CN.md`](docs/troubleshooting.zh-CN.md)。
