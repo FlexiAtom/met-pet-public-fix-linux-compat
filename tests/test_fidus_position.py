@@ -27,6 +27,19 @@ def synthetic_frame(w: int = 400, h: int = 300) -> np.ndarray:
     return frame
 
 
+def contour_frame(rows: int, cols: int, h: int = 200, w: int = 200) -> np.ndarray:
+    """只有左上 `rows×cols` 那一块不透明：它直接决定 `iter_candidates` 造得出多大档。
+
+    `iter_candidates` 先取不透明轮廓的外接框，再问"这只盒放不放得进去"，所以**轮廓短边**
+    就是档位上限：`(70, 200)` ⇒ 160²/128²/96² 全摆不下，只有 64² 造得出候选。
+    """
+    rng = np.random.default_rng(11)
+    frame = np.zeros((h, w, 4), dtype=np.uint8)
+    frame[:rows, :cols, 3] = 255
+    frame[:rows, :cols, :3] = rng.integers(0, 255, (rows, cols, 3), dtype=np.uint8)
+    return frame
+
+
 class FakeEngine:
     """按 `FidusEngine` 的面冒充：注册记窗口、读数由 `reading` 回调决定。"""
 
@@ -450,12 +463,19 @@ class TestPremountOrdering(unittest.TestCase):
         def __init__(self):
             self.starts = 0
             self.stops = 0
+            self.active = False
 
         def start(self):
             self.starts += 1
+            self.active = True
 
         def stop(self):
             self.stops += 1
+            self.active = False
+
+        def isActive(self):
+            """真 QTimer 有这一个符号：`_layer_penetrating()` 判的就是它（面板回写那条链要读）。"""
+            return self.active
 
     class FakeWidget:
         def __init__(self, x=0, y=0, size=200):
@@ -551,8 +571,16 @@ class TestPremountOrdering(unittest.TestCase):
         # 该逐位不动，`_pending_mount` 才继续有效——这条只能靠"真的算一遍"来钉。
         host._layer_geometry = lambda: (geom["x"] + widget.x(), geom["y"] + widget.y(),
                                        widget.width(), widget.height())
-        host._fidus_current_frame = (lambda: None) if frame is None else \
-            (lambda: np.zeros((200, 200, 4), dtype=np.uint8))
+        if frame is None:
+            host._fidus_current_frame = lambda: None
+        elif frame == "tiny":
+            # 轮廓只有 70×70 ⇒ `iter_candidates` 造得出 64² 而造不出 96²：§A 预检闸门的拒绝档
+            host._fidus_current_frame = lambda: contour_frame(70, 70, h=160, w=160)
+        else:
+            # 「ok」过去是 `np.zeros`——全透明帧连一只盒都造不出。那些用例钉的是**顺序**，
+            # `request_locate` 被 mock，帧内容没人读，所以一直没人发现。§A 之后产品自己读帧
+            # ⇒ 这份 fixture 必须换成真量得动的画布（尺寸与这里的 160×160 窗口一致）。
+            host._fidus_current_frame = lambda: contour_frame(160, 160, h=160, w=160)
         host._fidus_timer = TestPremountOrdering.FakeTimer()
         host._mount_timer = TestPremountOrdering.FakeTimer()
         host._layer_timer = TestPremountOrdering.FakeTimer()
@@ -941,6 +969,96 @@ class TestPremountOrdering(unittest.TestCase):
         self.assertEqual(placed, [(348, 200)])
         self.assertTrue(outcome[0], "post-mount 也照实回成败——`move` 的契约两边同一个")
         self.assertEqual(host.sprite_label.moved, [], "post-mount 不该碰子控件那只手")
+
+
+class TestPremountPreflightGate(unittest.TestCase):
+    """预检闸门：这一发**必拒**就别先花钱，也别先请人按 Mod+V（#260，人工 2026-10-15 那四行 log）。
+
+    他给的 log 最后一句是「没切穿透：位移闭环没过／没有可信读数」，而那一发根本没走到闭环：
+    轮廓只造得出 64² 档 ⇒ `select_template` 在第一次注册之前就停在档限。这一族钉三件事：
+    闸门**在花钱之前**（`request_locate` 一次都不投、窗口不放大）、**在模态之前**（对话框不构造）、
+    说的是**档位**而不是闭环。
+    """
+
+    def _host(self, frame):
+        host = TestPremountOrdering._host(self, frame=frame)
+        host.posted = []
+        host.printed = []
+        patcher = mock.patch.object(FP, "request_locate",
+                                    side_effect=lambda *a, **k: host.posted.append(a))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return host
+
+    def _run(self, host):
+        with mock.patch("meapet.desktop.render_host.safe_print",
+                        side_effect=lambda *a, **k: host.printed.append(" ".join(map(str, a)))):
+            host._set_layer_mode(True)
+
+    def test_tiny_contour_refuses_without_paying(self):
+        host = self._host("tiny")
+        self._run(host)
+        self.assertEqual(host.posted, [], "必拒的一发仍去测量 = 白付 0.9–13.5 s 与屏上滑动")
+        self.assertEqual(host.backend.enabled, [], "拒了就是不切")
+        self.assertIsNone(getattr(host, "_probe_saved", None), "窗口不该被放大过")
+        self.assertNotIn("resize", [a[0] for a in host.actions if isinstance(a, tuple)],
+                         "放大是为了摆探针；探针不必摆就不该动窗口尺寸")
+        spoken = [b for b in host.bubbles if not b.startswith("正在定位")]
+        self.assertEqual(len(spoken), 1, f"只该出一句：{host.bubbles}")
+        self.assertIn("贴片档", spoken[0])
+        self.assertNotIn("位移闭环", spoken[0], "闭环一条都没跑，那句是假话")
+        joined = " ".join(host.printed)
+        self.assertIn("停在档限", joined, f"log 里要说清停在哪儿：{host.printed}")
+        self.assertIn("75%", spoken[0], "出口是那条现成的菜单，得把路说出来")
+
+    def test_solid_canvas_still_goes_through(self):
+        """反证的那一半：闸门不许把**量得动**的画布也拦下来——那一发该照旧去量。"""
+        host = self._host("ok")
+        self._run(host)
+        self.assertEqual(len(host.posted), 1, f"量得动却没投测量：{host.posted}")
+        self.assertEqual(host.backend.enabled, [], "投了测量仍不该在量之前挂")
+
+    def test_gate_precedes_the_float_modal(self):
+        """闸门必须在浮动确认**之前**：`ask_float=True` 时那一发弹模态请人按 Mod+V，
+        而按完了也必拒 ⇒ 不该为人那一次按键去骗他。"""
+        from PyQt5.QtWidgets import QMessageBox
+
+        host = self._host("tiny")
+        host.config["fidus"]["ask_float"] = True
+        built = []
+
+        class FakeDialog:
+            def __init__(self, _parent, **kwargs):
+                self.kwargs = kwargs
+                built.append(self)
+
+            def exec_(self):
+                return int(QMessageBox.Yes)
+
+            def is_checked(self):
+                return False
+
+        with mock.patch("meapet.message_dialog.MeaMessageDialog", FakeDialog):
+            self._run(host)
+        self.assertEqual(built, [], "必拒的一发还请人按 Mod+V = 拿一次真按键换一句拒绝")
+        self.assertEqual(host.posted, [])
+
+    def test_the_predicate_is_the_same_one_select_template_uses(self):
+        """闸门不造假拒绝：它拒绝 ⇔ 真 `select_template` 在同一帧上返回 None。
+
+        这条把"判据不是新立的"钉成断言——两边同读 `iter_candidates` 那两条闸与同一个
+        `min_edge`，所以闸门永远不可能比 `select_template` 更早判死。
+        """
+        for frame in ("ok", "tiny"):
+            with self.subTest(frame):
+                real = TestPremountOrdering._host(self, frame=frame)._fidus_current_frame()
+                gate_refuses = not any(
+                    c.edge >= FP.PREMOUNT_MIN_EDGE
+                    for c in FP.iter_candidates(real))
+                picked = FP.select_template(FakeEngine(), real, None,
+                                            min_edge=FP.PREMOUNT_MIN_EDGE)
+                self.assertEqual(gate_refuses, picked is None,
+                                 "闸门与档限判据分叉 ⇒ 要么假拒绝，要么真拒绝被漏掉")
 
 
 class TestFloatGate(unittest.TestCase):

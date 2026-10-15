@@ -45,10 +45,20 @@ class LayerDebugPanel(QWidget):
         self.setStyleSheet("background:#222; border-radius:6px;")
 
     # ---------------- 切换 ----------------
-    def _toggle(self):
-        self._penetrate = not self._penetrate
+    def set_penetrate(self, penetrate: bool) -> None:
+        """按宿主的真值同步面板：只写状态与文案，**不**触发 `_on_toggle`、**不**打「切换到」那行。
+
+        面板原本只有一条由人拨动的真值出口（`_toggle`），而那一发**可能被拒**
+        （`render_host._premount_refuse` ⇒ 一个 surface 都没挂）。没有写口时被拒之后面板显示的是
+        「点击穿透：开」这种不存在的状态——说谎的出口比没有出口更糟，所以这里给结果留一个写口：
+        「切换到 …」那行是**请求**的记录，本函数是**结果**的同步，两者不该混。
+        """
+        self._penetrate = bool(penetrate)
         self._label.setText(f"点击穿透：{'开' if self._penetrate else '关'}")
         self._btn.setText("切到 交互" if self._penetrate else "切到 穿透")
+
+    def _toggle(self):
+        self.set_penetrate(not self._penetrate)
         print(f"[panel] 切换到 {'穿透' if self._penetrate else '交互'} 模式", flush=True)
         if self._on_toggle is None:
             print("[panel] ✗ 回调为空", flush=True)

@@ -660,10 +660,30 @@ class PetRenderHostMixin:
         self._live2d_startup_widget = None
 
         # 首帧就绪后，根据模型实际画布大小调整窗口尺寸
+        layout = None
         try:
-            self._fit_window_to_model()
+            layout = self._fit_window_to_model()
         except Exception as exc:
             safe_print(f"[live2d] fit window to model skipped: {exc}")
+
+        # 「发了要读回」：全仓此前没有任何顶层尺寸回读，而 niri 平铺下客户端的尺寸请求会被吃
+        # （人工现测：请求 461×614、实得 659×736，见 `_request_probe_window` 那段）。所以换引擎
+        # 之后产品连"实得多少"都说不出。只在**手动换引擎**那一发泵（`_toggle_render_mode` 的
+        # else 分支置起标志）：普通启动路径逐字不变，不泵事件、不多一行日志。
+        if getattr(self, "_l2d_switch_size_check", False):
+            self._l2d_switch_size_check = False
+            if layout is not None:
+                want = (int(layout.window_width), int(layout.window_height))
+                got = self._pump_window_size(want)
+                safe_print(f"[live2d] 尺寸请求 期望 {want[0]}x{want[1]} "
+                           f"实得 {got[0]}x{got[1]}")
+                if got != want:
+                    safe_print(
+                        "[live2d] ⚠ 窗口尺寸请求被吃（多半还平铺着）⇒ 按 Mod+V 切成浮动再换引擎")
+                    self._show_bubble(
+                        "窗口尺寸请求被吃（多半还平铺着）⇒ 按 Mod+V 切成浮动再换引擎",
+                        bubble_duration_ms(self.config, "interaction"),
+                    )
 
         # Live2D 的最终窗口尺寸要到首帧后才确定；此时再按保存坐标夹回
         # 当前屏幕，避免先恢复位置、随后尺寸变化又把桌宠推出屏幕。
@@ -990,6 +1010,8 @@ class PetRenderHostMixin:
 
         self.hide()                                 # ③ 最后才隐藏
         self._layer_timer.start()
+        # 成功路径也回写：`enable` 那一段可能是被拒之后重试的，面板还停在上一轮的「关」。
+        self._sync_layer_panel(True)
         canvas = f" ← 画布 {w}x{h}@({x},{y})" if (ox or oy) else ""
         safe_print(f"[layer] → 穿透模式 surface={ow}x{oh} @({sx},{sy}){canvas}"
                    f"{'（测量位）' if measured else ''}")
@@ -1525,6 +1547,21 @@ class PetRenderHostMixin:
         """
         safe_print(f"[layer] ✗ 没切穿透：{why}")
         self._show_bubble(bubble, bubble_duration_ms(self.config, "interaction"))
+        # 面板那格必须跟着真值回去：`_toggle` 先翻 UI 再调回调，回调被拒就留下一个
+        # 「点击穿透：开」的不存在状态，而它是切回交互态的唯一入口——下一轮他照那个状态
+        # 点，读到的仍是假话。真值只有 `_layer_penetrating()`（`_layer_timer.isActive()`）一处。
+        if not self._layer_penetrating():
+            self._sync_layer_panel(False)
+
+    def _sync_layer_panel(self, penetrating: bool) -> None:
+        """把面板那格按宿主真值同步（只写状态，不触发回调）。
+
+        假 host（测试里的那些）普遍没有 `_layer_panel` ⇒ 没有就跳，不替它造一个。
+        """
+        panel = getattr(self, "_layer_panel", None)
+        if panel is None:
+            return
+        panel.set_penetrate(bool(penetrating))
 
     def _content_probe_room(self) -> tuple[int, int, int, int]:
         """子控件在顶层窗口内的**四向空档**——H 手那一发摆得摆不下就看它。
@@ -1779,6 +1816,23 @@ class PetRenderHostMixin:
             self._premount_refuse(
                 f"拿不到当前帧：{self._frame_absence_reason()}",
                 "拿不到当前画面，量不了位置，没切穿透")
+            return
+        # **预检**：这一发必拒就别先花钱。判据不是新立的——就是 `FP.iter_candidates` 自己那两条
+        # 闸（装不下 + 覆盖率）与 `FP.select_template` 用的同一个 `min_edge` 比较：候选的档全在小档
+        # ⇒ `select_template` 第一次注册之前就停在档限 ⇒ 必然返回 None。**不会造出假拒绝**。
+        # 位置必须在 `_confirm_float_first()` **之前**：`ask_float=True` 时那一发会弹模态请人按
+        # Mod+V，而这一发按了也必拒，不该请人按。省下的成本是实测的：一次 `iter_candidates`
+        # 2.0–5.1 ms（`reference/…/260-coverage-vs-min-coverage.txt`）换掉
+        # 「放大窗口 + 至多四发 × 0.9–13.5 s + 桌宠在屏上滑动 + 20 s 预算」。
+        edges = sorted({c.edge for c in FP.iter_candidates(frame)}, reverse=True)
+        if not any(e >= FP.PREMOUNT_MIN_EDGE for e in edges):
+            self._premount_refuse(
+                f"画布 {w}x{h}：可测的贴片档只有 {edges or '无'}，全部低于定位下限 "
+                f"{FP.PREMOUNT_MIN_EDGE}² ⇒ `select_template` 在第一次注册之前就停在档限"
+                "（位移闭环一条都没跑，别说它没过）",
+                "这个尺寸的立绘量不出可信位置（可用的贴片档比定位下限还小），没切穿透"
+                "；到「设置与数据 ▸ 桌宠窗口大小」把桌宠调到 75% 或以上再点，"
+                "调大之后能不能量准还得现场看")
             return
         if not self._confirm_float_first():
             self._premount_refuse("人没确认窗口已切成浮动（平铺下量不准）",
@@ -2245,11 +2299,15 @@ class PetRenderHostMixin:
     # ------------------------------------------------------------ 窗口尺寸调整
 
     def _fit_window_to_model(self):
-        """首帧后按实际画布刷新视觉视口，并保持模型脚底位置。"""
+        """首帧后按实际画布刷新视觉视口，并保持模型脚底位置。
+
+        把 layout 返回出去：`_on_live2d_first_frame` 要知道"这一发请求的是多大"才谈得上读回
+        实得（模型未加载而跳过时返回 None，那条支路本来就没发过尺寸请求）。
+        """
         model = self._l2d_model
         if model is None:
             safe_print("[live2d] _fit_window_to_model: 模型未加载，跳过")
-            return
+            return None
 
         factor = float(getattr(self, "_size_factor", 1.0))
         before = QRect(self.x(), self.y(), self.width(), self.height())
@@ -2270,6 +2328,7 @@ class PetRenderHostMixin:
             f"canvas={layout.widget_width}x{layout.widget_height} "
             f"offset=({layout.widget_x},{layout.widget_y}) factor={factor}"
         )
+        return layout
 
     def _reveal_live2d_window(self):
         """刷新已经正常映射的 OpenGL 子控件，不重置顶层窗口。"""
@@ -2295,6 +2354,9 @@ class PetRenderHostMixin:
     def _fallback_to_png(self, reason: str):
         """清理未就绪的 OpenGL 控件，并在同一最终位置显现 PNG。"""
         self._cancel_live2d_startup_timeout()
+        # 换引擎那一发的读回标志随这一条链作废：否则它悬着，等下一次首帧（可能是普通启动）
+        # 才被泵一次事件、多印一行不属于它的读数。
+        self._l2d_switch_size_check = False
         safe_print(f"[pet] Live2D 不可用，回退 PNG: {reason}")
         old_widget = self.sprite_label
         if old_widget is not None and not isinstance(old_widget, SpriteCanvas):
@@ -2327,7 +2389,7 @@ class PetRenderHostMixin:
 
     def _init_live2d(self):
         from meapet.config.store import resolve_resource_path
-        from meapet.desktop.live2d_widget import Live2DModel
+        from meapet.desktop.live2d_widget import Live2DModel, PLACEHOLDER_CANVAS
         l2d_cfg = self.config.get("live2d", {})
         model_dir = resolve_resource_path(l2d_cfg.get("model_dir", ""))
         safe_print(f"[live2d] 开始初始化，model_dir={model_dir}")
@@ -2347,8 +2409,17 @@ class PetRenderHostMixin:
             self._on_live2d_initialization_failed
         )
         # 子控件保留完整模型画布，顶层窗口只显示配置的视觉视口。
-        layout = self._apply_live2d_viewport_geometry(self._size_factor)
+        # 模型此刻还没加载（`initializeGL` 才加载）⇒ `_live2d_base_size()` 报的是
+        # `PLACEHOLDER_CANVAS`，按它请求顶层尺寸 = 发一个已知是假的数。留给首帧那一发。
+        loaded = getattr(self._l2d_model, "model", None) is not None
+        layout = self._apply_live2d_viewport_geometry(
+            self._size_factor, resize_window=loaded)
         widget.show()
+        if not loaded:
+            safe_print(
+                "[live2d] 画布未加载 ⇒ 这一发不发顶层尺寸请求（现在按占位 "
+                f"{PLACEHOLDER_CANVAS[0]}x{PLACEHOLDER_CANVAS[1]} 请求 = 发一个已知是假的数），"
+                "留给首帧那一发 `_fit_window_to_model`")
         safe_print(
             "[live2d] 控件已创建，等待首帧: "
             f"window={layout.window_width}x{layout.window_height} "
@@ -2379,8 +2450,16 @@ class PetRenderHostMixin:
     def _apply_live2d_viewport_geometry(
         self,
         factor: float,
+        resize_window: bool = True,
     ) -> Live2DViewportLayout:
-        """应用完整画布子控件与裁剪顶层窗口的几何。"""
+        """应用完整画布子控件与裁剪顶层窗口的几何。
+
+        `resize_window=False` 留给"画布还没真加载"那一格：`_live2d_base_size()` 那时读到的是
+        `PLACEHOLDER_CANVAS (525,735)`——一个**已知是假的数**，按它发顶层尺寸请求就是把假信念
+        发给合成器（人工 2026-10-15「PNG 切换到 Live2D 需要重新请求窗口大小，而不是直接切」）
+        ⇒ 这一发连 `self.resize` 与 `_apply_live2d_window_region` 一起跳：region 是按新 layout
+        算的，窗口没跟着变就切 mask 会切错块。子控件的 geometry 照发，否则首帧都引不出来。
+        """
         layout = self._live2d_viewport_layout(factor)
         widget = self.sprite_label
         if widget is not None:
@@ -2390,6 +2469,8 @@ class PetRenderHostMixin:
                 layout.widget_width,
                 layout.widget_height,
             )
+        if not resize_window:
+            return layout
         self.resize(layout.window_width, layout.window_height)
         self._apply_live2d_window_region(layout)
         return layout
@@ -3047,6 +3128,23 @@ class PetRenderHostMixin:
             # 夹在中间会被后续任何 show/raise 盖回来，见 `_remount_layer_after_render_switch`。
             self._remount_layer_after_render_switch("PNG")
         else:
+            # 穿透态换引擎**结构上到不了首帧**：`initializeGL` 只由 Qt 的绘制路派发，而穿透态
+            # 顶层被 `_do_layer_mount` 里那句 `hide()` 收掉了（`live2d_widget.py` 的
+            # `render_offscreen` 自己写着"穿透模式下 Qt 不再派发 paintGL"）。切过去的下场是
+            # 5 s 超时 → `_fallback_to_png`，而 `enabled=True` 已经写盘 ⇒ 下次启动再付一次
+            # 「加载→超时→回退」。这一格是**拒绝并说实话**，不是让穿透态换引擎可用。
+            if self._layer_penetrating():
+                safe_print(
+                    "[live2d] ✗ 没换引擎：穿透态里顶层是隐藏的，Live2D 控件不会初始化，"
+                    "切过去 5 秒后会自动退回 PNG（config 未改写、PNG 控件未删）")
+                self._show_bubble(
+                    "穿透态里换引擎先切回交互态：Live2D 控件在窗口隐藏时不初始化，"
+                    "现在切过去 5 秒后会自动退回 PNG",
+                    bubble_duration_ms(self.config, "interaction"),
+                )
+                return
+            # 换引擎要人看见尺寸对不对 ⇒ 首帧那一发之后读回一次实得（见 `_on_live2d_first_frame`）。
+            self._l2d_switch_size_check = True
             if self.renderer:
                 self.renderer.stop_blink_animation()
                 self.renderer = None

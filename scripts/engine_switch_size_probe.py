@@ -8,13 +8,17 @@
 入口也与用户点的那个一致：`window_chrome.py:480` 的菜单项 `triggered` 直连
 `_toggle_render_mode`，所以这里直接调它，不另造切换逻辑。
 
-三条支路各判一件事（`--arm` 选一，每次一个新进程，避免上一臂的残留把读数揉软）：
+各支路各判一件事（`--arm` 选一，每次一个新进程，避免上一臂的残留把读数揉软）：
   A  png-penetrate-message : PNG 模式下切穿透，那一句提示到底是什么、`enable()` 收到什么矩形
   B  live2d-interactive    : 交互态切 Live2D，窗口尺寸被谁、按哪份画布尺寸改成什么
   C  live2d-while-penetrated: 穿透态切 Live2D，surface 的尺寸请求有没有人重新发过
   D  png-premount-chain    : PNG 模式下「量完再挂」那一发到底走到哪一格——交得出帧吗、
                              帧是什么、`request_locate` 收到的是哪一份、量出来之前 `enable` 是不是 0
                              （**必须配 `--fidus`**：不带时本臂拒绝跑，见下面那段坑）
+  E  engine-switch-size-request : 交互态点「切 Live2D」那一下，**每一次顶层 resize 是按哪份数发的**
+                             （占位 (525,735) 还是真画布），以及发出去之后有没有人回读实得。
+                             本臂只判"发了几次、按哪份数发、读没读回"——offscreen QPA 下 `resize`
+                             立即生效，**判不了合成器给不给**（那是 C 臂与他真机那两格的分工）。
 
 失败模式（agents-rules §1，三段）：
   收益  = A 判那句文案（Bug 1）；B/C 判「切换之后谁重新请求尺寸」这一条结构事实，
@@ -33,10 +37,25 @@
   * 真合成器接不接受 `layer_set_size` 的新请求、重发的 configure 是多少（offscreen 没有合成器）；
   * C 臂里 Live2D 的 `frameSwapped` 在窗口 `hide()` 之后到底还来不来（真机上才有答案）；
   * 人眼看到的"切过去对不对"。
-  * **D 臂量不到"fidus 对着 PNG 立绘匹不匹得准"**：这台机器没有 fidus wheel
-    （`find_spec('fidus')` → None），本臂把 `have_engine` 与 `request_locate` 一起 mock 掉，
-    证明的只是"帧交得出去、链路走得到"那一半。贴片阶梯与 `PREMOUNT_MIN_EDGE` 在真立绘上
-    够不够大，要他机上有 wheel 那台再量。
+  * **D 臂量不到"fidus 对着 PNG 立绘匹不匹得准"**：本臂把 `have_engine` 与 `request_locate`
+    一起 mock 掉，证明的只是"帧交得出去、链路走得到"那一半。
+    （**更正 2026-10-15**：这句原先写的是"这台机器没有 fidus wheel（`find_spec('fidus')` → None）"，
+    那是**假话**——用系统裸 `python` 查才 None，`.venv/bin/python` 下 `have_engine()` 是 **True**，
+    连 `fidus.Fidus.build_wayland()` 在无头里都**建得起来**。真正的拦路不是"没件"，是
+    **件一干活就摸合成器**：`register_target`/`calibrate_once` 实测要 2.0–2.2 s 且**屏幕闪现**，
+    在用户的桌面上造可见效果须他明确点头（禁忌 7），所以本探针仍然 mock，仍然量不到匹配精度。）
+  * **E 臂判得了"按哪份数发"，判不了"合成器给不给"**：offscreen 下 `resize` 立即生效、
+    `width()/height()` 恒等于请求值 ⇒ `want == got` 在本臂是**必然**，不是结论。
+    「平铺下请求被吃」这一格只有 L3（他真机）能证，人工 2026-10-15 已现测过一次
+    （请求 461×614、实得 659×736，记在 `render_host.py:1654-1657`）。
+  * **E 臂还引不出首帧**（2026-10-16 现量）：offscreen 没有 GL 交换 ⇒ `frameSwapped` 永不到来
+    ⇒ C1 那发读回挂在的 `_on_live2d_first_frame` 在本臂**一次都不触发**（现场读数：
+    等待 4.81 s 后 `_l2d_pending` 已由 5 s 超时回退清掉、`_l2d_switch_size_check=False`、
+    全程没有一行 `[live2d] 尺寸请求`）。所以本臂的判据收窄成两格：**C2**（切换瞬间的顶层
+    `resize` 序列该为空，而不是一个按占位算的数）与**标志生命周期**（置起 → 回退清掉）。
+    "首帧那一发发的是真画布、且读了回"由 L2
+    （`tests/test_layer_panel_startup.py::TestEngineSwitchRequestsAndReadsBackSize`，
+    它直接调 `_on_live2d_first_frame`）判，"合成器到底给不给"仍只有 L3。
 """
 from __future__ import annotations
 
@@ -143,14 +162,18 @@ def snap(host) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True,
-                    choices=["A", "B", "C", "D"],
+                    choices=["A", "B", "C", "D", "E"],
                     help="A=PNG切穿透的文案与矩形 B=交互态切Live2D的尺寸链 "
                          "C=穿透态切Live2D之后有没有人重新请求surface尺寸 "
-                         "D=PNG 走「量完再挂」那一发的落点（须配 --fidus）")
+                         "D=PNG 走「量完再挂」那一发的落点（须配 --fidus） "
+                         "E=交互态换引擎：每次顶层 resize 按哪份数发、有没有人读回实得")
     ap.add_argument("--settle", type=float, default=12.0,
                     help="等 Live2D 首帧的最长秒数（本机冷启动实测可达 9 s 量级）")
     ap.add_argument("--fidus", action="store_true",
                     help="按 config.json 里 fidus.enabled 的原值跑（默认强制关掉，让挂载走直发那一支）")
+    ap.add_argument("--size-factor", dest="size_factor", type=float, default=None,
+                    help="覆盖 display.size_factor。D 臂的放大对照档就靠它：0.5（他的原值）该被"
+                         "预检闸门当场拒绝，0.75 该放行到 `request_locate`")
     args = ap.parse_args()
 
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -181,6 +204,10 @@ def main() -> int:
     config = normalize_config(json.loads((ROOT / "config.json").read_text(encoding="utf-8")))
     if not args.fidus:
         config.setdefault("fidus", {})["enabled"] = False   # 挂载走直发那一支，不起 fidus 抓屏
+    if args.size_factor is not None:
+        # 只换画布那一个乘子：`pixmap.width * scale * size_factor`（`render_host.py:2578-2579`），
+        # 其余照他 config.json 原值，这样"放大一档"与"换了另一台机"分得开。
+        config.setdefault("display", {})["size_factor"] = args.size_factor
 
     resize_log: list[dict] = []
 
@@ -216,8 +243,15 @@ def main() -> int:
 
         def resize(self, *a):
             super().resize(*a)
+            m = getattr(self, "_l2d_model", None)
             resize_log.append({"to": (self.width(), self.height()),
-                               "who": caller_trail()})
+                               "who": caller_trail(),
+                               # E 臂要判"这一发按的是哪份数"：模型对象在但 `model` 还没加载时
+                               # `get_suggested_size()` 回的是 `PLACEHOLDER_CANVAS`，那时
+                               # `canvas_read` 就是那对占位数。别的臂只读 to/who，不受影响。
+                               "l2d_loaded": getattr(m, "model", None) is not None,
+                               "canvas_read": None if m is None
+                               else self._read_canvas_size_from_model(m)})
 
     host = Host(copy.deepcopy(config))
     host._init_renderer()
@@ -270,6 +304,16 @@ def main() -> int:
                   f"← 帧 dims 必须逐位等于画布 dims：锚点定死在**帧中心**")
             print(f"           _layer_geometry()={host._layer_geometry()}")
 
+        if frame is not None:
+            t_gate = time.perf_counter()
+            edges = sorted({c.edge for c in FP.iter_candidates(frame)}, reverse=True)
+            gate_ms = (time.perf_counter() - t_gate) * 1000
+            print(f"[D·预检闸门] 画布={frame.shape[1]}x{frame.shape[0]} 可测档={edges} "
+                  f"下限={FP.PREMOUNT_MIN_EDGE}² ⇒ {'放行' if any(e >= FP.PREMOUNT_MIN_EDGE for e in edges) else '当场拒绝'}"
+                  f" 耗时={gate_ms:.1f} ms")
+            print("  （产品在同一发里自己再跑一次同一条 `iter_candidates`；这里量的是那一发的毫秒数，"
+                  "它换掉的是「放大窗口 + 最多四发 × 0.9–13.5 s + 弹模态请人按 Mod+V + 20 s 预算」）")
+
         box: dict = {}
 
         def fake_request(sent_frame, prior, *, move, on_done, log, **kw):
@@ -308,6 +352,53 @@ def main() -> int:
         host._set_layer_mode(False)
         print(f"[D·回收] destroyed={backend.destroyed} 窗口={host.width()}x{host.height()} "
               f"放大令牌 _probe_saved={getattr(host, '_probe_saved', None)}")
+        return 0
+
+    if args.arm == "E":
+        from meapet.desktop.live2d_widget import PLACEHOLDER_CANVAS
+        from meapet.desktop.render_host import LIVE2D_STARTUP_TIMEOUT_MS
+        cfg_l2d = copy.deepcopy(config.get("live2d", {})).get("enabled")
+        print(f"[E·起点] use_live2d={bool(getattr(host, '_use_live2d', False))} "
+              f"窗口={host.width()}x{host.height()} config.live2d.enabled(原值)={cfg_l2d} "
+              f"PLACEHOLDER_CANVAS={PLACEHOLDER_CANVAS}")
+        resize_log.clear()
+        t0 = time.monotonic()
+        host._toggle_render_mode()
+        # 这一格单列，不塞进 `snap()`：`snap` 是 A/B/C/D 四臂共用的打印器，本案的判据之一正是
+        # 「老三臂不带新旗标时读数一字不变」，往里加键就先动了那三条的读数。
+        print(f"[E·切换瞬间] snap={snap(host)} "
+              f"_l2d_switch_size_check={getattr(host, '_l2d_switch_size_check', '（无此标志）')}")
+        base = host._live2d_base_size()
+        print(f"  此刻 _live2d_base_size()={base} "
+              f"{'== 占位 ⇒ 这一发请求的数是已知假的' if tuple(base) == tuple(PLACEHOLDER_CANVAS) else '!= 占位'}")
+        deadline = t0 + args.settle
+        while time.monotonic() < deadline:
+            app.processEvents()
+            if host._renderer_ready and not host._l2d_pending:
+                break
+            time.sleep(0.01)
+        dt = time.monotonic() - t0
+        timer = getattr(host, "_live2d_startup_timer", None)
+        print(f"[E·等待 {dt:.2f}s] snap={snap(host)} "
+              f"首帧预算定时器={None if timer is None else timer.isActive()} "
+              f"（True 且 {dt:.1f}s ≥ {LIVE2D_STARTUP_TIMEOUT_MS / 1000:.0f}s ⇒ 已走过超时回退）")
+        print("  顶层 resize 序列（`canvas_read` 就是那一发据以请求的画布读数）：")
+        for row in resize_log:
+            tag = ("按占位 (525,735)" if row.get("canvas_read") == PLACEHOLDER_CANVAS
+                   else f"按 {row.get('canvas_read')}" if row.get("canvas_read")
+                   else "canvas 读不出")
+            print(f"    → {row['to'][0]}x{row['to'][1]}  模型已加载={row.get('l2d_loaded')} "
+                  f"{tag}  由 {row['who']}")
+        readback = getattr(host, "_l2d_switch_size_check", "（没有这枚标志 ⇒ 换引擎那一发没人读回实得）")
+        # 首帧在本臂来不来，由现场读数判，不写死：`_use_live2d` 还被顶着且不再 pending ⇒ 首帧到了；
+        # 回到 PNG ⇒ 是超时回退把标志清的，跟"读过一次回"是两回事（旧文案把这两种揉成一句）。
+        arrived = bool(getattr(host, "_use_live2d", False)) and not getattr(host, "_l2d_pending", False)
+        print(f"[E·回读] _l2d_switch_size_check={readback} 窗口={host.width()}x{host.height()} "
+              f"首帧={'到了' if arrived else '没到（offscreen 无 GL 交换 ⇒ `_on_live2d_first_frame` 未触发）'}"
+              f" ⇒ {'want/got 那一格本臂读过' if arrived else '本臂只判 C2 与标志生命周期，want/got 归 L2/L3'}")
+        print(f"[E·落盘] _save_config 被调用 {host.saved} 次（探针里不写盘）；"
+              f"内存里的 config.live2d.enabled={host.config.get('live2d', {}).get('enabled')} "
+              f"← 与产品写盘值同源；气泡={host.bubbles}")
         return 0
 
     # ---- B / C：先记住 PNG 那两把尺寸，再切 Live2D
