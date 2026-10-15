@@ -636,6 +636,82 @@ class TestPremountOrdering(unittest.TestCase):
         self.assertFalse(host._fidus_busy)
         self.assertEqual(host._mount_timer.stops, 1)
 
+    def test_a_blink_mid_round_yields_geometry_to_the_probe(self):
+        """PNG 那只 ~4 s 的眨眼睛不能在测量轮里改写几何（本项给 PNG 上测量的直接代价）。
+
+        `_update_sprite` 原先无条件写三处：`sprite_label.move(0,0)` 抹掉的正是 H 手摆出去的
+        探针位移，`sprite_label.resize`／`self.resize` 把 `_request_probe_window` 放大过的
+        那一段缩回去。一发测量 0.9–13.5 s、四向最坏 20 s，而眨眼 4000±1000 ms ⇒ 落在轮内
+        是**常态**不是边角。后果不是响亮拒绝而是**悄悄挂歪**（`locate` 读的屏与模板不同源），
+        所以这条按"写没写"判，不按"量没量准"判。反证＝撤守卫，下面那三条当场红。
+        """
+        host = self._host_with_a_round_in_flight()
+        widget = host.sprite_label
+
+        def _sprite_update():
+            with mock.patch("meapet.desktop.render_host.safe_print"):
+                host._update_sprite()
+
+        self.assertIsNotNone(host._probe_saved)
+        self.assertIsNotNone(host._pending_mount)
+        window_resizes = [a for a in host.actions if isinstance(a, tuple) and a[0] == "resize"]
+
+        _sprite_update()
+        self.assertEqual(widget.moved, [], "`move(0,0)` 抹掉探针位移＝安静挂歪那一条")
+        self.assertEqual(widget.resizes, [])
+        self.assertEqual([a for a in host.actions if isinstance(a, tuple) and a[0] == "resize"],
+                         window_resizes, "轮内不许把放大过的窗口缩回常态")
+        self.assertEqual(len(widget.frames), 1, "画面照换：冻住像素会让屏上与模板分叉")
+
+        # 对照臂：轮外（两处令牌都清了）那三写必须照旧发生——守卫不是把 `_update_sprite` 关掉。
+        host._probe_saved = None
+        host._pending_mount = None
+        _sprite_update()
+        self.assertEqual(widget.moved, [(0, 0)])
+        self.assertEqual(widget.resizes, [(160, 160)])
+        self.assertEqual(host._geom["w"], 160)
+
+    def _host_with_a_round_in_flight(self):
+        """把 `_host()` 那台补出 `_update_sprite` 需要的面，并起好一发在飞的测量。
+
+        刻意先 `_start` 再装 `size`/几何面：那些方法是**这条用例**的道具，塞进共享的
+        `FakeWidget`／`_host` 会替别的用例改形状。
+        """
+        from types import SimpleNamespace
+
+        from PyQt5.QtCore import QPoint, QSize
+
+        host = self._host()
+        real_resize = host.resize
+
+        def resize_both_overloads(a, b=None):
+            """真 `QWidget.resize` 两种写法都收：测量链传 `(w, h)`，`_update_sprite` 传 QSize。"""
+            if b is None:
+                real_resize(a.width(), a.height())
+            else:
+                real_resize(a, b)
+
+        host.resize = resize_both_overloads
+        self._start(host)
+        widget = host.sprite_label
+        widget.pos = lambda: QPoint(48, 0)          # H 手已经把画布推出去了
+        widget.size = lambda: QSize(120, 120)       # 与目标不同 ⇒ 没有守卫就会写
+        widget.resizes: list = []
+        widget.resize = lambda size: widget.resizes.append((size.width(), size.height()))
+        widget.frames: list = []
+        widget.set_frame = widget.frames.append
+        host._use_live2d = False
+        host._scale = 1.0
+        host._size_factor = 1.0
+        scaled = SimpleNamespace(size=lambda: QSize(160, 160))
+        host.renderer = SimpleNamespace(
+            get_current_pixmap=lambda: SimpleNamespace(
+                isNull=lambda: False, width=lambda: 320, height=lambda: 320),
+            get_scaled_pixmap=lambda w, h: scaled,
+        )
+        host.size = lambda: QSize(host.width(), host.height())
+        return host
+
     def test_probe_window_grows_right_and_down_without_touching_the_canvas(self):
         """①「没有再次请求一个正确大小的 Qt 窗口」+ ②「四向空档恒为否」的正面钉法。
 
@@ -1123,8 +1199,11 @@ class TestConfigAndWiring(unittest.TestCase):
             seen[seen.index("frame") + 1], "拿不到当前画面，定位不了位置")
         logged = log.call_args[0][0]
         self.assertIn("拿不到当前帧", logged)
-        self.assertIn("PNG 模式没有离屏渲染这一步", logged)
+        # 本 host 没设 `_use_live2d` ⇒ 走 PNG 那一支。2026-10-15 起 PNG 也交得出帧
+        # （后备帧），所以这句只能说"那份后备是空的"，旧那句「没有离屏渲染这一步」已成假话。
+        self.assertIn("PNG 后备帧为空", logged)
         self.assertNotIn("离屏渲染不可用", logged)
+        self.assertNotIn("Live2D", logged)
         self.assertFalse(getattr(host, "_fidus_busy", False))
 
 

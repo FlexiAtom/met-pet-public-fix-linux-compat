@@ -12,6 +12,9 @@
   A  png-penetrate-message : PNG 模式下切穿透，那一句提示到底是什么、`enable()` 收到什么矩形
   B  live2d-interactive    : 交互态切 Live2D，窗口尺寸被谁、按哪份画布尺寸改成什么
   C  live2d-while-penetrated: 穿透态切 Live2D，surface 的尺寸请求有没有人重新发过
+  D  png-premount-chain    : PNG 模式下「量完再挂」那一发到底走到哪一格——交得出帧吗、
+                             帧是什么、`request_locate` 收到的是哪一份、量出来之前 `enable` 是不是 0
+                             （**必须配 `--fidus`**：不带时本臂拒绝跑，见下面那段坑）
 
 失败模式（agents-rules §1，三段）：
   收益  = A 判那句文案（Bug 1）；B/C 判「切换之后谁重新请求尺寸」这一条结构事实，
@@ -30,6 +33,10 @@
   * 真合成器接不接受 `layer_set_size` 的新请求、重发的 configure 是多少（offscreen 没有合成器）；
   * C 臂里 Live2D 的 `frameSwapped` 在窗口 `hide()` 之后到底还来不来（真机上才有答案）；
   * 人眼看到的"切过去对不对"。
+  * **D 臂量不到"fidus 对着 PNG 立绘匹不匹得准"**：这台机器没有 fidus wheel
+    （`find_spec('fidus')` → None），本臂把 `have_engine` 与 `request_locate` 一起 mock 掉，
+    证明的只是"帧交得出去、链路走得到"那一半。贴片阶梯与 `PREMOUNT_MIN_EDGE` 在真立绘上
+    够不够大，要他机上有 wheel 那台再量。
 """
 from __future__ import annotations
 
@@ -136,9 +143,10 @@ def snap(host) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True,
-                    choices=["A", "B", "C"],
+                    choices=["A", "B", "C", "D"],
                     help="A=PNG切穿透的文案与矩形 B=交互态切Live2D的尺寸链 "
-                         "C=穿透态切Live2D之后有没有人重新请求surface尺寸")
+                         "C=穿透态切Live2D之后有没有人重新请求surface尺寸 "
+                         "D=PNG 走「量完再挂」那一发的落点（须配 --fidus）")
     ap.add_argument("--settle", type=float, default=12.0,
                     help="等 Live2D 首帧的最长秒数（本机冷启动实测可达 9 s 量级）")
     ap.add_argument("--fidus", action="store_true",
@@ -228,6 +236,78 @@ def main() -> int:
         print(f"  dropped={backend.dropped}")
         host._set_layer_mode(False)
         print("[回收] 交互态：destroyed=" + str(backend.destroyed))
+        return 0
+
+    if args.arm == "D":
+        if not config.get("fidus", {}).get("enabled"):
+            print("ABORT: D 臂判的就是 fidus 开着那条支路。不带 --fidus 时本探针把 "
+                  "fidus.enabled 强制关成 False（那正是上一案「PNG 切不上穿透」被遮住的坑），"
+                  "关着跑这一臂只会量到那条已经不走的路", file=sys.stderr)
+            return 2
+        import numpy as np
+        from unittest import mock
+
+        import meapet.desktop.fidus_position as FP
+
+        widget = host.sprite_label
+        print(f"[D·取帧面] sprite_label={type(widget).__name__} "
+              f"render_offscreen={hasattr(widget, 'render_offscreen')} "
+              f"frame_image={hasattr(widget, 'frame_image')} "
+              f"use_live2d={bool(getattr(host, '_use_live2d', False))}")
+        img = host._current_frame_image()
+        print(f"[D·QImage] {'None' if img is None else f'{img.width()}x{img.height()} fmt={img.format()}'}")
+        frame = host._fidus_current_frame()
+        if frame is None:
+            print(f"[D·numpy 帧] None ⇒ 预挂载在 `render_host.py` 的取帧那一格就断了："
+                  f"{host._frame_absence_reason()}")
+        else:
+            mask = frame[..., 3] > FP.ALPHA_MIN
+            rows, cols = np.nonzero(mask.any(axis=1))[0], np.nonzero(mask.any(axis=0))[0]
+            bbox = (int(rows.min()), int(rows.max()) + 1,
+                    int(cols.min()), int(cols.max()) + 1) if rows.size else None
+            print(f"[D·numpy 帧] shape={frame.shape} dtype={frame.dtype} "
+                  f"不透明像素={int(mask.sum())} 轮廓(上,下,左,右)={bbox} "
+                  f"← 帧 dims 必须逐位等于画布 dims：锚点定死在**帧中心**")
+            print(f"           _layer_geometry()={host._layer_geometry()}")
+
+        box: dict = {}
+
+        def fake_request(sent_frame, prior, *, move, on_done, log, **kw):
+            box["shape"] = None if sent_frame is None else tuple(sent_frame.shape)
+            box["prior"] = prior
+            box["kw"] = {k: v for k, v in kw.items()}
+            box["on_done"] = on_done
+            box["calls"] = box.get("calls", 0) + 1
+
+        with mock.patch.object(FP, "have_engine", lambda: True), \
+                mock.patch.object(FP, "request_locate", fake_request):
+            host._set_layer_mode(True)
+            drain(app, 0.3)
+            print(f"[D·测量发出之后、结果回来之前] request_locate 调用={box.get('calls', 0)} 次 "
+                  f"喂进去的帧={box.get('shape')} 先验={box.get('prior')}")
+            print(f"  参数={box.get('kw')}")
+            print(f"  enable_calls={backend.enable_calls}  ← **必须还是 []**：量完之前挂就是旧那条路")
+            print(f"  窗口={host.width()}x{host.height()} "
+                  f"放大前={getattr(host, '_probe_saved', None)} "
+                  f"四向空档(右,下,左,上)={host._content_probe_room()} "
+                  f"_pending_mount={getattr(host, '_pending_mount', None)}")
+            print(f"  气泡={host.bubbles}")
+            pending = getattr(host, "_pending_mount", None)
+            if pending is not None and box.get("on_done") is not None:
+                _x, _y, w, h = pending
+                fix = FP.Fix(center=(_x + w / 2.0, _y + h / 2.0), conf=0.9,
+                             edge=min(FP.SIZES[0], w, h), ceiling=0.9)
+                print(f"[D·交回一发读数] center={fix.center} 贴片 {fix.edge}²"
+                      f"（按信念矩形中心给 ⇒ 挂载位就该等于那一份，好对照）")
+                box["on_done"](fix)
+                drain(app, 1.5)
+        print(f"[D·结果之后] enable_calls={backend.enable_calls} configure={backend.logical_size()}")
+        print(f"  推帧 {len(backend.frames)} 张 尺寸集合={sorted(set(backend.frames))} "
+              f"dropped={backend.dropped}")
+        print(f"  snap={snap(host)} 气泡={host.bubbles}")
+        host._set_layer_mode(False)
+        print(f"[D·回收] destroyed={backend.destroyed} 窗口={host.width()}x{host.height()} "
+              f"放大令牌 _probe_saved={getattr(host, '_probe_saved', None)}")
         return 0
 
     # ---- B / C：先记住 PNG 那两把尺寸，再切 Live2D

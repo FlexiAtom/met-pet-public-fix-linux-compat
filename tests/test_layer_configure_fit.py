@@ -457,9 +457,16 @@ class TestMountRequestsTheContour(unittest.TestCase):
     SURFACE = (898, 168, 372, 561)             # 画布 + 原点平移，尺寸＝轮廓含两侧余量后夹到帧边
 
     def _mount(self, frame):
-        """跑一次真身 `_do_layer_mount`，回 (host, 日志)。"""
+        """跑一次真身 `_do_layer_mount`，回 (host, 日志)。
+
+        `_use_live2d = True` 是**本族的承重墙**：轮廓那一判现在只在 Live2D 那支跑
+        （PNG 在取帧之前就被 2026-10-06 的裁决挡回整画布，见
+        `test_png_frame_does_not_become_the_mount_shape`）。不设它，下面每一格都会拿到
+        整画布而**悄悄红成"轮廓没生效"**。
+        """
         host = _host(FakeBackend([FIT]))
         host.actions = []
+        host._use_live2d = True
         host.hide = lambda: host.actions.append("hide")
         host._layer_timer = SimpleNamespace(start=lambda: host.actions.append("timer"))
         host._fidus_current_frame = lambda: frame
@@ -491,18 +498,20 @@ class TestMountRequestsTheContour(unittest.TestCase):
         self.assertNotIn("← 画布", log)
 
     def test_no_opaque_pixel_speaks_and_mounts_the_canvas(self):
-        """全透明帧（PNG 模式还没渲染出来／alpha 全 0）⇒ 判不出轮廓，不猜一个形状。"""
+        """全透明帧（Live2D 那一支还没画出来／alpha 全 0）⇒ 判不出轮廓，不猜一个形状。"""
         host, log = self._mount(np.zeros((614, 461, 4), dtype=np.uint8))
         self.assertEqual(host._layer_backend.enabled, [self.CANVAS])
         self.assertIn("轮廓这一判没跑成", log)
         self.assertEqual(host._layer_frame_origin, (0, 0))
 
     def test_no_frame_speaks_and_mounts_the_canvas(self):
+        """本族设了 `_use_live2d` ⇒ 那句按 Live2D 那一支说；PNG 走不到这里（见下一族）。"""
         host, log = self._mount(None)
         self.assertEqual(host._layer_backend.enabled, [self.CANVAS])
-        self.assertIn("PNG 模式没有离屏渲染这一步", log)
+        self.assertIn("Live2D 离屏这一轮没给帧", log)
         self.assertIn("按整画布挂", log)
         self.assertNotIn("离屏渲染不可用", log)
+        self.assertNotIn("PNG 后备帧为空", log)
 
     def test_a_contour_too_small_to_be_the_pet_is_refused_out_loud(self):
         """贴在右下角的一小坨 ⇒ 夹完只剩 27 宽，那不是轮廓而是噪声，不认（不拿它去请求挂载）。"""
@@ -535,6 +544,50 @@ class TestMountRequestsTheContour(unittest.TestCase):
             host._layer_report_head_clip((898, -25, 372, 561), 0)
         self.assertIn("头顶被屏上沿切掉 9 逻辑 px", err.getvalue())
         self.assertEqual(len(host.bubbles), 1, f"该只有一句出声，实际 {host.bubbles}")
+
+
+class TestPngFrameNeverBecomesTheMountShape(unittest.TestCase):
+    """那条热区闸（人工 2026-10-06 裁决：穿透＝整窗不可点，没有热区概念）。
+
+    2026-10-15 起 PNG 也交得出帧了（`_current_frame_image` 那条后备帧回退），于是"解不出
+    轮廓"这条**能力**上的挡箭牌消失——挂载形状从此只由那条**裁决**拦着。谁把守卫删了，
+    下面两格当场红：一帧明明有一块小轮廓，PNG 请求的仍是整画布，而且**一次都不取帧**
+    （守卫挡在取帧之前，所以 PNG 连那份 `toImage()` 都不付）。
+    """
+
+    CANVAS = (854, 143, 461, 614)
+
+    def _mount_png(self, frame, calls):
+        host = _host(FakeBackend([FIT]))
+        host.actions = []
+        host._use_live2d = False                     # 真 PNG 模式
+        host.hide = lambda: host.actions.append("hide")
+        host._layer_timer = SimpleNamespace(start=lambda: host.actions.append("timer"))
+
+        def _grab():
+            calls.append(1)
+            return frame
+
+        host._fidus_current_frame = _grab
+        host._layer_fit_start = lambda *a, **k: host.actions.append(("fit", a, k))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            host._do_layer_mount(*self.CANVAS, measured=False)
+        return host, err.getvalue()
+
+    def test_a_png_contour_does_not_shrink_the_request(self):
+        calls: list[int] = []
+        host, log = self._mount_png(_contour_frame(*TestMountRequestsTheContour.CONTOUR), calls)
+        self.assertEqual(host._layer_backend.enabled, [self.CANVAS],
+                         "surface 缩成轮廓＝PNG 只在那块矩形上不可点＝偷做热区")
+        self.assertEqual(host._layer_frame_origin, (0, 0))
+        self.assertIn("裁决 2026-10-06", log)
+
+    def test_the_png_branch_never_acquires_a_frame(self):
+        calls: list[int] = []
+        host, _log = self._mount_png(np.zeros((614, 461, 4), dtype=np.uint8), calls)
+        self.assertEqual(calls, [], "守卫写在 return 之后而不是取帧之前 ⇒ PNG 白付一次 toImage()")
+        self.assertEqual(host._layer_backend.enabled, [self.CANVAS])
 
 
 class TestSteadyRecheck(unittest.TestCase):

@@ -890,22 +890,25 @@ class PetRenderHostMixin:
         （1366−910=456、768−305=463，本机 niri 就是"剩多少配多少"）⇒ 撑爆请求的正是那圈透明边，
         而被切掉的却是可见内容。这是几何源头，不是门控。
 
-        取不到帧（PNG 模式没有 `render_offscreen`、渲染还没热）／整帧没有不透明像素／轮廓短于
+        取不到帧（渲染还没热／立绘一张都没解出来）／整帧没有不透明像素／轮廓短于
         `_LAYER_MIN_SURFACE_EDGE` ⇒ 回退整画布并**出声**：那是今天的行为，不是新猜的姿势。
-        出声按**分支**各说各的原因：PNG 是这条路上压根没有离屏渲染那一步（设计如此，人工
-        2026-10-06 裁的整窗挂载），Live2D 是首帧还没到（等下一次挂载才量得出）——把前者说成
-        「离屏渲染不可用？」会让人去找一个不存在的开关。
+        出声按**分支**各说各的原因：Live2D 是首帧还没到（等下一次挂载才量得出），PNG 是
+        后备帧为空（解码那一格在前头）——把后者说成「离屏渲染不可用？」会让人去找一个
+        这台机器上不存在的开关（人工 2026-10-15 报的那句）。
+
+        **PNG 在这一格取帧之前就被挡回**：人工 2026-10-06 裁的「穿透＝整窗不可点，没有热区概念」
+        落到挂载形状上就是「不按 alpha 解 PNG 的轮廓」（同一条裁语把候选乙"按 alpha 解矩形"
+        标了否，见 `finished/png-mode-click-through-missing.md`）。这条守卫挡的是**取帧这件事**，
+        不是补第二个 return：挂载出口仍然只有一条，PNG 也一次 `toImage()` 都不付。
+        不写在 `hasattr(render_offscreen)` 上——那等于把一条人工裁决降级成能力巧合。
         """
+        if not getattr(self, "_use_live2d", False):
+            safe_print("[layer] PNG 不按 alpha 解轮廓（裁决 2026-10-06：穿透＝整窗不可点，"
+                       "没有热区）⇒ 按整画布挂")
+            return (0, 0, int(w), int(h))
         frame = self._fidus_current_frame()
         if frame is None:
-            # 两支都落到「整画布挂」这一个动作上，但它们是**不同的事实**，不能共用一句
-            # 「离屏渲染不可用？」去说（人工 2026-10-15「PNG模式切穿透会提示离屏渲染不可用」）。
-            # 整窗挂载本身是 2026-10-06 的裁决，不是这里要改的东西。
-            reason = self._frame_absence_reason()
-            if getattr(self, "_use_live2d", False):
-                safe_print(f"[layer] {reason} ⇒ 按整画布挂，下一轮挂载再量轮廓")
-            else:
-                safe_print(f"[layer] {reason} ⇒ 按整画布挂（穿透态整窗不可点，设计如此）")
+            safe_print(f"[layer] {self._frame_absence_reason()} ⇒ 按整画布挂，下一轮挂载再量轮廓")
             return (0, 0, int(w), int(h))
         try:
             import numpy as np
@@ -1600,6 +1603,23 @@ class PetRenderHostMixin:
 
         return max(int(round(max(abs(dx), abs(dy)))) for dx, dy in FP.PREMOUNT_MOVES)
 
+    def _probe_owns_geometry(self) -> bool:
+        """测量这一轮（含放大窗口那一段）此刻**握着窗口与画布的几何**。
+
+        要两个数一起看，不是一个：`_probe_saved` 在 `_request_probe_window` 里 `resize` 之前
+        就设（下面），而 `_pending_mount` 要到起工那一行才置——中间夹着 `_pump_window_size`
+        那最多 500 ms 的泵事件，眨眼正好能落进这道缝。两端都在所有出口被清
+        （`_restore_probe_window` / `_cancel_premount_measure` / `_finish_premount_measure`）。
+
+        它存在的理由是 PNG 那侧：`SpriteRenderer` 每 ~4000 ms 发一次 `expression_changed`
+        （`renderer.py:315-338`）→ `_update_sprite` → 无条件把画布 `move(0,0)`、把窗口
+        `resize` 回常态，而一发测量要 0.9–13.5 s。那一次 `move(0,0)` 抹掉的正是
+        `_content_probe_shift` 摆出去的 H 手位移 ⇒ 闭环拿到的屏与它以为的位移不同源，
+        后果是**安静地挂歪**，不是响亮拒绝。Live2D 免疫只是因为 `_update_sprite` 对它早退。
+        """
+        return (getattr(self, "_pending_mount", None) is not None
+                or getattr(self, "_probe_saved", None) is not None)
+
     def _pump_window_size(self, want: tuple[int, int]) -> tuple[int, int]:
         """GUI 线程上有界等尺寸落地，回**实得**的 (宽, 高)。
 
@@ -1920,17 +1940,33 @@ class PetRenderHostMixin:
             log=lambda k, v: safe_print(f"[fidus] {k}: {v}"),
         )
 
-    def _fidus_current_frame(self):
-        """取当前离屏帧的 RGBA numpy 视图（副本）—— fidus 的模板与它同源。"""
+    def _current_frame_image(self):
+        """当前画面的 QImage：Live2D 走离屏渲染，PNG 交回它手上那份整帧后备。
+
+        这是**唯一**一处取帧：`_push_layer_frame` 推给 surface 的与 `_fidus_current_frame`
+        喂给定位引擎的模板必须同一份像素，否则量的是 A、上屏的是 B —— 定位再准也没用。
+        PNG 侧那个名字是 `frame_image`（`SpriteCanvas` 的后备帧，`renderer.py:115`），
+        窗口 `hide()` 之后 `paintEvent` 不派发，它仍然是屏上那一张。
+        异常不在这里收：两个调用方各有自己的出声口径（推帧计数 / fidus 拒绝）。
+        """
         widget = getattr(self, "sprite_label", None)
         renderer = getattr(widget, "render_offscreen", None)
         if not callable(renderer):
+            renderer = getattr(widget, "frame_image", None)
+        if not callable(renderer):
             return None
+        img = renderer()
+        if img is None or img.isNull():
+            return None
+        return img
+
+    def _fidus_current_frame(self):
+        """取当前帧的 RGBA numpy 视图（副本）—— 与推给 surface 的是同一份像素。"""
         try:
             import numpy as np
 
-            img = renderer()
-            if img is None or img.isNull():
+            img = self._current_frame_image()
+            if img is None:
                 return None
             if img.format() != QImage.Format_RGBA8888:
                 img = img.convertToFormat(QImage.Format_RGBA8888)
@@ -1944,16 +1980,17 @@ class PetRenderHostMixin:
             return None
 
     def _frame_absence_reason(self) -> str:
-        """帧没拿到时**该说哪一支**：两种渲染面的这条路本来不是同一条。
+        """帧没拿到时**该说哪一支**：两种渲染面的这条路坏在不同地方。
 
-        PNG 那一支压根没有离屏渲染这一步——`SpriteCanvas` 手上是 `frame_image`（后备帧），
-        没有 `render_offscreen`，所以「离屏渲染不可用？」指向一个这台机器上不存在的开关
-        （人工 2026-10-15「PNG模式切穿透会提示离屏渲染不可用」）。Live2D 那一支有这条通道，
-        拿不到帧是这一轮还没热或那趟 FBO 没成，值得让人去查渲染面。
+        Live2D 那一支有离屏通道，拿不到帧是这一轮还没热或那趟 FBO 没成，值得让人去查渲染面。
+        PNG 那一支从 2026-10-15 起也走同一条取帧口（`_current_frame_image` 的 `frame_image`
+        那一路），所以拿不到帧**只可能是**那份后备帧本身是空的 —— 即立绘一张都没解出来
+        （`_update_sprite` 那句「立绘解码为空」说的是同一件事）。旧文案「PNG 模式没有离屏渲染
+        这一步」在本项实施后就是假话：那条路现在有了。
         """
         if getattr(self, "_use_live2d", False):
             return "Live2D 离屏这一轮没给帧（首帧未到？）"
-        return "PNG 模式没有离屏渲染这一步"
+        return "PNG 后备帧为空（立绘解码没成？）"
 
     def _fidus_request_move(self, dx: float, dy: float, token: int | None = None) -> bool:
         """在 fidus 线程上被调用：把位移请求交给 GUI 线程，等它落位并提交帧。
@@ -2127,21 +2164,19 @@ class PetRenderHostMixin:
         safe_print(f"[layer] ⚠ {text}")
 
     def _push_layer_frame(self) -> None:
-        """把当前画面推到 layer surface（Live2D 走离屏渲染，PNG 交回它手上的整帧）。"""
+        """把当前画面推到 layer surface（Live2D 走离屏渲染，PNG 交回它手上的整帧）。
+
+        取帧走 `_current_frame_image()` —— 与 fidus 的模板同一个来源（那份 docstring 里
+        写的"同源"靠的就是这一个调用点，不是靠注释）。
+        """
         backend = getattr(self, "_layer_backend", None)
         if backend is None:
             return
         if self._layer_fit_service():
             return          # 本拍在等回读／刚发出夹移，推了也必被尺寸门控丢掉
-        widget = getattr(self, "sprite_label", None)
-        renderer = getattr(widget, "render_offscreen", None)
-        if not callable(renderer):
-            renderer = getattr(widget, "frame_image", None)
-        if not callable(renderer):
-            return
         try:
-            img = renderer()
-            if img is None or img.isNull():
+            img = self._current_frame_image()
+            if img is None:
                 self._layer_fail = getattr(self, "_layer_fail", 0) + 1
                 if self._layer_fail <= 3:
                     print(f"[layer] ✗ 第 {self._layer_fail} 次拿到空帧", flush=True)
@@ -2471,12 +2506,19 @@ class PetRenderHostMixin:
                 Qt.SmoothTransformation,
             )
         target_size = scaled.size()
-        if self.sprite_label.pos() != QPoint(0, 0):
-            self.sprite_label.move(0, 0)
-        if self.sprite_label.size() != target_size:
-            self.sprite_label.resize(target_size)
-        if self.size() != target_size:
-            self.resize(target_size)
+        # 测量轮内只跳**几何**这三写，画面照换（下面 `set_frame`）。
+        # 判据见 `_probe_owns_geometry`：那一次 `move(0,0)` 抹掉的是 H 手摆出去的探针位移，
+        # 后果是安静挂歪而不是拒绝。反过来若把 `set_frame` 一起冻住，屏上是旧像素而模板是
+        # 新像素 —— 那是拿另一种分叉去修这一种。
+        # 轮内换了一张**不同尺寸**的立绘时，窗口不跟着 `set_frame` 里那次 widget 自缩，
+        # 四向空档会变；下一发眨眼（~4 s）在轮外重跑本函数就把尺寸补齐，不为此加代码。
+        if not self._probe_owns_geometry():
+            if self.sprite_label.pos() != QPoint(0, 0):
+                self.sprite_label.move(0, 0)
+            if self.sprite_label.size() != target_size:
+                self.sprite_label.resize(target_size)
+            if self.size() != target_size:
+                self.resize(target_size)
         if hasattr(self.sprite_label, "set_frame"):
             self.sprite_label.set_frame(scaled)
         else:

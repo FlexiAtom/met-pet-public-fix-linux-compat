@@ -138,7 +138,7 @@ class TestPNGModeReachesTheMount(unittest.TestCase):
     ⇒ 面板、`_layer_backend`、推帧定时器在 PNG 模式下**根本不存在**，而待机链那两行
     `enable_click_through` 又让人以为"PNG 也支持穿透"。这里钉三件事：
     ① 渲染器就绪就建得出面板（与模式无关）；② PNG 的像素来源是它手上那份后备帧；
-    ③ PNG 拿不到离屏帧 ⇒ 挂载按整画布请求，不去解 alpha 轮廓。
+    ③ PNG **按裁决**不去解 alpha 轮廓 ⇒ 挂载永远按整画布请求。
     """
 
     def _host(self):
@@ -218,16 +218,62 @@ class TestPNGModeReachesTheMount(unittest.TestCase):
         self.assertEqual(img.pixelColor(0, 0).rgba(), QColor(1, 2, 3, 255).rgba())
         canvas.deleteLater()
 
-    def test_png_mounts_the_whole_canvas_and_says_why(self):
-        """整窗那一档：PNG 解不出轮廓就不该去解——按画布矩形请求，并且**出声**。"""
+    def test_png_current_frame_comes_from_the_backing_frame(self):
+        """PNG 现在也交得出 fidus 能用的帧：**模板与 surface 同源**这一句从此两种引擎都成立。
+
+        人工 2026-10-15「要上测量，Niri上Qt不可靠」——Qt 坐标在那台合成器上不可信，唯一
+        可信的是像素对照，而对照要求"量的是上屏那一份"。所以这里断的是逐位相等：
+        shape 是 `(h, w, 4)`（把 w/h 数反就当场红），那颗单独涂色的像素落在 `[1, 2]`。
+        """
+        from PyQt5.QtGui import QColor, QPixmap
+        from meapet.desktop.renderer import SpriteCanvas
+
         host, _RH = self._host()
-        host.sprite_label = type("PngWidget", (), {})()   # 真 PNG 控件没有 render_offscreen
+        base = QPixmap(7, 5)
+        base.fill(QColor(1, 2, 3, 255))
+        marked = base.toImage()
+        marked.setPixelColor(2, 1, QColor(9, 8, 7, 255))     # x=2, y=1：非方形 ⇒ 行列反了必露
+        canvas = SpriteCanvas()
+        canvas.set_frame(QPixmap.fromImage(marked))
+        host.sprite_label = canvas
+
+        frame = host._fidus_current_frame()
+        self.assertIsNotNone(frame, "PNG 交不出帧 ⇒ 预挂载测量这一路又死回去")
+        self.assertEqual(frame.shape, (5, 7, 4))
+        self.assertEqual(frame[1, 2].tolist(), [9, 8, 7, 255])
+        self.assertEqual(frame[0, 0].tolist(), [1, 2, 3, 255])
+        self.assertEqual(int(frame[..., 3].min()), 255, "整帧不透明：alpha 别在转换里丢掉")
+        canvas.deleteLater()
+
+    def test_png_mounts_the_whole_canvas_and_says_why(self):
+        """PNG 的挂载形状与 alpha 无关：那一格在**取帧之前**就被裁决挡回，并且**出声**。
+
+        故意给一支**交得出帧**的后备帧：2026-10-15 之前那句「PNG 模式没有离屏渲染这一步」
+        是能力缺失的自白，本项把那条路接上之后，拦着的只剩裁决本身——所以这里连"一次都不
+        取帧"也要断言，守卫写在 `return` 之后而不是取帧之前就不算守住。
+        """
+        from PyQt5.QtGui import QColor, QImage
+
+        host, _RH = self._host()
+        calls = []
+
+        def _frame(_self):
+            calls.append(1)
+            img = QImage(461, 614, QImage.Format_RGBA8888)
+            img.fill(QColor(0, 0, 0, 0))
+            img.fill(QColor(9, 9, 9, 255), img.rect().adjusted(60, 41, -341, -13))  # 一块轮廓
+            return img
+
+        host.sprite_label = type("PngWidget", (), {"frame_image": _frame})()
         region = host._layer_surface_region(461, 614)
         self.assertEqual(region, (0, 0, 461, 614), "按 alpha 解轮廓＝偷做热区")
+        self.assertEqual(calls, [], "PNG 白付一次整帧拷贝")
         log = self._surface_log(host)
-        self.assertIn("PNG 模式没有离屏渲染这一步", log)
+        self.assertIn("裁决 2026-10-06", log)
+        self.assertIn("按整画布挂", log)
         # 「离屏渲染不可用？」在那一侧指向一个不存在的开关（人工 2026-10-15 报的这句）
         self.assertNotIn("离屏渲染不可用", log)
+        self.assertNotIn("后备帧为空", log)
 
     def test_live2d_names_its_own_reason_for_the_same_action(self):
         """同一动作、不同事实：Live2D 有离屏通道，拿不到帧是首帧未到，不能说成 PNG 那句。"""
@@ -239,7 +285,8 @@ class TestPNGModeReachesTheMount(unittest.TestCase):
         log = self._surface_log(host)
         self.assertIn("Live2D 离屏这一轮没给帧", log)
         self.assertIn("下一轮挂载再量轮廓", log)
-        self.assertNotIn("PNG 模式没有离屏渲染这一步", log)
+        self.assertNotIn("PNG 后备帧为空", log)
+        self.assertNotIn("裁决 2026-10-06", log)
 
     @staticmethod
     def _push(host):
