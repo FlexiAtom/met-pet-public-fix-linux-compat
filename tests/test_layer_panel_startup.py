@@ -868,6 +868,26 @@ class TestPanelFollowsTheMountOutcome(unittest.TestCase):
         self.assertIs(panel._penetrate, True)
         self.assertEqual(panel._label.text(), "点击穿透：开")
 
+    def test_a_raising_enable_also_puts_the_panel_back_to_off(self):
+        """`enable` 抛了 ⇒ 一个 surface 都没挂，而那一支不经 `_premount_refuse`，得自己回写。
+
+        面板说谎的形态不止"被拒"一种：桥接层真抛时（memfd／ring 那一族）既没有气泡也没有
+        `_premount_refuse`，只有终端里一行 `safe_print`，人看得见的是面板上那格「开」。
+        """
+        host = self._host_with_panel(active=False)
+        panel = LayerDebugPanel(on_toggle=lambda _p: None, penetrate=True)
+        host._layer_panel = panel
+
+        def _boom(_screen, *_a, **_k):
+            raise RuntimeError("memfd 没了")
+
+        host.backend.enable = _boom
+        with contextlib.redirect_stderr(io.StringIO()):
+            host._do_layer_mount(0, 0, 366, 512, measured=False)
+        self.assertFalse(host._layer_penetrating(), "前置：真值这边确实没挂上")
+        self.assertIs(panel._penetrate, False, "挂失败后面板仍说「开」= 报一个不存在的状态")
+        self.assertEqual(panel._label.text(), "点击穿透：关")
+
     def test_write_back_is_skipped_when_there_is_no_panel(self):
         """假 host 普遍没有 `_layer_panel`：没有就跳，不替它造一个（否则每条回归都得补一格桩）。"""
         host = self._host_with_panel(active=False)

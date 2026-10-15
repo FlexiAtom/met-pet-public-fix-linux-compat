@@ -1002,6 +1002,9 @@ class PetRenderHostMixin:
             backend.enable(None, ow, oh, sx, sy)  # 每次都新建（全新 OVERLAY surface）
         except Exception as exc:
             safe_print(f"[layer] 创建 layer context 失败: {exc}")
+            # 这一支不经 `_premount_refuse`，但结局同形：一个 surface 都没挂，而面板还停在
+            # 人那一次点击翻上去的「开」。回写仍走同一只写口，不另立第二处真值。
+            self._sync_layer_panel(False)
             return
 
         widget = getattr(self, "sprite_label", None)
