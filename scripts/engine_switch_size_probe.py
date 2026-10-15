@@ -308,9 +308,15 @@ def main() -> int:
             t_gate = time.perf_counter()
             edges = sorted({c.edge for c in FP.iter_candidates(frame)}, reverse=True)
             gate_ms = (time.perf_counter() - t_gate) * 1000
+            mine = '放行' if any(e >= FP.PREMOUNT_MIN_EDGE for e in edges) else '当场拒绝'
             print(f"[D·预检闸门] 画布={frame.shape[1]}x{frame.shape[0]} 可测档={edges} "
-                  f"下限={FP.PREMOUNT_MIN_EDGE}² ⇒ {'放行' if any(e >= FP.PREMOUNT_MIN_EDGE for e in edges) else '当场拒绝'}"
-                  f" 耗时={gate_ms:.1f} ms")
+                  f"下限={FP.PREMOUNT_MIN_EDGE}² 耗时={gate_ms:.1f} ms "
+                  f"⇒ 探针按同一式**自算**该{mine}")
+            # 这一行是探针自己重算的谓词，不是产品的判决——反证 F1 正是从这里露出来的：
+            # 把产品那侧的比较常数换掉后本行照旧说「当场拒绝」，而产品已经放行。
+            # 产品的口径只看下面两样：`request_locate 调用=` 的次数，与 `[layer] ✗ 没切穿透：…` 那行。
+            print("           ↑ 自算仅供对照；**判决以产品自己那行为准**"
+                  "（下面 `request_locate 调用=` 的次数 / `[layer] ✗ 没切穿透` 那一行）")
             print("  （产品在同一发里自己再跑一次同一条 `iter_candidates`；这里量的是那一发的毫秒数，"
                   "它换掉的是「放大窗口 + 最多四发 × 0.9–13.5 s + 弹模态请人按 Mod+V + 20 s 预算」）")
 
