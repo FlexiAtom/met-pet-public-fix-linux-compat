@@ -4,7 +4,11 @@
 # 注意：
 # - 推荐 Python 3.10 ~ 3.12（预编译 wheel 最全）
 # - Python 3.13+ 需 numpy 2.x（1.x 无官方 wheel，会尝试源码编译并失败）
-# - 本地 VITS 仍要求 numpy<2，见 vits_requirements.txt（请用 3.10~3.12）
+# - 本地 VITS 仍要求 numpy<2，见 vits_requirements.txt（推理环境请用 3.10/3.11）
+#   2026-10-16 现量：vits_requirements.txt 里的 pyopenjtalk-prebuilt 只有 cp36–cp311 的 wheel，
+#   3.12 上 `pip install --only-binary=:all:` 直接 "from versions: none"；而 vits_core/text/__init__.py:2
+#   → cleaners.py:2 是**无条件** import ja 前端，所以 3.12 那个环境不是「少一门语言」而是整条 VITS
+#   起不来。上游 pyopenjtalk 全部版本只发 sdist（要本机编 mecab），没有现成轮子可换。
 
 numpy>=1.21,<2.0; python_version < "3.13"
 numpy>=2.0; python_version >= "3.13"
