@@ -17,16 +17,21 @@ PyOpenGL>=3.1.0
 PyQt5>=5.15.9
 requests>=2.28.0
 
-# 可选：Live2D 渲染（未装则自动回退 PNG）。
-# 故意**不写成依赖**，两条理由：
-#   1) 产品只认 live2d-py 1.0 那一代的符号面（下限 `>=1.0.0`，判据在 `meapet/live2d_api.py`，
-#      逐格 getattr），而 1.0.0 的 `Requires-Python` 是 `>=3.11` —— 本文件推荐 3.10~3.12，
-#      写进来会让 3.10 环境整条 `pip install -r` 硬失败，而桌宠本体并不需要 Live2D。
-#   2) manylinux 制品到 v0.8.0.9-alpha（2026-09-24）才进 PyPI；0.7 时代索引里根本没有 Linux 轮子，
-#      那条历史也解释了为什么这一格以前连版本号都算不上抓手。
-# 要装就单独来一条（别混进本文件）：pip install "live2d-py>=1.0.0"（Python 3.11+）。
+# 可选：Live2D 渲染（未装则自动回退 PNG）。这一条**现在是真依赖行**，不再是注释——
+# 2026-10-17 撤掉那句「别混进本文件」，撤的根据是实测不是感觉：
+#   1) 官方索引自 v0.8.0.9-alpha（2026-09-24）起发 manylinux 制品；1.0.0 发
+#      manylinux_2_27 / manylinux_2_28 的 x86_64 与 aarch64。以前那条「Linux 没有轮子」
+#      已经不成立，也就没理由再把这一格留在注释里。
+#   2) 下限 `>=1.0.0` 是产品自己的判据：只认 1.0 那一代的名字面（`LAppModel`→`Model`
+#      那一串改名），判据在 `meapet/live2d_api.py`，逐格 getattr。
+#   3) 本机 2026-10-17 实装读数：Python 3.12.13 / glibc 2.44，门票 AVAILABLE=True、
+#      VERSION=1.0.0、MISSING=[]。
+# 带 python_version 标记是给 3.10 留退路：那颗轮子的 `Requires-Python` 是 `>=3.11`，
+# 3.10 环境装不上它，而桌宠本体并不需要 Live2D——不该为一格可选渲染让整条
+# `pip install -r` 硬失败。CI 矩阵实测是 ["3.11", "3.12"]（.github/workflows/python-app.yml:23），
+# 没有 3.10。`pyproject.toml` 的 `requires-python = ">=3.10"` 是另一格，仍归政策裁。
 # 装了哪一代不算数、凑齐名字才算数：向导里那句「就绪」读的就是上面那张门票。
-# live2d-py>=1.0.0
+live2d-py>=1.0.0; python_version >= "3.11"
 
 # Windows 可选
 # pywin32
