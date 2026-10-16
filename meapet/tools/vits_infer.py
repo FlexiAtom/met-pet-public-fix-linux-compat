@@ -14,6 +14,12 @@ import os
 import sys
 
 
+def _set_openjtalk_dict(path: str) -> None:
+    # pyopenjtalk reads only the bare name (once, at import); without it the bundled dic/ is never used.
+    os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = path
+    os.environ["OPEN_JTALK_DICT_DIR"] = path
+
+
 def _bootstrap() -> str:
     """Locate project / _MEIPASS root and put *only* vits_core on sys.path.
 
@@ -70,7 +76,7 @@ def _bootstrap() -> str:
 
     builtin_dic = os.path.join(base, "dic", "open_jtalk_dic_utf_8-1.11")
     if os.path.isdir(builtin_dic):
-        os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = builtin_dic
+        _set_openjtalk_dict(builtin_dic)
         print("  ✓ 使用项目内置日语词典", file=sys.stderr, flush=True)
     else:
         pyjt_dir = os.path.join(
@@ -78,7 +84,7 @@ def _bootstrap() -> str:
         )
         dic_dir = os.path.join(pyjt_dir, "open_jtalk_dic_utf_8-1.11")
         if os.path.isdir(dic_dir):
-            os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = dic_dir
+            _set_openjtalk_dict(dic_dir)
             print(f"  ✓ 使用已缓存日语词典: {dic_dir}", file=sys.stderr, flush=True)
         else:
             print("  ❌ 未找到日语词典 open_jtalk_dic_utf_8-1.11", file=sys.stderr, flush=True)

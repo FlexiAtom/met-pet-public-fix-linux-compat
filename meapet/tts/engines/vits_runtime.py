@@ -131,10 +131,11 @@ def probe_torch_loadable() -> tuple[str, str]:
 
 
 def _ensure_openjtalk_dict() -> str:
-    """Point MEA_PET_OPEN_JTALK_DICT_DIR at the bundled dictionary when present."""
+    """Point the bundled dictionary at both names (pyopenjtalk reads only the bare one)."""
     builtin = project_path("dic", "open_jtalk_dic_utf_8-1.11")
     if os.path.isdir(builtin):
         os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = builtin
+        os.environ["OPEN_JTALK_DICT_DIR"] = builtin
         return builtin
     return os.environ.get("MEA_PET_OPEN_JTALK_DICT_DIR", "")
 
