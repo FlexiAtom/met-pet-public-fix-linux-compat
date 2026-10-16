@@ -71,6 +71,7 @@ from meapet.ui_theme import (
     PET_SIZE_FACTOR_STEP,
     RADIUS_LARGE,
     UI_FONT_SCALE_DEFAULT,
+    UI_THEME_MODE_DEFAULT,
     apply_ui_font_scale,
     ensure_application_fonts,
     get_ui_theme_mode,
@@ -78,6 +79,10 @@ from meapet.ui_theme import (
     normalize_theme_mode,
     normalize_ui_font_scale,
     apply_named_style,
+    get_text_color,
+    normalize_text_color,
+    rebuild_theme_styles,
+    set_text_color,
     set_ui_font_scale,
     set_ui_theme_mode,
 )
@@ -462,7 +467,6 @@ class SetupWizard(QWidget):
         self._theme_radios: dict[str, QRadioButton] = {}
         initial_mode = get_ui_theme_mode()
         for mode, theme_label_text, theme_desc in (
-            ("system", "跟随系统", "跟随系统的浅色/深色偏好"),
             ("light", "浅色", "始终使用浅色界面"),
             ("dark", "深色", "始终使用深色界面"),
         ):
@@ -478,8 +482,10 @@ class SetupWizard(QWidget):
         layout.addLayout(theme_row)
 
         theme_hint = QLabel(
-            "默认跟随系统深浅色；切换后配置页即时生效，"
-            "桌宠的菜单、气泡与面板同步刷新，个别已打开的窗口重新打开后应用。"
+            "界面深浅色只按这里的选项决定，不再读取系统的浅色/深色偏好；"
+            "切换后配置页即时生效，桌宠的菜单、气泡与面板同步刷新，"
+            "个别已打开的窗口重新打开后应用。"
+            "字色默认白色；选「浅色」时白字配浅底读不出来，会自动回落到该方案自带的深色字。"
         )
         theme_hint.setObjectName("HelperText")
         theme_hint.setWordWrap(True)
@@ -1362,10 +1368,17 @@ class SetupWizard(QWidget):
             self.reduced_motion_cb.setChecked(
                 bool(display.get("reduced_motion", False))
             )
-            # 仅当配置显式写入 ui.theme 时才同步主题；缺省时保留当前模式，
-            # 避免把运行中刚切换的主题（或入口预设的浅色）冲回跟随系统。
+            # 仅当配置显式写入这两格时才同步；缺省时保留运行中的那一份，
+            # 不能被"配置里没写"冲回入口预设或默认档。
             ui_cfg = cfg.get("ui") if isinstance(cfg.get("ui"), dict) else {}
             raw_theme = ui_cfg.get("theme")
+            raw_text_color = ui_cfg.get("text_color")
+            text_pending = bool(raw_text_color) and (
+                normalize_text_color(raw_text_color) != get_text_color()
+            )
+            if text_pending:
+                set_text_color(raw_text_color, rebuild_styles=False)
+            theme_changed = False
             if raw_theme:
                 theme_mode = normalize_theme_mode(raw_theme)
                 radio = self._theme_radios.get(theme_mode)
@@ -1373,6 +1386,9 @@ class SetupWizard(QWidget):
                     radio.setChecked(True)
                 if get_ui_theme_mode() != theme_mode:
                     set_ui_theme_mode(theme_mode)
+                    theme_changed = True
+            if text_pending and not theme_changed:
+                rebuild_theme_styles()
             self.live2d_viewport_settings.set_fallback_canvas_size(
                 live2d.get("default_canvas_size")
             )
@@ -1516,7 +1532,7 @@ class SetupWizard(QWidget):
                 for mode, radio in self._theme_radios.items()
                 if radio.isChecked()
             ),
-            "system",
+            UI_THEME_MODE_DEFAULT,
         )
 
     def _collect_live2d_viewport_fields(self, config: dict) -> None:

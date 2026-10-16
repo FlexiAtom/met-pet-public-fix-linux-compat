@@ -53,7 +53,9 @@
   },
   "ui": {
     "first_run_hint_shown": false,
-    "timeline_turns": 5
+    "timeline_turns": 5,
+    "theme": "dark",
+    "text_color": "#F5F5F5"
   },
   "vision": {
     "enabled": false,

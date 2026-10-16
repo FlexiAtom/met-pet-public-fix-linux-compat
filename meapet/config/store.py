@@ -56,6 +56,7 @@ _log = get_color_logger("config")
 from meapet.config import providers as _providers
 from meapet.ui_theme import (
     normalize_pet_size_factor,
+    normalize_text_color,
     normalize_theme_mode,
     normalize_ui_font_scale,
 )
@@ -1079,6 +1080,7 @@ def normalize_config(config: dict) -> dict:
         timeline_turns = 5
     ui["timeline_turns"] = max(0, min(timeline_turns, 100))
     ui["theme"] = normalize_theme_mode(ui.get("theme"))
+    ui["text_color"] = normalize_text_color(ui.get("text_color"))
     cfg["ui"] = ui
 
     # TTS：有音频时气泡始终晚于播放结束；旧开关仅保留配置兼容。

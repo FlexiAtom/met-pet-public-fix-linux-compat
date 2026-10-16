@@ -151,8 +151,8 @@ class UiRefactorTests(unittest.TestCase):
 
         self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
         self.assertEqual(normalize_theme_mode("LIGHT"), "light")
-        self.assertEqual(normalize_theme_mode("whatever"), "system")
-        self.assertIn(resolved_scheme("system"), ("light", "dark"))
+        self.assertEqual(normalize_theme_mode("whatever"), "dark")
+        self.assertEqual(resolved_scheme("system"), "dark")
         self.assertEqual(resolved_scheme("light"), "light")
 
         set_ui_theme_mode("dark")
@@ -164,6 +164,191 @@ class UiRefactorTests(unittest.TestCase):
         self.assertNotEqual(dark_sheet, light_sheet)
         set_ui_theme_mode("dark")
         self.assertEqual(get_named_style("WIZARD_STYLESHEET"), dark_sheet)
+
+    def test_system_theme_preference_cannot_reach_the_scheme(self) -> None:
+        """深浅色只认配置：系统探测整条撤掉后，任何 OS 读数都不得改变方案。
+
+        跨机器复现时字色不一致的那条源就在这里——Linux 分支的判据是
+        ``"light" in gsettings stdout``，同一份配置在不同桌面环境下会解出不同方案。
+        """
+        import json
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        import meapet.ui_theme as ui_theme
+        from meapet.ui_theme import (
+            get_active_scheme,
+            get_ui_theme_mode,
+            load_ui_colors_from_config,
+            normalize_theme_mode,
+            set_ui_theme_mode,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.assertFalse(
+            hasattr(ui_theme, "resolve_system_theme"),
+            "系统深浅色探测又回来了：meapet.ui_theme.resolve_system_theme",
+        )
+        source = (
+            Path(__file__).resolve().parents[1] / "meapet" / "ui_theme.py"
+        ).read_text(encoding="utf-8")
+        for probe in (
+            "AppsUseLightTheme",
+            "AppleInterfaceStyle",
+            "org.freedesktop.appearance",
+            "color-scheme",
+        ):
+            # assertFalse 而非 assertNotIn：后者失败时会把整份源码打进报告。
+            self.assertFalse(
+                probe in source,
+                f"深浅色 OS 探测残留：{probe}",
+            )
+
+        self.assertEqual(normalize_theme_mode("system"), "dark")
+
+        # 配置里没写 ui.theme，且 gsettings 当场报 light ⇒ 仍落在默认档。
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(json.dumps({"ui": {}}), encoding="utf-8")
+            fake = subprocess.CompletedProcess([], 0, stdout="light\n", stderr="")
+            with patch("subprocess.run", return_value=fake), patch(
+                "shutil.which", return_value="/bin/gsettings"
+            ):
+                load_ui_colors_from_config(path)
+            self.assertEqual(get_active_scheme(), "dark")
+
+    def test_text_color_from_config_overrides_the_scheme_token(self) -> None:
+        from meapet.ui_theme import (
+            PALETTE,
+            TEXT_COLOR_DEFAULT,
+            effective_text_color,
+            get_text_color,
+            get_ui_theme_mode,
+            set_text_color,
+            set_ui_theme_mode,
+            text_color_note,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.addCleanup(set_text_color, get_text_color())
+        set_ui_theme_mode("dark")
+        set_text_color(TEXT_COLOR_DEFAULT)
+        self.assertEqual(text_color_note(), "")
+        self.assertEqual(PALETTE["text_primary"], "#F5F5F5")
+        self.assertEqual(effective_text_color(), "#F5F5F5")
+
+        # 一个深色底上读得出来的自定义字色，必须真的走到令牌与样式表。
+        effective = set_text_color("#9FE7C4")
+        self.assertEqual(effective, "#9FE7C4")
+        self.assertEqual(PALETTE["text_primary"], "#9FE7C4")
+        from meapet.desktop import theme as desktop_theme
+
+        self.assertEqual(desktop_theme.COLOR_TEXT, "#9FE7C4")
+        self.assertIn(
+            "color: #9FE7C4",
+            desktop_theme.DIALOGUE_STYLE,
+            "字色覆盖必须重建命名 QSS，否则气泡沿用方案里那份字色",
+        )
+
+    def test_text_color_normalizes_illegal_values_to_default(self) -> None:
+        from meapet.ui_theme import (
+            TEXT_COLOR_DEFAULT,
+            get_text_color,
+            get_ui_theme_mode,
+            normalize_text_color,
+            set_text_color,
+            set_ui_theme_mode,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.addCleanup(set_text_color, get_text_color())
+        self.assertEqual(normalize_text_color("f5f5f5"), "#F5F5F5")
+        self.assertEqual(normalize_text_color("#F5F5F5"), "#F5F5F5")
+        for bad in ("", None, "white", "#FFF", "#GGGGGG", "rgb(255,0,0)"):
+            with self.subTest(value=bad):
+                self.assertEqual(normalize_text_color(bad), TEXT_COLOR_DEFAULT)
+        set_text_color("not-a-color")
+        self.assertEqual(get_text_color(), TEXT_COLOR_DEFAULT)
+
+    def test_unreadable_text_color_is_refused_with_a_note(self) -> None:
+        from meapet.ui_theme import (
+            TEXT_COLOR_DEFAULT,
+            TEXT_COLOR_MIN_CONTRAST,
+            effective_text_color,
+            get_text_color,
+            get_ui_theme_mode,
+            set_text_color,
+            set_ui_theme_mode,
+            text_color_note,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.addCleanup(set_text_color, get_text_color())
+        set_ui_theme_mode("light")
+        # 默认白字配浅底（实测最低对比度 1.01）⇒ 拒这个覆盖值、回落到方案字色并留一行。
+        effective = set_text_color(TEXT_COLOR_DEFAULT)
+        self.assertEqual(effective, "#1C1C1E")
+        self.assertEqual(effective_text_color(), "#1C1C1E")
+        note = text_color_note()
+        self.assertTrue(note, "覆盖被拒时必须留下一行原因")
+        self.assertIn("对比度", note)
+        self.assertIn(str(TEXT_COLOR_MIN_CONTRAST), note)
+
+        # 换一个浅色底上读得出来的字色 ⇒ 覆盖生效，且不留那行说明。
+        self.assertEqual(set_text_color("#0A0A0A"), "#0A0A0A")
+        self.assertEqual(text_color_note(), "")
+
+    def test_text_color_override_survives_scheme_switch(self) -> None:
+        from meapet.ui_theme import (
+            effective_text_color,
+            get_text_color,
+            get_ui_theme_mode,
+            set_text_color,
+            set_ui_theme_mode,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.addCleanup(set_text_color, get_text_color())
+        set_ui_theme_mode("dark")
+        # 用一枚"深色底读得出来、浅色底读不出来"的字色：方案切换若没重放覆盖，
+        # 切回深色会拿到深底自带那份 #F5F5F5，这条断言当场红。
+        set_text_color("#9FE7C4")
+        self.assertEqual(effective_text_color(), "#9FE7C4")
+        set_ui_theme_mode("light")
+        self.assertEqual(effective_text_color(), "#1C1C1E")
+        set_ui_theme_mode("dark")
+        self.assertEqual(effective_text_color(), "#9FE7C4")
+
+    def test_example_and_store_agree_on_text_color_default(self) -> None:
+        import json
+        from pathlib import Path
+
+        from meapet.config.store import normalize_config
+        from meapet.ui_theme import TEXT_COLOR_DEFAULT, UI_THEME_MODE_DEFAULT
+
+        root = Path(__file__).resolve().parents[1]
+        example = json.loads(
+            (root / "config.example.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(example["ui"]["theme"], UI_THEME_MODE_DEFAULT)
+        self.assertEqual(example["ui"]["text_color"], TEXT_COLOR_DEFAULT)
+        ui = normalize_config({"ui": {}})["ui"]
+        self.assertEqual(ui["theme"], UI_THEME_MODE_DEFAULT)
+        self.assertEqual(ui["text_color"], TEXT_COLOR_DEFAULT)
+        # 老配置里的 "system" 与坏值一起被归一，不留第二个真值。
+        legacy = normalize_config(
+            {"ui": {"theme": "system", "text_color": "white"}}
+        )["ui"]
+        self.assertEqual(legacy["theme"], UI_THEME_MODE_DEFAULT)
+        self.assertEqual(legacy["text_color"], TEXT_COLOR_DEFAULT)
+
+    def test_wizard_theme_offers_no_system_option(self) -> None:
+        from wizard.app import SetupWizard
+
+        wizard = self._track(SetupWizard())
+        self.assertEqual(set(wizard._theme_radios), {"light", "dark"})
+        self.assertNotIn("跟随系统", [r.text() for r in wizard._theme_radios.values()])
 
     def test_wizard_check_controls_have_visible_focus_ring(self) -> None:
         from wizard.styles import WIZARD_STYLESHEET

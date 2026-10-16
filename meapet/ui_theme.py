@@ -104,11 +104,23 @@ PALETTES: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {"dark": MappingProxyType(_DARK_PALETTE), "light": MappingProxyType(_LIGHT_PALETTE)}
 )
 
-# ---- 主题模式（跟随系统 / 浅色 / 深色）----
-THEME_MODES = ("system", "light", "dark")
-UI_THEME_MODE_DEFAULT = "system"
+# ---- 主题模式（浅色 / 深色）----
+# 系统深浅色一概不问（人工 2026-10-17 原话：「不管系统（我们管不了），以配置文件为准」）。
+# Linux 那一支实测近乎恒暗：判据是 `"light" in gsettings stdout`，而 portal 的实际取值
+# default / prefer-dark / no-preference 一个都不含 "light"，非 GNOME（niri、Hyprland、KDE）
+# 连这个 schema 都没有 ⇒ 同一份配置跨机器字色不同。
+# 老配置里残留的 "system" 由 :func:`normalize_theme_mode` 归到默认档。
+THEME_MODES = ("light", "dark")
+UI_THEME_MODE_DEFAULT = "dark"
 _ui_theme_mode = UI_THEME_MODE_DEFAULT
 _active_scheme = "dark"
+
+# 字色（人工同一裁决「加字段，默认值为白」）：配置里的 ``ui.text_color`` 直接盖 text_primary。
+TEXT_COLOR_DEFAULT = "#F5F5F5"
+# 正文最低对比度：沿用 tests/test_ui_refactor.py 里 text↔surface 那条 4.5，不另立第二把尺。
+TEXT_COLOR_MIN_CONTRAST = 4.5
+_text_color = TEXT_COLOR_DEFAULT
+_text_color_note = ""
 
 if sys.platform == "win32":
     FALLBACK_BODY_FONT_NAME = "Microsoft YaHei UI"
@@ -245,67 +257,23 @@ def rgb_triplet(color: str) -> str:
 
 
 # ---- 主题模式与运行时切换 ------------------------------------------------
-def resolve_system_theme() -> str:
-    """探测系统浅色/深色偏好；探测失败时回落到深色。"""
-    try:
-        if sys.platform == "win32":
-            import winreg
-
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-            ) as key:
-                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-            return "light" if int(value) else "dark"
-        if sys.platform == "darwin":
-            import subprocess
-
-            out = subprocess.run(
-                ["defaults", "read", "-g", "AppleInterfaceStyle"],
-                capture_output=True,
-                text=True,
-                timeout=0.5,
-                check=False,
-            )
-            return "dark" if (out.stdout or "").strip() == "Dark" else "light"
-        import shutil
-        import subprocess
-
-        if shutil.which("gsettings"):
-            out = subprocess.run(
-                [
-                    "gsettings",
-                    "get",
-                    "org.freedesktop.appearance",
-                    "color-scheme",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=0.5,
-                check=False,
-            )
-            return "light" if "light" in (out.stdout or "") else "dark"
-    except Exception:
-        pass
-    return "dark"
-
-
 def normalize_theme_mode(value: object) -> str:
-    """把任意配置值规范到受支持的主题模式。"""
+    """把任意配置值规范到受支持的主题模式。
+
+    含 ``"system"`` 在内的一切未知值都归到 :data:`UI_THEME_MODE_DEFAULT`：
+    系统深浅色这条路已经整条撤掉（见上面的主题模式注释），不再探测。
+    """
     mode = str(value or "").strip().lower()
     return mode if mode in THEME_MODES else UI_THEME_MODE_DEFAULT
 
 
 def resolved_scheme(mode: object | None = None) -> str:
-    """把主题模式解析为具体配色方案（system → 系统偏好）。"""
-    effective = normalize_theme_mode(mode if mode is not None else _ui_theme_mode)
-    if effective == "system":
-        return resolve_system_theme()
-    return effective
+    """把主题模式解析为具体配色方案（light/dark，两值之一）。"""
+    return normalize_theme_mode(mode if mode is not None else _ui_theme_mode)
 
 
 def get_ui_theme_mode() -> str:
-    """返回当前主题模式（system/light/dark）。"""
+    """返回当前主题模式（light/dark）。"""
     return _ui_theme_mode
 
 
@@ -323,11 +291,72 @@ def apply_palette_scheme(scheme: str) -> str:
         source = _LIGHT_PALETTE if scheme == "light" else _DARK_PALETTE
         _PALETTE.update(source)
         rebuild_gradients()
+    # 方案切换把 text_primary 一起覆盖回了方案自带的那一份，字色覆盖必须重放一次。
+    _apply_text_color()
     return _active_scheme
 
 
+def normalize_text_color(value: object) -> str:
+    """把配置里的字色规范成 ``#RRGGBB``（大写）；非法值回落到 :data:`TEXT_COLOR_DEFAULT`。"""
+    text = str(value or "").strip().upper()
+    if text.startswith("#"):
+        text = text[1:]
+    if len(text) != 6 or any(ch not in "0123456789ABCDEF" for ch in text):
+        return TEXT_COLOR_DEFAULT
+    return f"#{text}"
+
+
+def _apply_text_color() -> None:
+    """把 :data:`_text_color` 写进活动调色板；与底色读不出来时回落到方案字色。
+
+    闸门不是新增的判据：``text↔surface`` 的 4.5 已经写在 ``tests/test_ui_refactor.py``
+    的配色契约里，这里只是把它套到"用户直接指定字色"这一格——白字配浅底会直接不可读，
+    而 :data:`TEXT_COLOR_DEFAULT` 就是白，所以浅色方案下这一发必然被拒并如实留一行。
+    """
+    global _text_color_note
+    scheme_default = (
+        _LIGHT_PALETTE if _active_scheme == "light" else _DARK_PALETTE
+    )["text_primary"]
+    backgrounds = (_PALETTE["canvas"], _PALETTE["surface"], _PALETTE["surface_elevated"])
+    weakest = min(contrast_ratio(_text_color, bg) for bg in backgrounds)
+    if weakest >= TEXT_COLOR_MIN_CONTRAST:
+        _text_color_note = ""
+        _PALETTE["text_primary"] = _text_color
+    else:
+        _text_color_note = (
+            f"字色 {_text_color} 与底色（{'、'.join(backgrounds)}）最低对比度 "
+            f"{weakest:.2f} < {TEXT_COLOR_MIN_CONTRAST}，读不出来 ⇒ 回落到方案字色 {scheme_default}"
+        )
+        _PALETTE["text_primary"] = scheme_default
+
+
+def set_text_color(value: object, *, rebuild_styles: bool = True) -> str:
+    """写入配置指定的字色并落到活动调色板，返回**实际生效**的字色。"""
+    global _text_color
+    _text_color = normalize_text_color(value)
+    _apply_text_color()
+    if rebuild_styles:
+        rebuild_theme_styles()
+    return _PALETTE["text_primary"]
+
+
+def get_text_color() -> str:
+    """配置指定的字色（未必是实际生效的那一份）。"""
+    return _text_color
+
+
+def effective_text_color() -> str:
+    """当前活动调色板里真正在用的字色。"""
+    return _PALETTE["text_primary"]
+
+
+def text_color_note() -> str:
+    """上一次字色覆盖被拒的原因；没被拒时是空串。"""
+    return _text_color_note
+
+
 def set_ui_theme_mode(mode: object, *, rebuild_styles: bool = True) -> str:
-    """设置主题模式（system/light/dark），并重建样式返回生效方案。
+    """设置主题模式（light/dark），并重建样式返回生效方案。
 
     传 ``rebuild_styles=False`` 可只记录模式（例如进程启动早期，
     由入口稍后统一调用 :func:`reapply_theme` 重建）。
@@ -344,11 +373,12 @@ def set_ui_theme_mode(mode: object, *, rebuild_styles: bool = True) -> str:
     return _active_scheme
 
 
-def load_ui_theme_mode_from_config(path: object | None = None) -> str:
-    """从 config.json 预读 ``ui.theme`` 并应用；任何失败都静默回落默认。
+def load_ui_colors_from_config(path: object | None = None) -> str:
+    """从 config.json 预读 ``ui.theme`` 与 ``ui.text_color`` 并应用。
 
-    这里刻意不走 meapet.config.store（它会 import 本模块，存在循环），
-    只做一次轻量 JSON 读取。
+    任何失败都静默回落默认（深色方案 + 白字）——这一发在 import 期跑，
+    把异常抛出去会让整个包不可导入。这里刻意不走 meapet.config.store
+    （它会 import 本模块，存在循环），只做一次轻量 JSON 读取。
     """
     try:
         import json
@@ -360,9 +390,11 @@ def load_ui_theme_mode_from_config(path: object | None = None) -> str:
         with open(path, "r", encoding="utf-8") as file:
             config = json.load(file)
         ui = config.get("ui") if isinstance(config, dict) else None
-        mode = ui.get("theme") if isinstance(ui, dict) else None
-        if mode:
-            set_ui_theme_mode(mode, rebuild_styles=True)
+        if not isinstance(ui, dict):
+            ui = {}
+        set_text_color(ui.get("text_color"), rebuild_styles=False)
+        # 键缺省时 normalize 落到默认档（深色 + 白字），不必再探测任何东西。
+        set_ui_theme_mode(ui.get("theme"), rebuild_styles=True)
     except Exception:
         pass
     return _ui_theme_mode
@@ -469,8 +501,8 @@ def reapply_theme(mode: object | None = None) -> str:
     return _active_scheme
 
 
-# 进程首次导入即按本地配置决定主题，随后构建的样式常量都基于该主题。
-load_ui_theme_mode_from_config()
+# 进程首次导入即按本地配置决定主题与字色，随后构建的样式常量都基于这两份。
+load_ui_colors_from_config()
 
 
 def ensure_application_fonts() -> tuple[str, ...]:

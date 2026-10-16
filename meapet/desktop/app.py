@@ -160,14 +160,20 @@ class MeaPet(
         from meapet.ui_theme import (
             apply_reduced_motion_env,
             resolve_reduced_motion,
+            set_text_color,
             set_ui_font_scale,
             set_ui_theme_mode,
+            text_color_note,
         )
 
         set_ui_font_scale(
             (self.config.get("display") or {}).get("font_scale", 1.0)
         )
-        set_ui_theme_mode((self.config.get("ui") or {}).get("theme"))
+        ui_cfg = self.config.get("ui") or {}
+        set_text_color(ui_cfg.get("text_color"), rebuild_styles=False)
+        set_ui_theme_mode(ui_cfg.get("theme"))
+        if text_color_note():
+            log.info(f"[config] {text_color_note()}")
         self._apply_motion_preference()
         bub = self.config.get("bubble_duration_ms") or {}
         log.info(
