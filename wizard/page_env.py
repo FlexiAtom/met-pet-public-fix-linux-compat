@@ -309,12 +309,28 @@ class EnvCheckPage(QFrame):
                     self._set_item_status(name, ok)
                     self.log(f"pywin32: {'就绪' if ok else '缺失（Windows 推荐安装）'}")
             elif name == "live2d-py":
-                ok = check_installed("live2d-py")
-                self._set_item_status(name, ok, "✅ 就绪" if ok else "○ 可选未装（将用 PNG）")
+                # 判据与产品同一处真值：`pip show` 只证明"装过"，不证明渲染层拿得到 1.0 那一代的
+                # 名字。旧判据（import + 版本号）在装了符号面不对的包时照样说"可用"，那是实测过的
+                # 假阳性，见 meapet/live2d_api.py。
+                from meapet.live2d_api import (
+                    LIVE2D_AVAILABLE,
+                    LIVE2D_MISSING,
+                    LIVE2D_UNAVAILABLE_REASON,
+                )
+                ok = LIVE2D_AVAILABLE
+                # 文案也按同一张门票分三档：`LIVE2D_MISSING is None` 才是"包 import 不上"，
+                # 非 None 是"装着了但名字对不上"——把后者写成"未装"就是旧闸门那句谎的第二处落点。
+                if ok:
+                    hint = "✅ 就绪"
+                elif LIVE2D_MISSING is None:
+                    hint = "○ 可选未装（将用 PNG）"
+                else:
+                    hint = "○ 已装但接口对不上（将用 PNG）"
+                self._set_item_status(name, ok, hint)
                 if not ok:
-                    # 可选：不强制标红按钮也可装
+                    # 可选：不强制标红按钮也可装（"对不上"那一档的正解同样是装一份 >=1.0.0）
                     self._mark_optional_missing(name)
-                self.log(f"live2d-py: {'就绪' if ok else '未装（可选）'}")
+                self.log(f"live2d-py: {'就绪' if ok else (LIVE2D_UNAVAILABLE_REASON or '未装（可选）')}")
             elif name == "PyOpenGL":
                 ok = check_installed("PyOpenGL")
                 self._set_item_status(name, ok, "✅ 就绪" if ok else "○ 可选未装")
@@ -443,7 +459,7 @@ class EnvCheckPage(QFrame):
         pkg_map = {
             "PyQt5": ["PyQt5"],
             "pywin32": ["pywin32"],
-            "live2d-py": ["live2d-py"],
+            "live2d-py": ["live2d-py>=1.0.0"],
             "PyOpenGL": ["PyOpenGL", "PyOpenGL-accelerate"],
             "requests": ["requests"],
             "httpx": ["httpx"],

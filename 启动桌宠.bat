@@ -205,9 +205,9 @@ if defined UV_CMD (
         "!UV_CMD!" pip install -r linux_requirements.txt --python "!PY_CMD!" --index-url https://pypi.org/simple
     )
     if errorlevel 1 exit /b 1
-    echo [MeaPet] optional live2d-py...
-    "!UV_CMD!" pip install live2d-py --python "!PY_CMD!" --index-url "%UV_INDEX_URL%" >nul 2>&1
-    if errorlevel 1 "!UV_CMD!" pip install live2d-py --python "!PY_CMD!" >nul 2>&1
+    echo [MeaPet] optional live2d-py (need 1.0.0+, python 3.11+ only)...
+    "!UV_CMD!" pip install "live2d-py>=1.0.0" --python "!PY_CMD!" --index-url "%UV_INDEX_URL%" >nul 2>&1
+    if errorlevel 1 "!UV_CMD!" pip install "live2d-py>=1.0.0" --python "!PY_CMD!" >nul 2>&1
     if errorlevel 1 echo [MeaPet] live2d-py skipped, PNG mode
     exit /b 0
 )
@@ -216,7 +216,7 @@ echo [MeaPet] pip install...
 "!PY_CMD!" -m pip install -r linux_requirements.txt --prefer-binary -i "%UV_INDEX_URL%"
 if errorlevel 1 "!PY_CMD!" -m pip install -r linux_requirements.txt --prefer-binary
 if errorlevel 1 exit /b 1
-"!PY_CMD!" -m pip install live2d-py --prefer-binary >nul 2>&1
+"!PY_CMD!" -m pip install "live2d-py>=1.0.0" --prefer-binary >nul 2>&1
 if errorlevel 1 echo [MeaPet] live2d-py skipped, PNG mode
 exit /b 0
 

@@ -49,7 +49,18 @@ python setup_wizard.py
 python pet.py
 ```
 
-`live2d-py` is optional; falls back to PNG when unavailable. Prebuilt packages are available at [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py).
+`live2d-py` is optional; falls back to PNG when unavailable. This product only speaks the
+**1.0.0-and-later** API surface:
+
+```bash
+pip install "live2d-py>=1.0.0"
+```
+
+That package requires **Python 3.11+** (upstream has shipped `cp311-abi3` and later artifacts
+only, since 0.8). Linux manylinux wheels only reached PyPI at v0.8.0.9 (2026-09-24); the older
+0.7.x line had Windows/macOS artifacts only, so running a 0.7-era Linux wheel here falls back to
+PNG by design rather than by bug. Upstream and prebuilt packages:
+[EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py).
 
 #### Arch-based systems: PyQt5's Qt5 is redirected to the system Qt5
 

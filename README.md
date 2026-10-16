@@ -49,7 +49,16 @@ python setup_wizard.py
 python pet.py
 ```
 
-`live2d-py` 是可选依赖；不可用时会回退到 PNG。预编译包可从 [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py) 获取。
+`live2d-py` 是可选依赖；不可用时会回退到 PNG。产品只认 **1.0.0 及以上**那一代的接口名：
+
+```bash
+pip install "live2d-py>=1.0.0"
+```
+
+它要求 **Python 3.11+**（0.8 起上游就只发 `cp311-abi3` 及以后的制品）。Linux 的 manylinux 轮子是
+v0.8.0.9（2026-09-24）才进 PyPI 的，更早的 0.7.x 在索引上只有 Windows/macOS 制品——所以拿 0.7 时代的
+Linux wheel 跑本产品会安静退回 PNG，那是预期行为，不是 bug。上游与预编译包见
+[EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py)。
 
 #### Arch 系：PyQt5 的 Qt5 被重指向系统 Qt5
 

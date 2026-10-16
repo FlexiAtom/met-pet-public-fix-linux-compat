@@ -17,8 +17,16 @@ PyOpenGL>=3.1.0
 PyQt5>=5.15.9
 requests>=2.28.0
 
-# 可选：Live2D 渲染（未装则自动回退 PNG）
-# live2d-py
+# 可选：Live2D 渲染（未装则自动回退 PNG）。
+# 故意**不写成依赖**，两条理由：
+#   1) 产品只认 live2d-py 1.0 那一代的符号面（下限 `>=1.0.0`，判据在 `meapet/live2d_api.py`，
+#      逐格 getattr），而 1.0.0 的 `Requires-Python` 是 `>=3.11` —— 本文件推荐 3.10~3.12，
+#      写进来会让 3.10 环境整条 `pip install -r` 硬失败，而桌宠本体并不需要 Live2D。
+#   2) manylinux 制品到 v0.8.0.9-alpha（2026-09-24）才进 PyPI；0.7 时代索引里根本没有 Linux 轮子，
+#      那条历史也解释了为什么这一格以前连版本号都算不上抓手。
+# 要装就单独来一条（别混进本文件）：pip install "live2d-py>=1.0.0"（Python 3.11+）。
+# 装了哪一代不算数、凑齐名字才算数：向导里那句「就绪」读的就是上面那张门票。
+# live2d-py>=1.0.0
 
 # Windows 可选
 # pywin32

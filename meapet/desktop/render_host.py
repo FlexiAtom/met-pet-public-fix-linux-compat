@@ -2262,7 +2262,8 @@ class PetRenderHostMixin:
 
         这里原来还挂着两层「换个 API 名再试」：`get_canvas_size` / `GetCanvasSize` /
         `getCanvasSize` 以及 `_model` 上的 `GetCanvasWidth` / `canvasWidth` / `width`。
-        实测这些符号在 `Live2DModel` 和 `live2d.LAppModel` 上**一个都不存在**（本机 2026-10-15
+        实测这些符号在 `Live2DModel` 和 `live2d.LAppModel`（0.7 那代的模型类，1.0.0 起连这个名字
+        都不存在了）上**一个都不存在**（本机 2026-10-15
         逐项 `hasattr` 过），所以那两层从来没有可能命中——留着它们只是让读代码的人以为画布
         还有别的通路，而真通路（`GetCanvasSizePixel`）当时被 `GetCanvasSize` 的单位口径挡掉了。
         """

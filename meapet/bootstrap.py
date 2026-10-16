@@ -248,9 +248,10 @@ def _verify_module_available(module_name: str) -> bool:
 def _live2d_surface_available() -> bool:
     """live2d 的门票走 `meapet.live2d_api` 那一处真值，不在这里另立一套判据。
 
-    旧判据读 `import live2d` + `__version__`，实测是个假阳性：装了 live2d-py 1.0.0 时这两句
-    都成立，但 1.0.0 取消了 `live2d.v3` 这套命名空间，渲染层拿不到符号 ⇒ 退回 PNG，而闸门
-    已经说过"可用"。反过来装 0.7 时它也只在"恰好有版本号"的前提下才成立。
+    旧判据读 `import live2d` + `__version__`，实测是个假阳性：这两句在符号面**对不上**的包上也
+    成立，渲染层随后拿不到名字 ⇒ 退回 PNG，而闸门已经说过"可用"。安装面钉了 `live2d-py>=1.0.0`
+    也挡不住这一格：盘上已有的旧 wheel、镜像源给出的别的版本、手动 pip 的都会绕过那句 specifier，
+    所以真值只能是"渲染层要用的名字凑齐了没有"。
     """
     from meapet.live2d_api import LIVE2D_AVAILABLE
 

@@ -111,13 +111,19 @@ a = Analysis(
         "wizard.page_vision",
         # desktop modules loaded dynamically
         "meapet.desktop.live2d_widget",
-        # live2d-py 的名字解析层用 `importlib.import_module` 动态取命名空间（0.7 在 `live2d.v3`、
-        # 1.0.0 合并到顶层 `live2d`），PyInstaller 的静态依赖图看不见这两条边——不显式列出来，
-        # 冻结包里根本不会带 live2d，桌宠永远走 PNG。两代都列：装了哪一代收哪一代，缺的那条只
-        # 出一条 "not found" warning，不拦构建。
+        # live2d-py 只认 1.0 这一代（人工 2026-10-17 裁决：不背两代兼容债，安装面钉 >=1.0.0）。
+        # 这一格列 `live2d` 是因为桌宠**不静态 import 它**——`meapet/live2d_api.py` 在 try 里
+        # import，PyInstaller 的静态图对"闸门 + 动态加载"这条组合不放心，显式列一次最省。
+        # 旧名 `live2d.v3` 已从这里删掉：v1.0.0 发布正文写着「Removed the live2d.v3 and
+        # live2d.v2cpp modules」，留着它只会在每次构建多一条 warning，并给下一个人留下
+        # "这代还活着"的假印象。
+        # `live2d.v2`（1.0.0 wheel 里 96 个 .py 有 88 个在它下面）**不列**，实测没有任何 import
+        # 边：wheel 内无一处 `import live2d.v2`，`live2d/__init__.py` 唯一的 import 是
+        # `from ._live2d import *`，而 `_live2d.so` 里 `PyImport_Import*`/`import_module`
+        # 两种字符串各 0 次（原生码不回头 import Python 模块）。原生 `init()` 只是把包目录
+        # 交给 `init_internal` 去读着色器资源，那是上面 `collect_data_files("live2d")` 的活。
         "meapet.live2d_api",
         "live2d",
-        "live2d.v3",
         "meapet.desktop.status_panel",
         "meapet.desktop.timeline_viewer",
         "meapet.desktop.chat_input",
