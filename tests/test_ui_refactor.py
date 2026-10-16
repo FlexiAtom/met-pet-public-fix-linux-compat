@@ -746,6 +746,66 @@ class UiRefactorTests(unittest.TestCase):
         ):
             page._run_checks()
 
+    def test_packaged_build_reports_bundle_without_offering_to_install(self) -> None:
+        """打包版那一页只报随包内容：假动作（安装钮/那句承诺）与清不掉的永久红标一起消失。"""
+        from wizard.page_env import EnvCheckPage
+        from wizard.platform_info import PYTHON_CHECK_NAME
+
+        with patch(
+            "wizard.page_env.is_frozen", return_value=True
+        ), patch("wizard.platform_info.is_frozen", return_value=True):
+            page = self._track(EnvCheckPage())
+            page._check_timer.stop()
+            page._set_item_status("pip", False)
+            page._set_item_status(PYTHON_CHECK_NAME, False)
+            page._set_item_status("httpx", False)
+            page._mark_optional_missing("PyOpenGL")
+            page._finish_check_summary()
+
+        for name, (_label, _status, button, _hint) in page.items.items():
+            with self.subTest(name=name):
+                self.assertFalse(button.isVisibleTo(page))
+        # pip 与 Python 两格在打包版不再算必需；其余必需项一格没被顺手放宽。
+        self.assertEqual(page.required_missing(), ["httpx 环境"])
+        description = self._page_description(page)
+        self.assertIn("随包内容", description.text())
+        self.assertIn("装不了", description.text())
+        self.assertNotIn("按需获取", page.total_status.text())
+
+    def _page_description(self, page):
+        return next(
+            label
+            for label in page.findChildren(QLabel)
+            if label.objectName() == "PageDescription"
+        )
+
+    def test_source_build_still_offers_install_and_requires_pip(self) -> None:
+        """反证那一发：源码态这一页一字未改——缺 pip 既标红又给得出按钮。"""
+        from wizard.page_env import EnvCheckPage
+        from wizard.platform_info import PYTHON_CHECK_NAME
+
+        with patch(
+            "wizard.page_env.is_frozen", return_value=False
+        ), patch("wizard.platform_info.is_frozen", return_value=False):
+            page = self._track(EnvCheckPage())
+            page._check_timer.stop()
+            page._set_item_status("pip", False)
+            page._set_item_status(PYTHON_CHECK_NAME, False)
+            page._set_item_status("httpx", False)
+            page._finish_check_summary()
+
+        self.assertEqual(
+            page.required_missing(),
+            ["Python 3.10+ 环境", "pip 环境", "httpx 环境"],
+        )
+        _label, _status, button, _hint = page.items["pip"]
+        self.assertTrue(button.isVisibleTo(page))
+        self.assertIn("缺失项可点“安装”按需获取", page.total_status.text())
+        self.assertEqual(
+            self._page_description(page).text(),
+            "仅检测环境；组件默认不自动下载，需要时点「安装」按需获取",
+        )
+
     def test_configuration_startup_callbacks_use_owned_timers(self) -> None:
         from wizard.app import SetupWizard
 

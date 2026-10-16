@@ -32,6 +32,7 @@ from wizard.platform_info import (
 from wizard.env_utils import (
     pip_install, check_installed,
 )
+from meapet.paths import is_frozen
 
 # 兼容页面内可能使用的短名
 class EnvCheckPage(QFrame):
@@ -52,7 +53,15 @@ class EnvCheckPage(QFrame):
         title.setAccessibleName("环境检测")
         self.layout.addWidget(title)
 
-        desc = QLabel("仅检测环境；组件默认不自动下载，需要时点「安装」按需获取")
+        self._can_install = not is_frozen()
+        desc = QLabel(
+            (
+                "打包版只做只读检查：下面报的是随包内容，缺什么都装不了，"
+                "要补件得在构建环境装好后重新打包。"
+            )
+            if not self._can_install
+            else "仅检测环境；组件默认不自动下载，需要时点「安装」按需获取"
+        )
         desc.setObjectName("PageDescription")
         desc.setWordWrap(True)
         self.layout.addWidget(desc)
@@ -186,7 +195,8 @@ class EnvCheckPage(QFrame):
             btn.hide()
         else:
             set_status(status, "error", text or "缺失")
-            btn.show()
+            if self._can_install:
+                btn.show()
         self._check_results[name] = bool(ok)
         self.requirements_changed.emit()
 
@@ -256,7 +266,8 @@ class EnvCheckPage(QFrame):
             return
         _, status, btn, _ = self.items[name]
         set_status(status, "warning")
-        btn.show()
+        if self._can_install:
+            btn.show()
 
     def _finish_check_summary(self) -> None:
         if QThread.currentThread() is not self.thread():
@@ -266,7 +277,11 @@ class EnvCheckPage(QFrame):
         set_status(
             self.total_status,
             "success",
-            f"检测完成（{PLATFORM['os_label']}）— 缺失项可点“安装”按需获取",
+            (
+                f"检测完成（{PLATFORM['os_label']}）— 缺失项可点“安装”按需获取"
+                if self._can_install
+                else f"检测完成（{PLATFORM['os_label']}）— 以上是随包内容，打包版不安装组件"
+            ),
         )
 
     def _run_checks_impl(self):
