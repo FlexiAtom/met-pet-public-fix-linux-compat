@@ -12,12 +12,13 @@ import traceback
 
 from PyQt5.QtWidgets import QApplication, QOpenGLWidget
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-try:
-    import live2d.v3 as live2d
-    LIVE2D_AVAILABLE = True
-except ImportError:  # optional dependency
-    live2d = None  # type: ignore
-    LIVE2D_AVAILABLE = False
+from meapet.live2d_api import (
+    LIVE2D_API,
+    LIVE2D_AVAILABLE,
+    LIVE2D_UNAVAILABLE_REASON,
+    live2d,
+)
+
 _LIVE2D_INITIALIZED = False
 from PyQt5.QtCore import QEvent
 from PyQt5.QtGui import QImage, QSurfaceFormat
@@ -87,7 +88,8 @@ class Live2DModel:
         self.widget = Live2DWidget(self, parent)
         return self.widget
 
-    def get_model(self) -> live2d.LAppModel:
+    def get_model(self):
+        """原生模型对象；类名随 live2d-py 那一代变（0.7 `LAppModel`／1.0 `Model`），不写死标注。"""
         return self.model
 
     def get_suggested_size(self) -> tuple:
@@ -260,10 +262,10 @@ class Live2DWidget(QOpenGLWidget):
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-            model = live2d.LAppModel()
+            model = getattr(live2d, LIVE2D_API.model_class)()
             model.LoadModelJson(self.l2d._model_json)
-            model.SetAutoBlinkEnable(True)
-            model.SetAutoBreathEnable(True)
+            getattr(model, LIVE2D_API.blink_setter)(True)
+            getattr(model, LIVE2D_API.breath_setter)(True)
             self._fit_model_to_window(model)
             self.l2d.model = model
             self.l2d._loaded = True
@@ -362,10 +364,13 @@ class Live2DWidget(QOpenGLWidget):
         cy = (gp.y() - wp.y() - h / 2) / (h / 2)
         cx = max(-1.0, min(1.0, cx))
         cy = max(-1.0, min(1.0, cy))
-        self.l2d.model.SetParameterValue("ParamAngleX", cx * 30, 1.0)
-        self.l2d.model.SetParameterValue("ParamAngleY", -cy * 30, 1.0)
-        self.l2d.model.SetParameterValue("ParamBodyAngleZ", cx * 10, 1.0)
-        self.l2d.model.SetParameterValue("ParamAngleZ", cx * 10, 1.0)
+        # 写参数的名字 0.7 叫 SetParameterValue、1.0.0 叫 SetParamById（签名同一组三参）。
+        # 每帧解析一次，不在四行里各抄一遍候选名。
+        set_param = getattr(self.l2d.model, LIVE2D_API.param_setter)
+        set_param("ParamAngleX", cx * 30, 1.0)
+        set_param("ParamAngleY", -cy * 30, 1.0)
+        set_param("ParamBodyAngleZ", cx * 10, 1.0)
+        set_param("ParamAngleZ", cx * 10, 1.0)
 
     def _draw_model(self):
         """绘制模型当前状态，供 paintGL 与离屏渲染共用。"""
@@ -642,7 +647,7 @@ def init_live2d():
     """初始化全局 Live2D runtime；重复切换渲染模式时保持幂等。"""
     global _LIVE2D_INITIALIZED
     if not LIVE2D_AVAILABLE:
-        raise RuntimeError("live2d package not installed")
+        raise RuntimeError(LIVE2D_UNAVAILABLE_REASON)
     if not _LIVE2D_INITIALIZED:
         live2d.init()
         _LIVE2D_INITIALIZED = True

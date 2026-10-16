@@ -2,7 +2,8 @@
 """L1 读数：Live2D 模型的**真画布**到底是什么，以及它和窗口几何怎么对上。
 
 Subject under test: `meapet.desktop.live2d_widget.Live2DModel.get_suggested_size()`
-→ `live2d.v3.LAppModel.GetCanvasSize()`，以及 `render_host._read_canvas_size_from_model`
+→ live2d-py 模型类的 `GetCanvasSize()`（类名随版本变：0.7 是 `live2d.v3.LAppModel`、
+1.0.0 是顶层 `live2d.Model`），以及 `render_host._read_canvas_size_from_model`
 / `_live2d_base_size` / `calculate_live2d_viewport_layout` 这三段算术的输入输出。
 
 它判的一件事（#258）：切换引擎后窗口尺寸该由**模型自己的画布**决定，可今天那条读数通道
@@ -58,7 +59,7 @@ def main() -> int:
         calculate_live2d_viewport_layout,
     )
 
-    import live2d.v3 as l2d
+    from meapet.live2d_api import LIVE2D_API, live2d as l2d
 
     app = QApplication(sys.argv[:1])
     init_live2d()
@@ -89,9 +90,9 @@ def main() -> int:
     print(f"[已加载] get_suggested_size()   = {l2d_model.get_suggested_size()}")
     print(f"[已加载] Live2DModel 上有 get_canvas_size/GetCanvasSize/getCanvasSize? "
           f"{[n for n in ('get_canvas_size', 'GetCanvasSize', 'getCanvasSize') if hasattr(l2d_model, n)]}")
-    print(f"[已加载] LAppModel 上有 GetCanvasWidth/canvasWidth/width? "
+    print(f"[已加载] {LIVE2D_API.model_class} 上有 GetCanvasWidth/canvasWidth/width? "
           f"{[n for n in ('GetCanvasWidth', 'getCanvasWidth', 'canvasWidth', 'width') if hasattr(model, n)]}")
-    print(f"[已加载] LAppModel 上有 GetCanvasSizePixel? {hasattr(model, 'GetCanvasSizePixel')}")
+    print(f"[已加载] {LIVE2D_API.model_class} 上有 GetCanvasSizePixel? {hasattr(model, 'GetCanvasSizePixel')}")
     print(f"常量 MIN/MAX/DEFAULT = {MIN_CANVAS_SIZE}/{MAX_CANVAS_SIZE}/{DEFAULT_CANVAS_SIZE}")
 
     px = model.GetCanvasSizePixel()

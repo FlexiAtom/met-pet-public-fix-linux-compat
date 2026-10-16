@@ -111,6 +111,13 @@ a = Analysis(
         "wizard.page_vision",
         # desktop modules loaded dynamically
         "meapet.desktop.live2d_widget",
+        # live2d-py 的名字解析层用 `importlib.import_module` 动态取命名空间（0.7 在 `live2d.v3`、
+        # 1.0.0 合并到顶层 `live2d`），PyInstaller 的静态依赖图看不见这两条边——不显式列出来，
+        # 冻结包里根本不会带 live2d，桌宠永远走 PNG。两代都列：装了哪一代收哪一代，缺的那条只
+        # 出一条 "not found" warning，不拦构建。
+        "meapet.live2d_api",
+        "live2d",
+        "live2d.v3",
         "meapet.desktop.status_panel",
         "meapet.desktop.timeline_viewer",
         "meapet.desktop.chat_input",
