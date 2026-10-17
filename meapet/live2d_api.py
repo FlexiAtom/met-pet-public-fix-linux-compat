@@ -24,6 +24,10 @@ import sys
 #: 别处不要再抄第二个数。
 LIVE2D_PY_MIN = "1.0.0"
 
+#: live2d-py 自己要的解释器下限（那颗轮子是 `cp311-abi3`）。`启动桌宠.bat` 兜底那条
+#: 系统 Python 选路钉的也是这个数——那里写不了 PEP 508 marker，只能靠候选表自己守住。
+LIVE2D_PY_PYTHON_MIN = (3, 11)
+
 #: 渲染层无条件触碰的模块级名字。`Model` 只查在不在、**绝不构造**：1.0.0 的 `Model()` 在没有 GL
 #: 上下文时直接段错误（本机实测 rc=139），探测路把进程打死比名字对不上严重得多。
 MODULE_SYMBOLS = ("init", "glInit", "clearBuffer", "dispose", "MotionPriority", "Model")
@@ -71,9 +75,10 @@ def _unavailable_reason(missing, import_error) -> str:
             f"{type(import_error).__name__}: {import_error}"
         )
     python_note = ""
-    if sys.version_info < (3, 11):
+    if sys.version_info < LIVE2D_PY_PYTHON_MIN:
+        floor = f"{LIVE2D_PY_PYTHON_MIN[0]}.{LIVE2D_PY_PYTHON_MIN[1]}"
         python_note = (
-            f"；live2d-py 从 0.8 起要求 Python 3.11+，本机是 "
+            f"；live2d-py 从 0.8 起要求 Python {floor}+，本机是 "
             f"{sys.version_info.major}.{sys.version_info.minor}"
         )
     return (

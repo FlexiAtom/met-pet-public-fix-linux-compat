@@ -28,7 +28,7 @@ MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screen
 
 ## Quick Start
 
-The companion requires Python 3.10+ (project defaults to 3.12). For local VITS, Python 3.10–3.12 is recommended due to dependency compatibility.
+The companion requires Python 3.10+ (project defaults to 3.12). For local VITS, Python 3.10–3.12 is recommended due to dependency compatibility. On Windows, `启动桌宠.bat` picks a **3.11+** interpreter when creating a new environment: Live2D needs it (the upstream package requires 3.11+ since 0.8), while 3.10 only ever gets PNG.
 
 ### Windows
 

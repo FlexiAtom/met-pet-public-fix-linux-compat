@@ -405,6 +405,30 @@ class TestInstallSurfacesAgreeOnTheFloor(unittest.TestCase):
                               f"{rel}:{lineno} 这一发没带下限：{line}")
         self.assertGreaterEqual(checked, 6, "安装行一条都没扫到 = 判据空转")
 
+    def test_windows_launcher_never_hands_the_venv_a_python_below_the_floor(self):
+        """`.bat` 兜底那条系统 Python 选路的下限 = `LIVE2D_PY_PYTHON_MIN`（3.11）。
+
+        钉文本是因为这一格**没有别的真值可钉**：Linux 侧那个 `>=3.11` 靠
+        `linux_requirements.txt:34` 那颗 PEP 508 marker 兜住，而批处理写不了 marker——
+        下限只存在于候选表和两道 `version_info` 闸门里。uv 取不到托管解释器的那台机器
+        会走到这条兜底路，选中 3.10 就得到一个**永远装不上 Live2D 的 .venv**，
+        而那件事当时没有任何一句话会说。
+        """
+        floor = live2d_api.LIVE2D_PY_PYTHON_MIN
+        launcher = (ROOT / "启动桌宠.bat").read_text(encoding="utf-8")
+        gate = f">=({floor[0]},{floor[1]})"
+        below = f">=({floor[0]},{floor[1] - 1})"
+        self.assertGreaterEqual(
+            launcher.count(gate), 2, f"两条解释器闸门里有一条没带下限 {gate}")
+        self.assertNotIn(below, launcher, "闸门里还留着低一档的门")
+        for lineno, line in self._lines("启动桌宠.bat"):
+            if "for %%V in (" in line:
+                candidate = f"{floor[0]}.{floor[1] - 1}"
+                self.assertNotIn(candidate, line,
+                                 f"启动桌宠.bat:{lineno} 候选表还留着 {candidate}")
+        self.assertIn(f"install Python {floor[0]}.{floor[1]}+", launcher,
+                      ":venv_fail 那句补救还写着低一档的版本")
+
 
 if __name__ == "__main__":
     unittest.main()
