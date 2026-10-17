@@ -24,7 +24,11 @@ from typing import Dict, Optional, Tuple, Union
 
 from meapet.config.normalizers import (
     canonical_tts_language,
+    normalize_click_feedback_weight,
+    normalize_feedback_keywords,
     normalize_gsv_ref_language,
+    normalize_input_device_index,
+    normalize_poetry_sources,
 )
 from meapet.config.defaults import (
     DEFAULT_AGENT_LINK_WS_URL,
@@ -32,6 +36,10 @@ from meapet.config.defaults import (
     DEFAULT_AGENT_HISTORY_TURNS,
     DEFAULT_AGENT_TIMEOUT_SECONDS,
     DEFAULT_BUBBLE_DURATIONS,
+    DEFAULT_CLICK_FEEDBACK_CRAWLER,
+    DEFAULT_CLICK_FEEDBACK_POETRY,
+    DEFAULT_CLICK_FEEDBACK_POETRY_SOURCES,
+    DEFAULT_CLICK_FEEDBACK_WEIGHTS,
     DEFAULT_CONTROL_PORT,
     DEFAULT_HERMES_WS_URL,
     DEFAULT_LIVE2D_WINDOW_MASK,
@@ -42,14 +50,19 @@ from meapet.config.defaults import (
     DEFAULT_OPENCLAW_WS_URL,
     DEFAULT_WATCHER_INTERVAL,
 )
+from meapet.log import get_color_logger
+
+_log = get_color_logger("config")
 from meapet.config import providers as _providers
 from meapet.ui_theme import (
     normalize_pet_size_factor,
+    normalize_text_color,
     normalize_theme_mode,
     normalize_ui_font_scale,
 )
 from meapet.utils import mask_secret, normalize_watcher
 from meapet.vision.policy import normalize_vision_mode
+from meapet.paths import normalize_voice_asr_precision
 
 
 # 通用 LLM 环境变量（未知/未标注 backend 时的兜底）。
@@ -67,6 +80,9 @@ ENV_LLM_KEY_BY_BACKEND = ENV_LLM_KEY_BY_FAMILY
 ENV_TTS_KEY = ("MEA_PET_MIMO_API_KEY", "XIAOMIMEA_PET_MIMO_API_KEY", "MEA_PET_API_KEY")
 ENV_TRANSLATE_KEY = ("MEA_PET_TRANSLATE_API_KEY",)
 ENV_VISION_KEY = ("MEA_PET_MIMO_API_KEY", "XIAOMIMEA_PET_MIMO_API_KEY", "MEA_PET_API_KEY")
+#: 点击反馈「爬虫」那一档的 Tavily 凭据：留空即 keyless 档（实测免注册可用），
+#: 填了才发 Bearer。环境变量名与其余键同族（MEA_PET_ 前缀）。
+ENV_TAVILY_KEY = ("MEA_PET_TAVILY_API_KEY",)
 
 # 直连协议默认；显式 protocol 始终优先。provider 品牌不再参与分流。
 PROTOCOL_BY_ENDPOINT_FAMILY = {
@@ -97,6 +113,25 @@ _VISION_BACKENDS = frozenset({"ollama", "mimo"})
 DEFAULT_API_BASE = DEFAULT_OPENAI_API_BASE
 
 _ENV_PLACEHOLDERS = ("", "$ENV", "${ENV}", "env", "ENV")
+
+
+def infer_agent_kind(raw_base: object) -> Tuple[str, str]:
+    """``llm.agent.kind`` 没写时，按地址反推网关类型，第二条是判据文本。
+
+    三条判据都是各网关**自己的地址签名**，不是按端口大小猜：``18789`` 是 OpenClaw 的默认口，
+    ``agent-link`` 是 Agent Link 的路径，``9119`` 与 ``/api/ws`` 是 Hermes 的原生 WS。
+    三种默认地址（``defaults.py``）都长这样，所以**不能**拿 "是 ws:// 就算 agent_link" 当判据——
+    那会把 ``ws://127.0.0.1:9119/api/ws`` 那份本来正确的 hermes 猜成另一路。
+    三条都不命中才退回历史默认 hermes，此时判据文本明说是猜的，调用方须把它说出来。
+    """
+    lowered = str(raw_base or "").strip().lower()
+    if "18789" in lowered:
+        return "openclaw", "地址里有 18789（OpenClaw 默认口）"
+    if "agent-link" in lowered or "agent_link" in lowered:
+        return "agent_link", "地址里有 agent-link 那段路径（Agent Link 网关）"
+    if ":9119" in lowered or "/api/ws" in lowered:
+        return "hermes", "地址里有 9119 或 /api/ws（Hermes 原生 WS）"
+    return "hermes", "地址里认不出任何网关签名，按历史默认**猜**的"
 
 
 def _endpoint_family_from_text(text: object) -> str:
@@ -432,6 +467,19 @@ def resolve_vision_api_key(vision_cfg: dict, llm_cfg: Optional[dict] = None) -> 
     return ""
 
 
+def resolve_click_feedback_crawler_key(config: dict) -> str:
+    """点击反馈「爬虫」的 Tavily 凭据；空串＝走 keyless 档。
+
+    不复用 ``llm`` 那把 key：两把钥匙开的是不同的门，拿 LLM 的 key 去发 Bearer 只会
+    换来一个 ``401``——而实测「无效 key 不退回 keyless」，填错比不填更坏。
+    """
+    click_feedback = (config or {}).get("click_feedback") or {}
+    crawler = click_feedback.get("crawler") or {}
+    if not isinstance(crawler, dict):
+        return ""
+    return resolve_secret(crawler.get("api_key", ""), ENV_TAVILY_KEY)
+
+
 def resolve_vision_api_base(
     vision_cfg: dict,
     llm_cfg: Optional[dict] = None,
@@ -699,7 +747,11 @@ def _normalize_llm_contract(value: object) -> dict:
         agent.get("base_url") or agent.get("bridge_url") or ""
     ).strip()
     if raw_kind not in _AGENT_KINDS:
-        raw_kind = "openclaw" if "18789" in raw_base else "hermes"
+        raw_kind, kind_basis = infer_agent_kind(raw_base)
+        _log.warning(
+            f"llm.agent.kind 没写：{kind_basis}，按 {raw_kind} 走"
+            "（要钉住请在 llm.agent.kind 写明 hermes/openclaw/agent_link）"
+        )
     agent["kind"] = raw_kind
 
     # 8642 是 Hermes HTTP API Server，原生 WS 由 ``hermes serve`` 默认在
@@ -835,6 +887,13 @@ def _normalize_agent_control(value: object) -> dict:
     for key in ("auth_token", "cert_file", "key_file", "ca_file"):
         control[key] = str(control.get(key) or "").strip()
     return control
+
+
+def _normalize_onebot(value: object) -> dict:
+    """规范化 OneBot 段；schema 与默认值由 ``meapet.onebot.config`` 提供。"""
+    from meapet.onebot.config import normalize_onebot_config
+
+    return normalize_onebot_config(value)
 
 
 def _clamp_ratio(value: object, default: float, lo: float, hi: float) -> float:
@@ -991,6 +1050,7 @@ def normalize_config(config: dict) -> dict:
     )
     cfg["live2d"] = live2d
     cfg["agent_control"] = _normalize_agent_control(cfg.get("agent_control"))
+    cfg["onebot"] = _normalize_onebot(cfg.get("onebot"))
 
     # bubble
     bub = cfg.get("bubble_duration_ms") if isinstance(cfg.get("bubble_duration_ms"), dict) else {}
@@ -1020,6 +1080,7 @@ def normalize_config(config: dict) -> dict:
         timeline_turns = 5
     ui["timeline_turns"] = max(0, min(timeline_turns, 100))
     ui["theme"] = normalize_theme_mode(ui.get("theme"))
+    ui["text_color"] = normalize_text_color(ui.get("text_color"))
     cfg["ui"] = ui
 
     # TTS：有音频时气泡始终晚于播放结束；旧开关仅保留配置兼容。
@@ -1137,10 +1198,18 @@ def normalize_config(config: dict) -> dict:
         if isinstance(cfg.get("voice_input"), dict)
         else {}
     )
+    # faster_whisper 时代留下的键，切到 sherpa-onnx 后无人读取，读到即清
+    for dead_key in ("engine", "model", "device"):
+        voice.pop(dead_key, None)
     voice.setdefault("enabled", False)
-    voice.setdefault("engine", "sherpa_onnx")
     voice.setdefault("language", "zh")
     voice.setdefault("auto_send", False)
+    # 档位词汇表在 meapet.paths 的单一真值表里，这里只把非法值收敛到默认档；
+    # 设备号 None = 自动选路，非负整数 = 用户点名的那台。
+    voice["precision"] = normalize_voice_asr_precision(voice.get("precision"))
+    voice["input_device_index"] = normalize_input_device_index(
+        voice.get("input_device_index")
+    )
     cfg["voice_input"] = voice
 
     # fidus 定位规范化（默认关闭：代价可见——秒级校准 + 屏幕闪现）
@@ -1154,6 +1223,72 @@ def normalize_config(config: dict) -> dict:
     # （人工现测 2026-10-02），交互态量出来的四向空档因此不可信。默认问，勾「不再提示」后不问。
     fidus.setdefault("ask_float", True)
     cfg["fidus"] = fidus
+
+    # 点击反馈：预制语音之外那两个走网的新源，默认关（隐私档位与屏幕观察同档：
+    # 默认关 ＋ 用户在设置里启用那一刻弹一次告知）。
+    click_feedback = (
+        copy.deepcopy(cfg.get("click_feedback"))
+        if isinstance(cfg.get("click_feedback"), dict)
+        else {}
+    )
+    crawler = (
+        copy.deepcopy(click_feedback.get("crawler"))
+        if isinstance(click_feedback.get("crawler"), dict)
+        else {}
+    )
+    crawler["enabled"] = bool(
+        crawler.get("enabled", DEFAULT_CLICK_FEEDBACK_CRAWLER["enabled"])
+    )
+    crawler["keywords"] = normalize_feedback_keywords(
+        crawler.get("keywords", DEFAULT_CLICK_FEEDBACK_CRAWLER["keywords"])
+    )
+    crawler["api_key"] = str(
+        crawler.get("api_key", DEFAULT_CLICK_FEEDBACK_CRAWLER["api_key"]) or ""
+    ).strip()
+    crawler["privacy_acknowledged"] = bool(
+        crawler.get(
+            "privacy_acknowledged",
+            DEFAULT_CLICK_FEEDBACK_CRAWLER["privacy_acknowledged"],
+        )
+    )
+    poetry = (
+        copy.deepcopy(click_feedback.get("poetry"))
+        if isinstance(click_feedback.get("poetry"), dict)
+        else {}
+    )
+    poetry["enabled"] = bool(
+        poetry.get("enabled", DEFAULT_CLICK_FEEDBACK_POETRY["enabled"])
+    )
+    # 源词汇表只有一个真值（defaults 里那两枚名字）；表外的名字直接丢掉，不给"配了但不认"的悬空态
+    poetry["sources"] = normalize_poetry_sources(
+        poetry.get("sources", DEFAULT_CLICK_FEEDBACK_POETRY["sources"]),
+        DEFAULT_CLICK_FEEDBACK_POETRY_SOURCES,
+    )
+    poetry["keywords"] = normalize_feedback_keywords(
+        poetry.get("keywords", DEFAULT_CLICK_FEEDBACK_POETRY["keywords"])
+    )
+    # 权重只住在 weights 那一格：poetry 里若出现同名键一律丢掉，不给它第二处真值的机会
+    poetry.pop("weights", None)
+    poetry["privacy_acknowledged"] = bool(
+        poetry.get(
+            "privacy_acknowledged",
+            DEFAULT_CLICK_FEEDBACK_POETRY["privacy_acknowledged"],
+        )
+    )
+    weights = (
+        copy.deepcopy(click_feedback.get("weights"))
+        if isinstance(click_feedback.get("weights"), dict)
+        else {}
+    )
+    for weight_key in ("preset", "crawler", "poetry"):
+        weights[weight_key] = normalize_click_feedback_weight(
+            weights.get(weight_key, DEFAULT_CLICK_FEEDBACK_WEIGHTS[weight_key]),
+            default=int(DEFAULT_CLICK_FEEDBACK_WEIGHTS[weight_key]),
+        )
+    click_feedback["crawler"] = crawler
+    click_feedback["poetry"] = poetry
+    click_feedback["weights"] = weights
+    cfg["click_feedback"] = click_feedback
 
     # ---------- audio 音量规范化（0-100%） ----------
     audio = cfg.get("audio") if isinstance(cfg.get("audio"), dict) else {}
@@ -1200,8 +1335,24 @@ def scrub_secrets(config: dict) -> dict:
         out["vision"]["api_key"] = ""
     if "agent_control" in out and isinstance(out["agent_control"], dict):
         out["agent_control"]["auth_token"] = ""
-    if "voice_input" in out and isinstance(out["voice_input"], dict):
-        out["voice_input"]["api_key"] = ""
+    voice = out.get("voice_input")
+    if isinstance(voice, dict):
+        # whisper 时代可能留过键的用户配置：导出时整键去掉，不再注入一个空字段
+        voice.pop("api_key", None)
+    click_feedback = out.get("click_feedback")
+    if isinstance(click_feedback, dict):
+        crawler = click_feedback.get("crawler")
+        if isinstance(crawler, dict):
+            crawler["api_key"] = ""
+    if "onebot" in out and isinstance(out["onebot"], dict):
+        onebot = out["onebot"]
+        for section in ("forward_ws", "reverse_ws", "http_api", "http_post", "hub"):
+            block = onebot.get(section)
+            if not isinstance(block, dict):
+                continue
+            for key in ("access_token", "push_token"):
+                if key in block:
+                    block[key] = ""
     return out
 
 
@@ -1213,6 +1364,7 @@ def secret_status(config: dict) -> Dict[str, str]:
     tts_key = resolve_tts_api_key(tts, llm)
     tr_key = resolve_translate_api_key(tts, llm)
     vis_key = resolve_vision_api_key(vision, llm)
+    tavily_key = resolve_click_feedback_crawler_key(config)
 
     def src(file_val: str, resolved: str, envs: Tuple[str, ...]) -> str:
         if not resolved:
@@ -1224,10 +1376,16 @@ def secret_status(config: dict) -> Dict[str, str]:
             return "file"
         return "unknown"
 
+    crawler = ((config.get("click_feedback") or {}).get("crawler")) or {}
     return {
         "llm": src(llm.get("api_key", ""), llm_key, ENV_LLM_KEY),
         "tts": src(tts.get("api_key", ""), tts_key, ENV_TTS_KEY),
         "translate": src(tts.get("translate_api_key", ""), tr_key, ENV_TRANSLATE_KEY),
         "vision": src(vision.get("api_key", ""), vis_key, ENV_VISION_KEY),
+        "tavily": src(
+            crawler.get("api_key", "") if isinstance(crawler, dict) else "",
+            tavily_key,
+            ENV_TAVILY_KEY,
+        ),
         "llm_preview": mask_secret(llm_key) if llm_key else "",
     }

@@ -7,6 +7,8 @@ import shutil
 import sys
 from typing import List, Tuple
 
+from meapet.paths import is_frozen
+
 def _default_config_path() -> str:
     try:
         from meapet.config.store import config_path
@@ -104,14 +106,20 @@ PLATFORM = detect_platform()
 
 
 def platform_checklist() -> list:
-    """按平台返回环境检测项 [(name, hint, required), ...]。"""
+    """按平台返回环境检测项 [(name, hint, required), ...]。
+
+    打包态下 `pip` 与 Python 两格不再标必需：`check_installed()` 在 frozen 时只查"这只 exe 里
+    冻了什么"，而产品没有任何静态 `import pip`（`MeaPet.spec` 的 hiddenimports 里也没有）——
+    标成必需就是给页面上一个清不掉的永久红标，而这一页唯一的补救（点「安装」）恒 0 ms 失败。
+    """
+    frozen = is_frozen()
     items = [
         (
             PYTHON_CHECK_NAME,
             "桌宠核心运行环境；本地 VITS 推荐 3.10–3.12",
-            True,
+            not frozen,
         ),
-        ("pip", "Python 包管理器", True),
+        ("pip", "Python 包管理器", not frozen),
         ("PyQt5", "窗口界面库", True),
         ("requests", "HTTP 请求库（兼容）", True),
         ("httpx", "异步 HTTP（对话/TTS/识图必需）", True),

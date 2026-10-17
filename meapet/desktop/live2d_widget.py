@@ -12,12 +12,12 @@ import traceback
 
 from PyQt5.QtWidgets import QApplication, QOpenGLWidget
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-try:
-    import live2d.v3 as live2d
-    LIVE2D_AVAILABLE = True
-except ImportError:  # optional dependency
-    live2d = None  # type: ignore
-    LIVE2D_AVAILABLE = False
+from meapet.live2d_api import (
+    LIVE2D_AVAILABLE,
+    LIVE2D_UNAVAILABLE_REASON,
+    live2d,
+)
+
 _LIVE2D_INITIALIZED = False
 from PyQt5.QtCore import QEvent
 from PyQt5.QtGui import QImage, QSurfaceFormat
@@ -26,6 +26,36 @@ from meapet.desktop.render_host import calculate_drag_position
 from meapet.log import get_color_logger
 
 log = get_color_logger("live2d_widget")
+
+#: 进分区判定那两条门票（单位 px / 秒）。名字与数值都放在**这里**而不是内联在 `mouseReleaseEvent`
+#: 里，是因为 `meapet --doctor` 要把它们和 Qt 自己的 `startDragDistance()`/`doubleClickInterval()`
+#: 并排印出来——「点一下为什么没反应」判的就是这两组数谁先立起（拖窗标志的门槛通常远小于 35 px）。
+#: doctor 读这两个名字，不在它那边重抄一遍数字：抄了就是第二套真值，改一处漏一处。
+ZONE_CLICK_MAX_DISTANCE_PX = 35
+ZONE_CLICK_MAX_HOLD_SECONDS = 0.4
+
+#: 画布归一的参照长边（px）。产品拿 `get_suggested_size()` 的产物去算 viewport 几何，
+#: 而 live2d-py 的 `GetCanvasSize()` 返回的是**模型单位**——本机 mea_live2d 实测
+#: `(1.7241379, 2.4137931)`，`GetPixelsPerUnit()=2900.0`，`GetCanvasSizePixel()=(5000.0, 7000.0)`。
+#: 直接 `int()` 就是 `(1, 2)`，被 `MIN_CANVAS_SIZE` 判死 ⇒ 画布从来没被读到过，每一步几何
+#: 都落在硬编码方画布上（人工 2026-10-15「PNG切换到Live2D需要重新请求窗口大小」的根因）。
+#: 参照边取 1024 是为了与那份被替换掉的硬编码值**同高**：`model.Resize(w, h)` 只按高缩放
+#: （实测 widget 366x512 与 512x512 画出的立绘同高 353 px），所以高不变＝屏上人物一寸不变，
+#: 换掉的只是那个假方形-vs-真 5:7 的宽高比。
+CANVAS_REFERENCE_EDGE = 1024
+
+#: 模型还没加载时的占位画布（`.moc3` 的画布尺寸要到 `initializeGL` 里加载完才读得到）。
+#: 525x735 与本机那份真画布的 5:7 同形，所以首帧前后只是等比放大，不改变形状。
+PLACEHOLDER_CANVAS = (525, 735)
+
+
+def normalize_canvas_to_reference_edge(w: float, h: float,
+                                       edge: int = CANVAS_REFERENCE_EDGE) -> tuple[int, int]:
+    """把画布按**长边**缩到参照边长，宽高比原样带走。"""
+    if w <= 0 or h <= 0:
+        return (edge, edge)
+    scale = edge / max(w, h)
+    return (max(1, round(w * scale)), max(1, round(h * scale)))
 
 
 class Live2DModel:
@@ -57,16 +87,26 @@ class Live2DModel:
         self.widget = Live2DWidget(self, parent)
         return self.widget
 
-    def get_model(self) -> live2d.LAppModel:
+    def get_model(self):
+        """原生模型对象（live2d-py 1.0 的 `live2d.Model` 实例）。"""
         return self.model
 
     def get_suggested_size(self) -> tuple:
-        """返回建议显示尺寸（模型加载后）"""
-        # 优先使用模型实际画布大小；未加载时返回默认
-        if self.model:
-            canvas_w, canvas_h = self.model.GetCanvasSize()
-            return (int(canvas_w), int(canvas_h))
-        return (525, 735)
+        """建议显示尺寸（模型加载后）：真画布**像素**尺寸归一到参照长边。
+
+        读的是 `GetCanvasSizePixel()`；`GetCanvasSize()` 那一对是模型单位，拿它当像素用会读出
+        (1, 2)（见 `CANVAS_REFERENCE_EDGE` 上那段）。读不到像素口径就退回占位值，让调用方
+        照旧走配置/硬编码那两层回退。
+        """
+        if self.model is None:
+            return PLACEHOLDER_CANVAS
+        try:
+            canvas_w, canvas_h = self.model.GetCanvasSizePixel()
+        except Exception as exc:
+            print(f"[live2d] ✗ GetCanvasSizePixel 读不到画布: {type(exc).__name__}: {exc}",
+                  flush=True)
+            return PLACEHOLDER_CANVAS
+        return normalize_canvas_to_reference_edge(canvas_w, canvas_h)
 
     # ====== 兼容 SpriteRenderer 的接口 ======
 
@@ -172,6 +212,13 @@ class Live2DWidget(QOpenGLWidget):
         self._dragging_window = False
         self._drag_pointer_origin = None
         self._drag_window_origin = None
+        # 单击/双击竞态：分区信号延到 doubleClickInterval 之后再发（动作仍即时）。
+        # Qt 的双击序列是 press→release→DblClick→release，第一次 release 排出去的那一发
+        # 必须能在 DblClick 到达时撤回，否则点开会聊天窗的同时又挨一次摸头反馈。
+        self._zone_click_timer = QTimer(self)
+        self._zone_click_timer.setSingleShot(True)
+        self._zone_click_timer.timeout.connect(self._on_zone_click_timeout)
+        self._pending_zone_signal = None
         # Phase 3: 离屏渲染（穿透模式下窗口隐藏，paintGL 不再被调用）
         self._fbo = None
         self._fbo_size = (0, 0)
@@ -214,10 +261,10 @@ class Live2DWidget(QOpenGLWidget):
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-            model = live2d.LAppModel()
+            model = live2d.Model()
             model.LoadModelJson(self.l2d._model_json)
-            model.SetAutoBlinkEnable(True)
-            model.SetAutoBreathEnable(True)
+            model.SetAutoBlink(True)
+            model.SetAutoBreath(True)
             self._fit_model_to_window(model)
             self.l2d.model = model
             self.l2d._loaded = True
@@ -316,10 +363,13 @@ class Live2DWidget(QOpenGLWidget):
         cy = (gp.y() - wp.y() - h / 2) / (h / 2)
         cx = max(-1.0, min(1.0, cx))
         cy = max(-1.0, min(1.0, cy))
-        self.l2d.model.SetParameterValue("ParamAngleX", cx * 30, 1.0)
-        self.l2d.model.SetParameterValue("ParamAngleY", -cy * 30, 1.0)
-        self.l2d.model.SetParameterValue("ParamBodyAngleZ", cx * 10, 1.0)
-        self.l2d.model.SetParameterValue("ParamAngleZ", cx * 10, 1.0)
+        # 写参数走 1.0 那一代的 `SetParamById`（0.7 的 `SetParameterValue` 按下标取参，传 id 会
+        # TypeError；1.0.0 已删掉旧名，见 meapet/live2d_api.py）。
+        model = self.l2d.model
+        model.SetParamById("ParamAngleX", cx * 30, 1.0)
+        model.SetParamById("ParamAngleY", -cy * 30, 1.0)
+        model.SetParamById("ParamBodyAngleZ", cx * 10, 1.0)
+        model.SetParamById("ParamAngleZ", cx * 10, 1.0)
 
     def _draw_model(self):
         """绘制模型当前状态，供 paintGL 与离屏渲染共用。"""
@@ -440,6 +490,20 @@ class Live2DWidget(QOpenGLWidget):
     def _on_timer(self):
         self.update()
 
+    def _schedule_zone_click(self, signal):
+        """排一次分区反馈；已有一发待发就换掉它，不叠。"""
+        self._pending_zone_signal = signal
+        self._zone_click_timer.start(QApplication.doubleClickInterval())
+
+    def _cancel_zone_click(self):
+        self._pending_zone_signal = None
+        self._zone_click_timer.stop()
+
+    def _on_zone_click_timeout(self):
+        signal, self._pending_zone_signal = self._pending_zone_signal, None
+        if signal is not None:
+            signal.emit()
+
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
         if self._parent_in_standby():
@@ -518,7 +582,10 @@ class Live2DWidget(QOpenGLWidget):
                 dist = math.sqrt((event.x() - px)**2 + (event.y() - py)**2)
                 press_duration = time.time() - self._press_time
 
-                if dist < 35 and press_duration < 0.4:
+                if (
+                    dist < ZONE_CLICK_MAX_DISTANCE_PX
+                    and press_duration < ZONE_CLICK_MAX_HOLD_SECONDS
+                ):
                     w, h = self.width(), self.height()
                     if w <= 0 or h <= 0:
                         self._press_pos = None
@@ -532,13 +599,13 @@ class Live2DWidget(QOpenGLWidget):
                     # 分区判定（全窗口范围，不再做椭圆裁剪过滤）
                     if ny > 0.00:
                         self.l2d.model.StartMotion("Idle", 0, live2d.MotionPriority.FORCE)
-                        self.head_patted.emit()
+                        self._schedule_zone_click(self.head_patted)
                     elif nx < 0.0:
                         self.l2d.model.StartMotion("Angry", 0, live2d.MotionPriority.FORCE)
-                        self.lower_left_patted.emit()
+                        self._schedule_zone_click(self.lower_left_patted)
                     else:
                         self.l2d.model.StartMotion("Angry", 0, live2d.MotionPriority.FORCE)
-                        self.lower_right_patted.emit()
+                        self._schedule_zone_click(self.lower_right_patted)
 
             self._press_pos = None
             event.accept()
@@ -554,6 +621,7 @@ class Live2DWidget(QOpenGLWidget):
             self._drag_pointer_origin = None
             self._drag_window_origin = None
             self._press_pos = None
+            self._cancel_zone_click()
             self.chat_requested.emit()
             event.accept()
             return
@@ -566,6 +634,7 @@ class Live2DWidget(QOpenGLWidget):
 
     def shutdown(self):
         self._timer.stop()
+        self._cancel_zone_click()
         self._ready = False
         self._fbo = None
         self._fbo_size = (0, 0)
@@ -577,7 +646,7 @@ def init_live2d():
     """初始化全局 Live2D runtime；重复切换渲染模式时保持幂等。"""
     global _LIVE2D_INITIALIZED
     if not LIVE2D_AVAILABLE:
-        raise RuntimeError("live2d package not installed")
+        raise RuntimeError(LIVE2D_UNAVAILABLE_REASON)
     if not _LIVE2D_INITIALIZED:
         live2d.init()
         _LIVE2D_INITIALIZED = True

@@ -62,13 +62,15 @@ from meapet.desktop.widgets import DialogueBubbleStack
 from meapet.desktop.audio import PetAudioMixin
 from meapet.desktop.watch_ctrl import PetWatcherMixin
 from meapet.desktop.chat_flow import PetChatFlowMixin
+from meapet.desktop.onebot_bridge import PetOneBotMixin
 from meapet.desktop.control_bridge import PetControlBridgeMixin
 from meapet.desktop.interaction import PetInteractionMixin
 from meapet.desktop.window_chrome import PetWindowChromeMixin
+from meapet.desktop.dev_options import PetDevOptionsMixin
 from meapet.desktop.render_host import PetRenderHostMixin, calculate_drag_position
 from meapet.desktop.config_bridge import PetConfigBridgeMixin
 from meapet.desktop.voice_mixin import PetVoiceMixin
-from meapet.desktop.splash import StartupSplash
+from meapet.desktop.splash import FIRST_RUN_HOLD_MS, StartupSplash
 from meapet.desktop import status_language
 
 # Windows 专用多媒体后端偏好：仅 Windows 上设置，Linux/macOS 不需要。
@@ -124,12 +126,14 @@ class MeaPet(
     PetAudioMixin,
     PetWatcherMixin,
     PetVoiceMixin,
+    PetOneBotMixin,
     PetChatFlowMixin,
     PetControlBridgeMixin,
     PetInteractionMixin,
     PetWindowChromeMixin,
     PetRenderHostMixin,
     PetConfigBridgeMixin,
+    PetDevOptionsMixin,
     QWidget,
 ):
     """梅尔桌宠主窗口"""
@@ -156,14 +160,20 @@ class MeaPet(
         from meapet.ui_theme import (
             apply_reduced_motion_env,
             resolve_reduced_motion,
+            set_text_color,
             set_ui_font_scale,
             set_ui_theme_mode,
+            text_color_note,
         )
 
         set_ui_font_scale(
             (self.config.get("display") or {}).get("font_scale", 1.0)
         )
-        set_ui_theme_mode((self.config.get("ui") or {}).get("theme"))
+        ui_cfg = self.config.get("ui") or {}
+        set_text_color(ui_cfg.get("text_color"), rebuild_styles=False)
+        set_ui_theme_mode(ui_cfg.get("theme"))
+        if text_color_note():
+            log.info(f"[config] {text_color_note()}")
         self._apply_motion_preference()
         bub = self.config.get("bubble_duration_ms") or {}
         log.info(
@@ -211,6 +221,7 @@ class MeaPet(
         _safe("chat", self._init_chat)
         _safe("tts", self._init_tts)
         _safe("control", self._init_control)
+        _safe("onebot", self._init_onebot)
         self._cloud_watch_confirmed = False
         _safe("watcher", self._init_watcher)
         _safe("voice", self._init_voice)
@@ -828,6 +839,15 @@ def main():
     except Exception as exc:
         log.warning(f"[boot] OpenGL surface defaults skipped: {exc}")
 
+    # Qt 平台插件闸门必须排在 QApplication **之前**：那一发是 qFatal → abort()，
+    # 下面的 try/except 接不住——话要说在死之前，能窄修的也只在这一刻还来得及改本进程的环境。
+    from meapet.desktop.qpa_guard import ensure_platform_plugins_loadable
+
+    try:
+        ensure_platform_plugins_loadable(lambda line: log.warning(line))
+    except Exception:
+        log.warning(f"[qpa] 闸门自己没跑起来:\n{traceback.format_exc()}")
+
     try:
         app = QApplication(sys.argv)
     except Exception:
@@ -875,7 +895,9 @@ def main():
     log.info("[boot] 保活窗口就绪")
 
     config_path = resolve_startup_config_path(PROJECT_ROOT)
-    if os.path.basename(config_path) == "config.example.json":
+    # 落到 example 那份，就等于"这台机器上还没人存过配置"——人工口径里的第一次使用。
+    first_run = os.path.basename(config_path) == "config.example.json"
+    if first_run:
         log.info("[boot] 使用默认示例配置文件 config.example.json")
 
     # 可选启动页（失败忽略）
@@ -883,6 +905,7 @@ def main():
     try:
         splash = StartupSplash()
         splash.setAttribute(Qt.WA_QuitOnClose, False)
+        splash.set_hold_ms(FIRST_RUN_HOLD_MS if first_run else 0)
         if hasattr(splash, "status"):
             splash.status.setText("正在启动...")
         splash.show()
@@ -925,7 +948,7 @@ def main():
 
     if splash is not None:
         try:
-            splash.hide()
+            splash.dismiss()
         except Exception:
             pass
 
@@ -962,7 +985,7 @@ def main():
         startup_finished["done"] = True
         if splash is not None:
             try:
-                splash.hide()
+                splash.dismiss()
             except Exception:
                 pass
         pet2 = holder.get("pet")

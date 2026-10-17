@@ -18,10 +18,11 @@ from wizard.styles import (
     STYLE_INPUT,
     STYLE_PAGE_CARD,
 )
+from wizard.platform_info import PLATFORM
 from meapet.tts.common import prefix_python
 
 # 兼容页面内可能使用的短名
-from wizard.page_tts_gsv import TtsPageGsvMixin
+from wizard.page_tts_gsv import TtsPageGsvMixin, gsv_dir_field
 from wizard.page_tts_mimo import TtsPageMimoMixin
 from wizard.page_tts_vits import TtsPageVitsMixin
 from meapet.ui_theme import apply_named_style
@@ -96,6 +97,14 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
 
         # 记录是否已从 config 恢复过，避免重复覆盖用户输入
         self._loaded_from_config = False
+        # GSV 探测要起子进程，只能等页面真露脸；构造/启动那一路不碰（见
+        # test_slow_gsv_probe_is_not_scheduled_when_page_opens）。
+        self._env_probe_allowed = False
+        self._gsv_probe_done = False
+        # config.json 里的 VITS 权重路径（向导没有对应输入框，只做只读回填给
+        # _check_vits 用）；留空时 _check_vits 回落到随包那份，与交付码同一判据。
+        self._vits_model_cfg = ""
+        self._vits_config_cfg = ""
 
         # MiMo TTS 说明 / Key / 音色（云端模式显示）
         self.mimo_tts_frame = QFrame()
@@ -228,7 +237,9 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         ))
         if os.path.isfile(_default_vits_py):
             self.vits_python_input.setText(_default_vits_py)
-        self.vits_python_input.setPlaceholderText("用于 VITS 推理的 Python（需含 PyTorch CUDA）")
+        self.vits_python_input.setPlaceholderText(
+            "用于 VITS 推理的 Python（装有 PyTorch 即可，CPU 版也行）"
+        )
         apply_named_style(self.vits_python_input, "STYLE_INPUT")
         self.vits_python_input.setAccessibleName("VITS Python 路径")
         vpy_layout.addWidget(self.vits_python_input)
@@ -257,6 +268,7 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         gsv_layout.setContentsMargins(0, 0, 0, 0)
         self.gsv_status = QLabel("")
         self.gsv_status.setProperty("status", "muted")
+        self.gsv_status.setWordWrap(True)
         self.gsv_status.setAccessibleName("GPT-SoVITS 环境状态")
         gsv_layout.addWidget(self.gsv_status)
 
@@ -265,7 +277,11 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         gsv_layout.addWidget(guide_btn)
 
         # GPT-SoVITS 整合包目录选择
-        gsv_label = QLabel("选整合包解压后的文件夹（会自动识别 python.exe）：")
+        gsv_label = QLabel(
+            "选整合包解压后的文件夹（会自动识别 "
+            + ("runtime\\python.exe" if PLATFORM["is_windows"] else "runtime/bin/python")
+            + "），也可以直接填解释器路径："
+        )
         gsv_label.setObjectName("FieldLabel")
         gsv_layout.addWidget(gsv_label)
 
@@ -498,6 +514,25 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
 
         if is_vits:
             self._check_vits()
+        if is_gsv and self._env_probe_allowed:
+            # 用户在页面上亲手换引擎，这一刻探测的代价（一个子进程）是他要的反馈。
+            self._check_gsv()
+
+    def showEvent(self, event):
+        """语音页第一次露脸就把 GSV 状态补上，别让"没点浏览"读成"没配语音"。
+
+        交付码在 ``tts.python_exe`` 留空时会自己从候选表找到整合包（Linux 的常态），
+        而从前只有点「浏览」才跑一次检测——于是页面报「尚未配置语音」、桌宠在另一头
+        照样出声。页面构造期不能起子进程，所以挂在这里，且露脸只跑一次。
+        """
+        super().showEvent(event)
+        # 露过脸之后，用户亲手换引擎也允许探测（_toggle_backend 读这个闸）。
+        self._env_probe_allowed = True
+        if self._gsv_probe_done:
+            return
+        self._gsv_probe_done = True
+        if self.backend_combo.currentData() == "gpt_sovits":
+            self._check_gsv()
 
     def _sync_engine_details_visibility(self, *_args) -> None:
         """折叠引擎细节，只保留总开关时更适合首次上手。"""
@@ -565,6 +600,10 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         # 兼容旧字段
         if tts_cfg.get("vits_mode") and engine not in ("mimo", "vits", "gpt_sovits"):
             engine = "vits"
+        # 权重路径要在 set_engine 之前落袋：它一路触发 _check_vits，而那一格以前
+        # 只看随包的 vits_models/，配置里指向别处的真身会被报成 LFS 指针缺失。
+        self._vits_model_cfg = str(tts_cfg.get("vits_model") or "").strip()
+        self._vits_config_cfg = str(tts_cfg.get("vits_config") or "").strip()
         self.set_engine(engine)
 
         if hasattr(self, "mimo_voice_input"):
@@ -667,15 +706,8 @@ class TTSPage(TtsPageGsvMixin, TtsPageMimoMixin, TtsPageVitsMixin, QFrame):
         # python_exe 可能是 GSV 的 python 路径
         gsv_py = (tts_cfg.get("python_exe") or "").strip()
         if gsv_py and hasattr(self, "gsv_dir_input"):
-            # 若是 .../runtime/python.exe，回填到整合包根目录更友好
-            gsv_dir = gsv_py
-            if gsv_py.lower().endswith("python.exe"):
-                parent = os.path.dirname(gsv_py)
-                if os.path.basename(parent).lower() == "runtime":
-                    gsv_dir = os.path.dirname(parent)
-                else:
-                    gsv_dir = parent
-            self.gsv_dir_input.setText(gsv_dir)
+            # 若是 .../runtime/(python.exe|bin/python)，回填到整合包根目录更友好
+            self.gsv_dir_input.setText(gsv_dir_field(gsv_py))
 
         self._toggle(self.enable_cb.isChecked())
         if engine == "mimo" and self.enable_cb.isChecked():

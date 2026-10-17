@@ -127,12 +127,28 @@ def wizard_progressive_hint() -> str:
     return "先完成「环境」和「对话」即可开玩；语音与屏幕识图可稍后设置"
 
 
-def menu_watch_enable() -> str:
-    return "开启屏幕观察（可能截屏）"
+def menu_watch_toggle() -> str:
+    return "是否开启屏幕观察"
 
 
-def menu_watch_disable() -> str:
-    return "关闭屏幕观察"
+def menu_click_feedback_toggle(title: object) -> str:
+    """点击反馈某一路的拨杆文字：状态由拨杆自己说，这里不写"开启/关闭"两形。"""
+    return f"是否开启{str(title or '').strip() or '这一路'}"
+
+
+def click_feedback_enabled(title: object, gap: object = "") -> str:
+    """开启后还有别的闸卡着时，气泡要把理由一起说——菜单那行灰字此刻已经关了。"""
+    reason = str(gap or "").strip()
+    base = f"{title}已开启"
+    return f"{base}，但{reason}" if reason else base
+
+
+def click_feedback_disabled(title: object) -> str:
+    return f"{title}已关闭"
+
+
+def click_feedback_not_enabled(title: object) -> str:
+    return f"{title}尚未开启"
 
 
 def menu_standby_enter() -> str:
@@ -259,6 +275,49 @@ def menu_section_interaction() -> str:
 
 def menu_section_system() -> str:
     return "系统"
+
+
+# --- OneBot / QQ 通道 ----------------------------------------------------- #
+
+
+def menu_section_onebot() -> str:
+    return "QQ 通道（OneBot）"
+
+
+def menu_onebot_status_prefix() -> str:
+    return "连接状态："
+
+
+def menu_onebot_disabled() -> str:
+    return "OneBot 未启用（在配置页开启）"
+
+
+def onebot_connecting() -> str:
+    return "正在连接 QQ 通道…"
+
+
+def onebot_connected(name: str = "") -> str:
+    suffix = f"（{name}）" if name else ""
+    return f"QQ 通道已就绪{suffix}"
+
+
+def onebot_disconnected(reason: str = "") -> str:
+    suffix = f"：{reason}" if reason else ""
+    return f"QQ 通道未连接{suffix}"
+
+
+def onebot_busy(queue_size: int = 0) -> str:
+    if queue_size > 0:
+        return f"QQ 消息排队中（{queue_size} 条）…"
+    return "QQ 来消息了，正在想…"
+
+
+def onebot_reply_failed() -> str:
+    return "回发 QQ 失败，检查 OneBot 连接与权限喵"
+
+
+def menu_onebot_reload() -> str:
+    return "重连 QQ 通道"
 
 
 def menu_voice_input_enable() -> str:

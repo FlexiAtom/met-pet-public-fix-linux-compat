@@ -124,8 +124,10 @@ def module_present(name: str) -> bool:
     `speak()` 路径上。
 
     它证明不了模块**加载得起来**：打包版里 torch 在 `sys._MEIPASS` 寻得到，
-    而 DLL/so 起不来的话 import 照样失败（那一格由 `vits_runtime.py` 的
-    `Failed to load bundled torch` 分支管）。所以这个判据只能往"缺失"方向用
+    而 DLL/so 起不来的话 import 照样失败（Windows 侧打包版实测：健康行
+    `torch=True` 而 `import torch` 抛 `WinError 1114 … c10.dll`）。那一格由
+    `vits_runtime.probe_torch_loadable()` 的后台真 import 探针管——它只跑一次，
+    健康检查读结论，不在这条路上付 import 的钱。所以这个判据只能往"缺失"方向用
     ——False 一定不可用；True 只说"找到了"，不代表就绪。
     """
     import importlib.util
@@ -356,11 +358,6 @@ def probe_vits_deps(py_exe: str, infer_script: str) -> tuple[str, str]:
                 py_exe,
                 infer_script,
                 "--check-deps",
-                # --text/--output 是脚本的必填项，这条路不会用到它们
-                "--text",
-                "probe",
-                "--output",
-                os.devnull,
             ],
             capture_output=True,
             text=True,
@@ -378,18 +375,28 @@ def probe_vits_deps(py_exe: str, infer_script: str) -> tuple[str, str]:
         return "ok", "deps importable"
     stderr = proc.stderr or ""
     if "ModuleNotFoundError" in stderr or "ImportError" in stderr:
-        tail = next(
-            (ln.strip() for ln in stderr.splitlines() if "Error" in ln),
-            stderr[-120:],
-        )
-        return "missing", tail
+        lines = stderr.splitlines()
+        # 从**后往前**取真因行：pip/setuptools 的劝告（"…pkg_resources…Error…"那类）
+        # 常排在 traceback 之前，取第一条含 "Error" 的行会把劝告当结论，真因反而看不见。
+        for needle in ("No module named", "Error"):
+            tail = next((ln.strip() for ln in reversed(lines) if needle in ln), "")
+            if tail:
+                return "missing", tail
+        return "missing", stderr[-120:]
     return "unknown", f"rc={proc.returncode} {(stderr or proc.stdout)[-160:]}"
 
 
 
 # ═══════════════════════════════════════════
-# GSV 子进程依赖自动安装
+# GSV 子进程超时与依赖自动安装
 # ═══════════════════════════════════════════
+
+#: GSV 推理子进程的最小等待预算（秒）。
+#: 本地引擎每句话都要重付一次冷启动，而这个下界是量出来的：2026-10-08 08:55/09:01
+#: 同一台 CPU 机、同一个整合包 runtime，``import ok (23.4s)`` + ``模型加载完成 (41.2s)``
+#: = **64.6s 时还没开始合成**，整句 25 字符要 115.24s 才落盘。旧的 60s 装不下任何一次
+#: 冷启动，只装得下暖缓存的运气——所以同一条链昨天出声、今天不出声。
+GSV_INFER_TIMEOUT_FLOOR_S = 240
 
 # pip 包名 → Python import 名映射（两者不一致时）
 GSV_MODULE_MAP = {
@@ -406,6 +413,11 @@ def _get_import_name(pkg_name: str) -> str:
 
 
 # GPT-SoVITS-CPUFast 推理所需的基础 Python 包
+# 清单的口径是"推理子进程 gsv_infer.py 的 import 闭包"，不是整合包 requirements.txt：
+# av / gradio 曾列在这里，但整合包全树 `import gradio` 只出现在 webui 侧
+# （webui.py、inference_webui.py、inference_webui_fast.py、tools/my_utils.py、subfix_webui.py），
+# `import av` 零命中；实测把这两项从闸门里去掉后，缺它们的 runtime 直跑 gsv_infer.py 照常出 wav
+# （25.9s 合成 3.86s 音频）。留着它们等于**把可用的 env 判死**——闸门说不可用、推理说可用。
 GSV_REQUIRED_PACKAGES = [
     "torch",
     "torchaudio",
@@ -415,13 +427,11 @@ GSV_REQUIRED_PACKAGES = [
     "PyYAML",
     "tqdm",
     "pypinyin",
-    "av",
     "fast_langdetect>=0.3.1",
     "split-lang",
     "wordsegment",
     "tokenizers",
     "transformers",
-    "gradio",
     "pydantic<=2.10.6",
     "jieba",
 ]

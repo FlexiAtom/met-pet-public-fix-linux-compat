@@ -229,7 +229,7 @@ def all_runtime_dependencies() -> tuple[RuntimeDependency, ...]:
 def _verify_module_available(module_name: str) -> bool:
     """尝试导入模块并执行一个最小可用性检查，返回 True 表示真正可用。
 
-    当前仅对 'live2d' 模块实施特殊验证（读取版本号），其他模块回退到
+    当前仅对 'live2d' 模块实施特殊验证（读渲染层真正要用的符号面），其他模块回退到
     find_spec 的结果。此函数不会抛出异常，所有失败均视为不可用。
     """
     try:
@@ -238,24 +238,24 @@ def _verify_module_available(module_name: str) -> bool:
             return False
         # 对 live2d 进行真实调用验证
         if module_name == "live2d":
-            mod = importlib.import_module(module_name)
-            # 尝试获取版本号（多数 Python 包提供 __version__）
-            version = getattr(mod, "__version__", None)
-            if version is not None:
-                return True
-            # 如果没有 __version__，尝试调用一个无害的静态方法
-            if hasattr(mod, "version") and callable(mod.version):
-                ver = mod.version()
-                return ver is not None
-            # 最低限度：检查核心类是否存在（例如 LAppModel）
-            if hasattr(mod, "LAppModel"):
-                return True
-            # 以上都失败则视为不可用
-            return False
+            return _live2d_surface_available()
         # 其他模块仅凭 find_spec 即可
         return True
     except Exception:
         return False
+
+
+def _live2d_surface_available() -> bool:
+    """live2d 的门票走 `meapet.live2d_api` 那一处真值，不在这里另立一套判据。
+
+    旧判据读 `import live2d` + `__version__`，实测是个假阳性：这两句在符号面**对不上**的包上也
+    成立，渲染层随后拿不到名字 ⇒ 退回 PNG，而闸门已经说过"可用"。安装面钉了 `live2d-py>=1.0.0`
+    也挡不住这一格：盘上已有的旧 wheel、镜像源给出的别的版本、手动 pip 的都会绕过那句 specifier，
+    所以真值只能是"渲染层要用的名字凑齐了没有"。
+    """
+    from meapet.live2d_api import LIVE2D_AVAILABLE
+
+    return LIVE2D_AVAILABLE
 
 
 def find_missing_dependencies(

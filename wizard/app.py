@@ -71,6 +71,7 @@ from meapet.ui_theme import (
     PET_SIZE_FACTOR_STEP,
     RADIUS_LARGE,
     UI_FONT_SCALE_DEFAULT,
+    UI_THEME_MODE_DEFAULT,
     apply_ui_font_scale,
     ensure_application_fonts,
     get_ui_theme_mode,
@@ -78,6 +79,10 @@ from meapet.ui_theme import (
     normalize_theme_mode,
     normalize_ui_font_scale,
     apply_named_style,
+    get_text_color,
+    normalize_text_color,
+    rebuild_theme_styles,
+    set_text_color,
     set_ui_font_scale,
     set_ui_theme_mode,
 )
@@ -85,6 +90,7 @@ from wizard.pages import (
     BackendPage,
     EnvCheckPage,
     LLMPage,
+    OneBotPage,
     TTSPage,
     VisionPage,
     VoiceInputPage,
@@ -111,6 +117,7 @@ class SetupWizard(QWidget):
     TAB_VOICE = 3
     TAB_VISION = 4
     TAB_VOICE_INPUT = 5
+    TAB_ONEBOT = 6
 
     _WINDOW_RESIZE_MARGIN = 10
     _WINDOW_STATE_SAVE_DELAY_MS = 250
@@ -295,6 +302,7 @@ class SetupWizard(QWidget):
         self.tts_page = TTSPage()
         self.vision_page = VisionPage()
         self.voice_input_page = VoiceInputPage()
+        self.onebot_page = OneBotPage()
 
         for page in (
             self.env_page,
@@ -305,6 +313,7 @@ class SetupWizard(QWidget):
             self.tts_page,
             self.vision_page,
             self.voice_input_page,
+            self.onebot_page,
         ):
             prepare_accessible_page(page)
 
@@ -327,7 +336,7 @@ class SetupWizard(QWidget):
         self.tabs.setAccessibleName("配置分类")
         self.tabs.setAccessibleDescription("带橙色圆点的分类缺少必要配置，并有文字提示")
         self.tabs.list.setAccessibleName(
-            "环境、Live2D、对话、语音、屏幕识图和语音输入分类"
+            "环境、Live2D、对话、语音、屏幕识图、语音输入和 OneBot 分类"
         )
         self.tabs.list.setAccessibleDescription(
             "橙色圆点表示该分类仍缺少必要配置；具体原因显示在分类提示和顶部状态中"
@@ -351,6 +360,7 @@ class SetupWizard(QWidget):
         self.tabs.addTab(self._make_scroll_tab(self.tts_page), "语音")
         self.tabs.addTab(self._make_scroll_tab(self.vision_page), "屏幕识图")
         self.tabs.addTab(self._make_scroll_tab(self.voice_input_page), "语音输入")
+        self.tabs.addTab(self._make_scroll_tab(self.onebot_page), "OneBot")
         main.addWidget(self.tabs, 1)
 
         # 底部按钮
@@ -457,7 +467,6 @@ class SetupWizard(QWidget):
         self._theme_radios: dict[str, QRadioButton] = {}
         initial_mode = get_ui_theme_mode()
         for mode, theme_label_text, theme_desc in (
-            ("system", "跟随系统", "跟随系统的浅色/深色偏好"),
             ("light", "浅色", "始终使用浅色界面"),
             ("dark", "深色", "始终使用深色界面"),
         ):
@@ -473,8 +482,10 @@ class SetupWizard(QWidget):
         layout.addLayout(theme_row)
 
         theme_hint = QLabel(
-            "默认跟随系统深浅色；切换后配置页即时生效，"
-            "桌宠的菜单、气泡与面板同步刷新，个别已打开的窗口重新打开后应用。"
+            "界面深浅色只按这里的选项决定，不再读取系统的浅色/深色偏好；"
+            "切换后配置页即时生效，桌宠的菜单、气泡与面板同步刷新，"
+            "个别已打开的窗口重新打开后应用。"
+            "字色默认白色；选「浅色」时白字配浅底读不出来，会自动回落到该方案自带的深色字。"
         )
         theme_hint.setObjectName("HelperText")
         theme_hint.setWordWrap(True)
@@ -1099,6 +1110,28 @@ class SetupWizard(QWidget):
         self.vision_page.api_key_input.textChanged.connect(
             self._refresh_required_tabs
         )
+        for widget in (
+            self.onebot_page.enabled_cb,
+            self.onebot_page.forward_enabled,
+            self.onebot_page.reverse_enabled,
+            self.onebot_page.http_api_enabled,
+            self.onebot_page.http_post_enabled,
+            self.onebot_page.hub_enabled,
+            self.onebot_page.allow_private,
+            self.onebot_page.allow_groups,
+            self.onebot_page.reverse_allow_insecure_remote,
+            self.onebot_page.http_post_allow_insecure_remote,
+            self.onebot_page.hub_allow_insecure_remote,
+        ):
+            widget.toggled.connect(self._refresh_required_tabs)
+        for widget in (
+            self.onebot_page.forward_url,
+            self.onebot_page.http_api_base,
+            self.onebot_page.reverse_host,
+            self.onebot_page.http_post_host,
+            self.onebot_page.hub_host,
+        ):
+            widget.textChanged.connect(self._refresh_required_tabs)
 
     def _on_llm_backend_changed(self, checked: bool = True) -> None:
         if not checked:
@@ -1124,6 +1157,7 @@ class SetupWizard(QWidget):
             self.TAB_VOICE: [],
             self.TAB_VISION: [],
             self.TAB_VOICE_INPUT: [],
+            self.TAB_ONEBOT: [],
         }
         issues[self.TAB_ENV].extend(self.env_page.required_missing())
 
@@ -1228,6 +1262,15 @@ class SetupWizard(QWidget):
                         vision_key = llm_key
                     if not vision_key:
                         issues[self.TAB_VISION].append("云端识图 API Key")
+
+        try:
+            from meapet.onebot.config import validate_onebot_config
+
+            issues[self.TAB_ONEBOT].extend(
+                validate_onebot_config(self.onebot_page.collect())
+            )
+        except Exception as exc:
+            self.env_page.log(f"检查 OneBot 配置失败: {type(exc).__name__}")
         return issues
 
     def _refresh_required_tabs(self, *_args) -> None:
@@ -1238,6 +1281,7 @@ class SetupWizard(QWidget):
             self.TAB_CHAT: "对话",
             self.TAB_VOICE: "语音",
             self.TAB_VISION: "屏幕识图",
+            self.TAB_ONEBOT: "OneBot",
         }
         missing_sections = []
         for index, label in labels.items():
@@ -1324,10 +1368,17 @@ class SetupWizard(QWidget):
             self.reduced_motion_cb.setChecked(
                 bool(display.get("reduced_motion", False))
             )
-            # 仅当配置显式写入 ui.theme 时才同步主题；缺省时保留当前模式，
-            # 避免把运行中刚切换的主题（或入口预设的浅色）冲回跟随系统。
+            # 仅当配置显式写入这两格时才同步；缺省时保留运行中的那一份，
+            # 不能被"配置里没写"冲回入口预设或默认档。
             ui_cfg = cfg.get("ui") if isinstance(cfg.get("ui"), dict) else {}
             raw_theme = ui_cfg.get("theme")
+            raw_text_color = ui_cfg.get("text_color")
+            text_pending = bool(raw_text_color) and (
+                normalize_text_color(raw_text_color) != get_text_color()
+            )
+            if text_pending:
+                set_text_color(raw_text_color, rebuild_styles=False)
+            theme_changed = False
             if raw_theme:
                 theme_mode = normalize_theme_mode(raw_theme)
                 radio = self._theme_radios.get(theme_mode)
@@ -1335,6 +1386,9 @@ class SetupWizard(QWidget):
                     radio.setChecked(True)
                 if get_ui_theme_mode() != theme_mode:
                     set_ui_theme_mode(theme_mode)
+                    theme_changed = True
+            if text_pending and not theme_changed:
+                rebuild_theme_styles()
             self.live2d_viewport_settings.set_fallback_canvas_size(
                 live2d.get("default_canvas_size")
             )
@@ -1389,6 +1443,14 @@ class SetupWizard(QWidget):
                 )
             except Exception as exc:
                 self.env_page.log(f"恢复语音输入配置失败: {exc}")
+
+            try:
+                self.onebot_page.apply_config(cfg.get("onebot") or {})
+                self.env_page.log(
+                    f"已恢复 OneBot（QQ 通道）配置：{self.onebot_page.summary()}"
+                )
+            except Exception as exc:
+                self.env_page.log(f"恢复 OneBot 配置失败: {exc}")
 
             eng = (tts.get("engine") or "?").lower()
             tts_on = "开" if tts.get("enabled", True) else "关"
@@ -1470,7 +1532,7 @@ class SetupWizard(QWidget):
                 for mode, radio in self._theme_radios.items()
                 if radio.isChecked()
             ),
-            "system",
+            UI_THEME_MODE_DEFAULT,
         )
 
     def _collect_live2d_viewport_fields(self, config: dict) -> None:
@@ -1688,6 +1750,10 @@ class SetupWizard(QWidget):
         self._collect_tts_fields(config)
         self._collect_vision_fields(config)
         self._collect_voice_input_fields(config)
+        config["onebot"] = self._deep_merge(
+            config.get("onebot") or {},
+            self.onebot_page.collect(),
+        )
         return config
 
     def _save(self):

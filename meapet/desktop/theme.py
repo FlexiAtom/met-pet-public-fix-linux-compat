@@ -212,6 +212,15 @@ def rebuild_styles() -> None:
             border-color: {rgba(COLOR_ERR, 120)};
             color: {COLOR_ERR};
         }}
+        QLabel#PetMenuSwitchLabel {{
+            background: transparent;
+            color: {COLOR_TEXT};
+            font-family: {FONT_FAMILY};
+            font-size: 14px;
+        }}
+        QWidget#PetMenuSwitch {{
+            background: transparent;
+        }}
         QFrame#PetMenuSeparator {{
             background: {COLOR_BORDER};
             border: none;
@@ -249,6 +258,7 @@ def rebuild_styles() -> None:
             font-size: 14px;
         }}
         QFrame#SizeDialogCard,
+        QFrame#FeedbackDialogCard,
         QFrame#TimelineCard {{
             background: {_theme.GRADIENT_PAPER};
             border: 1px solid {COLOR_BORDER};

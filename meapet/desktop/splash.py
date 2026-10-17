@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Tuple
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QElapsedTimer, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -13,8 +13,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from meapet.desktop.disclaimer import PAID_CHANNEL_NOTICE
 from meapet.desktop.theme import SPLASH_STYLE
 from meapet.ui_theme import ensure_application_fonts, apply_named_style
+
+# 首用（没有自己的 config.json）时这张卡片的最短停留时长，人工 2026-10-10T16:40 定的 10 秒。
+FIRST_RUN_HOLD_MS = 10_000
 
 
 class StartupSplash(QWidget):
@@ -87,10 +91,23 @@ class StartupSplash(QWidget):
         foot.setAlignment(Qt.AlignCenter)
         layout.addWidget(foot)
 
+        notice = QLabel(PAID_CHANNEL_NOTICE)
+        notice.setObjectName("SplashHint")
+        notice.setWordWrap(True)
+        notice.setAlignment(Qt.AlignCenter)
+        notice.setAccessibleName("付费渠道免责提示")
+        layout.addWidget(notice)
+
         self._steps: List[Tuple[str, Callable[[], None]]] = []
         self._index = 0
         self._result = None
         self._error: Optional[str] = None
+        self._hold_ms = 0
+        self._shown_at = QElapsedTimer()
+
+    def set_hold_ms(self, ms: int) -> None:
+        """卡片最短停留时长：首用那一次给 10 秒，其余给 0（照旧立即关）。"""
+        self._hold_ms = max(0, int(ms))
 
     def set_steps(self, steps: List[Tuple[str, Callable[[], None]]]) -> None:
         self._steps = list(steps or [])
@@ -142,6 +159,28 @@ class StartupSplash(QWidget):
 
     def _emit_finished(self) -> None:
         self.finished.emit()
+        self.dismiss()
+
+    def showEvent(self, event) -> None:
+        if not self._shown_at.isValid():
+            self._shown_at.start()
+        super().showEvent(event)
+
+    def dismiss(self) -> None:
+        """关掉卡片，但不足 `set_hold_ms` 那个时长时先补足。
+
+        首用那一次给的是 10 秒（人工 2026-10-10T16:40 裁「无 config.json ⇒ 弹窗显示满 10 秒再关」）：
+        没有它，创建桌宠一完成卡片就消失，那句免责没有人读得到。
+        """
+        remaining = self._hold_ms
+        if self._shown_at.isValid():
+            remaining -= self._shown_at.elapsed()
+        if remaining > 0:
+            QTimer.singleShot(remaining, self._hide_now)
+        else:
+            self._hide_now()
+
+    def _hide_now(self) -> None:
         # hide 而非 close：避免部分平台把“最后窗口关闭”当成退出
         self.hide()
 

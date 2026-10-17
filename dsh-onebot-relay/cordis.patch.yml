@@ -1,0 +1,79 @@
+# dsh-onebot-relay — 组合包 patch 层
+#
+# 语义提醒（已核实，见 dsh-plugin-dev skill 的 references/profile-and-patch.md）：
+#   - patch 是「按顶层 key 赋值」，写出的 `config:` 会**整体替换**目标行的 config，
+#     不是逐字段 merge。未写出的顶层 key 保留，未写出的 **config 内字段会被丢掉**。
+#   - 因此下面是**完整的 config**，不是增量。
+#   - 用户可以在自己 profile 的 cordis.patch.yml 里覆盖本行，无需改动本包。
+#
+# ---------------------------------------------------------------------------
+# 必填项（缺失 → 插件**加载即失败**，不静默降级。理由见 README「动笔前必读」）
+#
+#   selfId       机器人自己的 QQ 号（纯数字）。`requireAt` 与 `@全体成员` 判定靠它。
+#   meapetToken  共享密钥，两侧各自持有。它是唯一的鉴权防线：OneBot 端点上
+#                没有任何框架级鉴权。
+#   cwd          agent 工作目录，**必须是绝对路径**。
+#   meapetWsUrl  仅当 clientEnabled: true（默认）时必填，形如
+#                ws://127.0.0.1:14321/onebot/v11/hub
+#
+# ⚠️ 在 profile 的 patch 里覆盖本行时，**必须写全所有要保留的字段** ——
+#    只写一条不是「追加」，而是「只留那一条」，其余字段会退回 schema 默认值。
+#    最容易踩的坑：只写 `meapetToken` 与 `cwd`，于是 `pathPrefix` 悄悄变回默认、
+#    你原来自定义的 `requireAt: false` 也一起没了。
+# ---------------------------------------------------------------------------
+- insert:
+    - id: dsh-onebot-relay
+      name: dsh-onebot-relay
+      config:
+        # ── mode A：本插件当 OneBot 客户端，连 MeaPet 的 hub ──────────────
+        clientEnabled: true
+        meapetWsUrl: ''            # 必填（clientEnabled 为 true 时）：ws://127.0.0.1:14321/onebot/v11/hub
+        meapetToken: ''            # 必填：与 MeaPet onebot.hub.access_token 一致
+        tokenInQuery: false        # 只认 ?access_token= 的实现端才打开
+
+        # ── 身份与工作目录 ────────────────────────────────────────────────
+        selfId: ''                 # 必填：机器人 QQ 号，如 '10001'
+        cwd: ''                    # 必填：绝对路径，如 'D:\AI\workspace'
+
+        # ── 行为 ──────────────────────────────────────────────────────────
+        requireAt: true            # 群里必须先 @ 机器人才响应（私聊不受影响）
+        # 谁能让 agent 跑起来（空 = 不限制）。⚠️ MeaPet 侧的 allow.* 在
+        # reply_mode=hub 时一次都不会执行，那条路上的准入只能靠这两个名单。
+        allowUsers: []
+        allowGroups: []
+        replyChunking: true        # 长回复按长度切段
+        replyChunkChars: 1500      # 单段最大**码点**数
+        sessionTitleTemplate: '喵桥 · {messageType}/{sessionId}'
+        streamMode: 'final'        # final（只发权威最终文本）| preview（边跑边发增量）
+        previewMinChars: 60        # 仅 preview 模式生效
+        previewIntervalMs: 1500    # 仅 preview 模式生效
+
+        # ── 会话映射 ──────────────────────────────────────────────────────
+        statePath: ''              # 空 = <DSH_HOME>/onebot-relay/state.json
+        idleTtlMs: 86400000        # 空闲多久释放 live agent（保留会话映射）；0 = 关闭
+
+        # ── 背压 ──────────────────────────────────────────────────────────
+        maxQueuedPerConversation: 4
+
+        # ── mode B：本插件当 OneBot 服务端（**自带端口**） ────────────────
+        # 为什么必须自带端口：ctx.webServer.register 的 handler 是
+        # (request, response)，没有 WebSocket upgrade 的位置，而 OneBot 正向 WS
+        # 必须接管 upgrade。所以 mode B 自己持有 http.Server。
+        serverEnabled: false
+        serverHost: '127.0.0.1'
+        serverPort: 6721
+        pathPrefix: '/onebot-relay' # mode B 的路由前缀（ws/api/status 都挂在它下面）
+        serverToken: ''            # 空 = 与 meapetToken 共用
+        serverAllowRemote: false   # serverHost 非回环时必须显式打开
+        serverAllowSend: true      # mode B 消费者能否调动作（对齐 MeaPet 的 hub.allow_send）
+        relayInboundToServer: false # 把上游事件原样再广播给 mode B 的消费者
+
+        # ── 传输参数 ──────────────────────────────────────────────────────
+        heartbeatMs: 15000
+        reconnectInitialMs: 1000
+        reconnectMaxMs: 30000
+        callTimeoutMs: 15000
+
+        # ── 审批转发 ──────────────────────────────────────────────────────
+        approvalEnabled: true
+        approvalTimeoutMs: 120000  # 审批服务自身零超时，这里必须给值

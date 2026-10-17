@@ -27,6 +27,19 @@ def synthetic_frame(w: int = 400, h: int = 300) -> np.ndarray:
     return frame
 
 
+def contour_frame(rows: int, cols: int, h: int = 200, w: int = 200) -> np.ndarray:
+    """只有左上 `rows×cols` 那一块不透明：它直接决定 `iter_candidates` 造得出多大档。
+
+    `iter_candidates` 先取不透明轮廓的外接框，再问"这只盒放不放得进去"，所以**轮廓短边**
+    就是档位上限：`(70, 200)` ⇒ 160²/128²/96² 全摆不下，只有 64² 造得出候选。
+    """
+    rng = np.random.default_rng(11)
+    frame = np.zeros((h, w, 4), dtype=np.uint8)
+    frame[:rows, :cols, 3] = 255
+    frame[:rows, :cols, :3] = rng.integers(0, 255, (rows, cols, 3), dtype=np.uint8)
+    return frame
+
+
 class FakeEngine:
     """按 `FidusEngine` 的面冒充：注册记窗口、读数由 `reading` 回调决定。"""
 
@@ -450,12 +463,19 @@ class TestPremountOrdering(unittest.TestCase):
         def __init__(self):
             self.starts = 0
             self.stops = 0
+            self.active = False
 
         def start(self):
             self.starts += 1
+            self.active = True
 
         def stop(self):
             self.stops += 1
+            self.active = False
+
+        def isActive(self):
+            """真 QTimer 有这一个符号：`_layer_penetrating()` 判的就是它（面板回写那条链要读）。"""
+            return self.active
 
     class FakeWidget:
         def __init__(self, x=0, y=0, size=200):
@@ -551,8 +571,20 @@ class TestPremountOrdering(unittest.TestCase):
         # 该逐位不动，`_pending_mount` 才继续有效——这条只能靠"真的算一遍"来钉。
         host._layer_geometry = lambda: (geom["x"] + widget.x(), geom["y"] + widget.y(),
                                        widget.width(), widget.height())
-        host._fidus_current_frame = (lambda: None) if frame is None else \
-            (lambda: np.zeros((200, 200, 4), dtype=np.uint8))
+        if frame is None:
+            host._fidus_current_frame = lambda: None
+        elif frame == "tiny":
+            # 轮廓只有 70×70 ⇒ `iter_candidates` 造得出 64² 而造不出 96²：§A 预检闸门的拒绝档
+            host._fidus_current_frame = lambda: contour_frame(70, 70, h=160, w=160)
+        elif frame == "dot":
+            # 轮廓 50×50 ⇒ 比最小的 64² 还短：**一档候选都造不出**（每档都在"装不下"那格 continue）。
+            # 这一格要说另一种话——把"停在档限"写进去就是假判语，压根没有候选去撞档限。
+            host._fidus_current_frame = lambda: contour_frame(50, 50, h=160, w=160)
+        else:
+            # 「ok」过去是 `np.zeros`——全透明帧连一只盒都造不出。那些用例钉的是**顺序**，
+            # `request_locate` 被 mock，帧内容没人读，所以一直没人发现。§A 之后产品自己读帧
+            # ⇒ 这份 fixture 必须换成真量得动的画布（尺寸与这里的 160×160 窗口一致）。
+            host._fidus_current_frame = lambda: contour_frame(160, 160, h=160, w=160)
         host._fidus_timer = TestPremountOrdering.FakeTimer()
         host._mount_timer = TestPremountOrdering.FakeTimer()
         host._layer_timer = TestPremountOrdering.FakeTimer()
@@ -635,6 +667,82 @@ class TestPremountOrdering(unittest.TestCase):
         self.assertIsNone(host._pending_mount)
         self.assertFalse(host._fidus_busy)
         self.assertEqual(host._mount_timer.stops, 1)
+
+    def test_a_blink_mid_round_yields_geometry_to_the_probe(self):
+        """PNG 那只 ~4 s 的眨眼睛不能在测量轮里改写几何（本项给 PNG 上测量的直接代价）。
+
+        `_update_sprite` 原先无条件写三处：`sprite_label.move(0,0)` 抹掉的正是 H 手摆出去的
+        探针位移，`sprite_label.resize`／`self.resize` 把 `_request_probe_window` 放大过的
+        那一段缩回去。一发测量 0.9–13.5 s、四向最坏 20 s，而眨眼 4000±1000 ms ⇒ 落在轮内
+        是**常态**不是边角。后果不是响亮拒绝而是**悄悄挂歪**（`locate` 读的屏与模板不同源），
+        所以这条按"写没写"判，不按"量没量准"判。反证＝撤守卫，下面那三条当场红。
+        """
+        host = self._host_with_a_round_in_flight()
+        widget = host.sprite_label
+
+        def _sprite_update():
+            with mock.patch("meapet.desktop.render_host.safe_print"):
+                host._update_sprite()
+
+        self.assertIsNotNone(host._probe_saved)
+        self.assertIsNotNone(host._pending_mount)
+        window_resizes = [a for a in host.actions if isinstance(a, tuple) and a[0] == "resize"]
+
+        _sprite_update()
+        self.assertEqual(widget.moved, [], "`move(0,0)` 抹掉探针位移＝安静挂歪那一条")
+        self.assertEqual(widget.resizes, [])
+        self.assertEqual([a for a in host.actions if isinstance(a, tuple) and a[0] == "resize"],
+                         window_resizes, "轮内不许把放大过的窗口缩回常态")
+        self.assertEqual(len(widget.frames), 1, "画面照换：冻住像素会让屏上与模板分叉")
+
+        # 对照臂：轮外（两处令牌都清了）那三写必须照旧发生——守卫不是把 `_update_sprite` 关掉。
+        host._probe_saved = None
+        host._pending_mount = None
+        _sprite_update()
+        self.assertEqual(widget.moved, [(0, 0)])
+        self.assertEqual(widget.resizes, [(160, 160)])
+        self.assertEqual(host._geom["w"], 160)
+
+    def _host_with_a_round_in_flight(self):
+        """把 `_host()` 那台补出 `_update_sprite` 需要的面，并起好一发在飞的测量。
+
+        刻意先 `_start` 再装 `size`/几何面：那些方法是**这条用例**的道具，塞进共享的
+        `FakeWidget`／`_host` 会替别的用例改形状。
+        """
+        from types import SimpleNamespace
+
+        from PyQt5.QtCore import QPoint, QSize
+
+        host = self._host()
+        real_resize = host.resize
+
+        def resize_both_overloads(a, b=None):
+            """真 `QWidget.resize` 两种写法都收：测量链传 `(w, h)`，`_update_sprite` 传 QSize。"""
+            if b is None:
+                real_resize(a.width(), a.height())
+            else:
+                real_resize(a, b)
+
+        host.resize = resize_both_overloads
+        self._start(host)
+        widget = host.sprite_label
+        widget.pos = lambda: QPoint(48, 0)          # H 手已经把画布推出去了
+        widget.size = lambda: QSize(120, 120)       # 与目标不同 ⇒ 没有守卫就会写
+        widget.resizes: list = []
+        widget.resize = lambda size: widget.resizes.append((size.width(), size.height()))
+        widget.frames: list = []
+        widget.set_frame = widget.frames.append
+        host._use_live2d = False
+        host._scale = 1.0
+        host._size_factor = 1.0
+        scaled = SimpleNamespace(size=lambda: QSize(160, 160))
+        host.renderer = SimpleNamespace(
+            get_current_pixmap=lambda: SimpleNamespace(
+                isNull=lambda: False, width=lambda: 320, height=lambda: 320),
+            get_scaled_pixmap=lambda w, h: scaled,
+        )
+        host.size = lambda: QSize(host.width(), host.height())
+        return host
 
     def test_probe_window_grows_right_and_down_without_touching_the_canvas(self):
         """①「没有再次请求一个正确大小的 Qt 窗口」+ ②「四向空档恒为否」的正面钉法。
@@ -867,6 +975,115 @@ class TestPremountOrdering(unittest.TestCase):
         self.assertEqual(host.sprite_label.moved, [], "post-mount 不该碰子控件那只手")
 
 
+class TestPremountPreflightGate(unittest.TestCase):
+    """预检闸门：这一发**必拒**就别先花钱，也别先请人按 Mod+V（#260，人工 2026-10-15 那四行 log）。
+
+    他给的 log 最后一句是「没切穿透：位移闭环没过／没有可信读数」，而那一发根本没走到闭环：
+    轮廓只造得出 64² 档 ⇒ `select_template` 在第一次注册之前就停在档限。这一族钉三件事：
+    闸门**在花钱之前**（`request_locate` 一次都不投、窗口不放大）、**在模态之前**（对话框不构造）、
+    说的是**档位**而不是闭环。
+    """
+
+    def _host(self, frame):
+        host = TestPremountOrdering._host(self, frame=frame)
+        host.posted = []
+        host.printed = []
+        patcher = mock.patch.object(FP, "request_locate",
+                                    side_effect=lambda *a, **k: host.posted.append(a))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return host
+
+    def _run(self, host):
+        with mock.patch("meapet.desktop.render_host.safe_print",
+                        side_effect=lambda *a, **k: host.printed.append(" ".join(map(str, a)))):
+            host._set_layer_mode(True)
+
+    def test_tiny_contour_refuses_without_paying(self):
+        host = self._host("tiny")
+        self._run(host)
+        self.assertEqual(host.posted, [], "必拒的一发仍去测量 = 白付 0.9–13.5 s 与屏上滑动")
+        self.assertEqual(host.backend.enabled, [], "拒了就是不切")
+        self.assertIsNone(getattr(host, "_probe_saved", None), "窗口不该被放大过")
+        self.assertNotIn("resize", [a[0] for a in host.actions if isinstance(a, tuple)],
+                         "放大是为了摆探针；探针不必摆就不该动窗口尺寸")
+        spoken = [b for b in host.bubbles if not b.startswith("正在定位")]
+        self.assertEqual(len(spoken), 1, f"只该出一句：{host.bubbles}")
+        self.assertIn("贴片档", spoken[0])
+        self.assertNotIn("位移闭环", spoken[0], "闭环一条都没跑，那句是假话")
+        joined = " ".join(host.printed)
+        self.assertIn("停在档限", joined, f"log 里要说清停在哪儿：{host.printed}")
+        self.assertIn("75%", spoken[0], "出口是那条现成的菜单，得把路说出来")
+
+    def test_no_candidate_at_all_doesnt_claim_the_tier_gate(self):
+        """一档候选都没有时那句"停在档限"是假话——本案拆的就是这种判语，不能自己再造一句。
+
+        `edges == []` 与 `edges == [64]` 是两种必拒的形状：前者每档都在"装不下"那格被
+        `iter_candidates` 自己挡掉（`select_template` 连档限那一步都到不了），后者才是撞档限。
+        """
+        host = self._host("dot")
+        self._run(host)
+        self.assertEqual(host.posted, [], "同样不必花钱")
+        self.assertEqual(host.backend.enabled, [], "拒了就是不切")
+        self.assertIsNone(getattr(host, "_probe_saved", None), "窗口不该被放大过")
+        joined = " ".join(host.printed)
+        self.assertIn("一个候选都造不出", joined, f"零候选要说零候选的实话：{host.printed}")
+        self.assertNotIn("停在档限", joined, "没有候选就没有档限可撞，那句在这里是假的")
+        spoken = [b for b in host.bubbles if not b.startswith("正在定位")]
+        self.assertEqual(len(spoken), 1, f"只该出一句：{host.bubbles}")
+        self.assertNotIn("位移闭环", spoken[0])
+        self.assertIn("75%", spoken[0], "出口仍是那条现成的菜单")
+
+    def test_solid_canvas_still_goes_through(self):
+        """反证的那一半：闸门不许把**量得动**的画布也拦下来——那一发该照旧去量。"""
+        host = self._host("ok")
+        self._run(host)
+        self.assertEqual(len(host.posted), 1, f"量得动却没投测量：{host.posted}")
+        self.assertEqual(host.backend.enabled, [], "投了测量仍不该在量之前挂")
+
+    def test_gate_precedes_the_float_modal(self):
+        """闸门必须在浮动确认**之前**：`ask_float=True` 时那一发弹模态请人按 Mod+V，
+        而按完了也必拒 ⇒ 不该为人那一次按键去骗他。"""
+        from PyQt5.QtWidgets import QMessageBox
+
+        host = self._host("tiny")
+        host.config["fidus"]["ask_float"] = True
+        built = []
+
+        class FakeDialog:
+            def __init__(self, _parent, **kwargs):
+                self.kwargs = kwargs
+                built.append(self)
+
+            def exec_(self):
+                return int(QMessageBox.Yes)
+
+            def is_checked(self):
+                return False
+
+        with mock.patch("meapet.message_dialog.MeaMessageDialog", FakeDialog):
+            self._run(host)
+        self.assertEqual(built, [], "必拒的一发还请人按 Mod+V = 拿一次真按键换一句拒绝")
+        self.assertEqual(host.posted, [])
+
+    def test_the_predicate_is_the_same_one_select_template_uses(self):
+        """闸门不造假拒绝：它拒绝 ⇔ 真 `select_template` 在同一帧上返回 None。
+
+        这条把"判据不是新立的"钉成断言——两边同读 `iter_candidates` 那两条闸与同一个
+        `min_edge`，所以闸门永远不可能比 `select_template` 更早判死。
+        """
+        for frame in ("ok", "tiny", "dot"):
+            with self.subTest(frame):
+                real = TestPremountOrdering._host(self, frame=frame)._fidus_current_frame()
+                gate_refuses = not any(
+                    c.edge >= FP.PREMOUNT_MIN_EDGE
+                    for c in FP.iter_candidates(real))
+                picked = FP.select_template(FakeEngine(), real, None,
+                                            min_edge=FP.PREMOUNT_MIN_EDGE)
+                self.assertEqual(gate_refuses, picked is None,
+                                 "闸门与档限判据分叉 ⇒ 要么假拒绝，要么真拒绝被漏掉")
+
+
 class TestFloatGate(unittest.TestCase):
     """测量前的浮动闸门（人工裁决 2026-10-02「先让用户 Mod + V…需要不再提示选项」）。
 
@@ -992,21 +1209,25 @@ class TestConfigAndWiring(unittest.TestCase):
     def test_menu_leaf_defaults_unchecked_and_follows_config(self):
         from PyQt5.QtWidgets import QApplication, QWidget
 
+        from meapet.desktop.dev_options import PetDevOptionsMixin
         from meapet.desktop.window_chrome import PetWindowChromeMixin
 
         app = QApplication.instance() or QApplication(sys.argv)
         del app
 
-        class Host(QWidget, PetWindowChromeMixin):
+        class Host(QWidget, PetWindowChromeMixin, PetDevOptionsMixin):
             # 菜单上还连着十几个别的手势，本用例只管「定位与穿透」那一片：
             # 其余按名给空实现，没点名的照常 AttributeError。
             _NOOP = (
                 "_copy_agent_control_token", "_do_screen_watch", "_is_auto_start",
+                "_open_click_feedback_keywords", "_open_click_feedback_weights",
                 "_open_size_dialog", "_regenerate_agent_control_token",
                 "_reopen_setup_wizard", "_reset_memory", "_safe_set_mood",
-                "_set_size_factor", "_set_vision_backend", "_set_vision_model",
+                "_set_click_feedback_poetry_source", "_set_size_factor",
+                "_set_vision_backend", "_set_vision_model",
                 "_show_status_panel", "_show_timeline", "_show_volume_dialog",
-                "_toggle_auto_start", "_toggle_fidus_enabled", "_toggle_render_mode",
+                "_toggle_auto_start", "_toggle_click_feedback_source",
+                "_toggle_fidus_enabled", "_toggle_render_mode",
                 "_toggle_standby", "_toggle_voice_input", "_toggle_watcher_enabled",
             )
             _FLAGS = ("_standby", "_use_live2d")
@@ -1025,13 +1246,24 @@ class TestConfigAndWiring(unittest.TestCase):
             def _show_bubble(self, *_a, **_k):
                 pass
 
+        def find_menu(menu, title):
+            """归并后「定位与穿透」嵌在「设置与数据」里，根层直取找不到。"""
+            for act in menu.actions():
+                sub = act.menu()
+                if sub is None:
+                    continue
+                if sub.title() == title:
+                    return sub
+                hit = find_menu(sub, title)
+                if hit is not None:
+                    return hit
+            return None
+
         for enabled in (False, True):
             host = Host(enabled)
-            action = next(
-                a for a in host._build_context_menu().actions()
-                if a.menu() is not None and a.menu().title() == "定位与穿透"
-            )
-            leaf = action.menu().actions()[0]
+            locate = find_menu(host._build_context_menu(), "定位与穿透")
+            self.assertIsNotNone(locate, "归并后这一支还在菜单树里")
+            leaf = locate.actions()[0]
             self.assertEqual(leaf.text(), "启用fidus")
             self.assertTrue(leaf.isCheckable())
             self.assertEqual(leaf.isChecked(), enabled)
@@ -1106,7 +1338,13 @@ class TestConfigAndWiring(unittest.TestCase):
         self.assertIn("frame", seen)
         self.assertEqual(
             seen[seen.index("frame") + 1], "拿不到当前画面，定位不了位置")
-        self.assertIn("拿不到当前离屏帧", log.call_args[0][0])
+        logged = log.call_args[0][0]
+        self.assertIn("拿不到当前帧", logged)
+        # 本 host 没设 `_use_live2d` ⇒ 走 PNG 那一支。2026-10-15 起 PNG 也交得出帧
+        # （后备帧），所以这句只能说"那份后备是空的"，旧那句「没有离屏渲染这一步」已成假话。
+        self.assertIn("PNG 后备帧为空", logged)
+        self.assertNotIn("离屏渲染不可用", logged)
+        self.assertNotIn("Live2D", logged)
         self.assertFalse(getattr(host, "_fidus_busy", False))
 
 

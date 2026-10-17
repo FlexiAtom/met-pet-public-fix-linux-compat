@@ -53,7 +53,9 @@
   },
   "ui": {
     "first_run_hint_shown": false,
-    "timeline_turns": 5
+    "timeline_turns": 5,
+    "theme": "dark",
+    "text_color": "#F5F5F5"
   },
   "vision": {
     "enabled": false,
@@ -76,9 +78,18 @@
     "gsv_ref_wav": "",
     "gsv_ref_lang": "jp",
     "reference_audios": {
-      "jp": {"path": "", "text": ""},
-      "zh": {"path": "", "text": ""},
-      "en": {"path": "", "text": ""}
+      "jp": {
+        "path": "",
+        "text": ""
+      },
+      "zh": {
+        "path": "",
+        "text": ""
+      },
+      "en": {
+        "path": "",
+        "text": ""
+      }
     },
     "top_k": 15,
     "top_p": 0.8,
@@ -123,7 +134,7 @@
     "scale": 0.15,
     "placement_anchor": {
       "x": 0.54,
-      "y": 0.80
+      "y": 0.8
     },
     "window_shape": {
       "enabled": false,
@@ -132,9 +143,9 @@
     "window_mask": {
       "enabled": true,
       "cx": 0.54,
-      "cy": 0.40,
-      "rw": 0.30,
-      "rh": 0.40
+      "cy": 0.4,
+      "rw": 0.3,
+      "rh": 0.4
     }
   },
   "watcher": {
@@ -161,12 +172,95 @@
   },
   "voice_input": {
     "enabled": false,
-    "engine": "sherpa_onnx",
     "language": "zh",
-    "auto_send": false
+    "auto_send": false,
+    "precision": "int8",
+    "input_device_index": null
   },
   "fidus": {
     "enabled": false,
     "ask_float": true
+  },
+  "click_feedback": {
+    "crawler": {
+      "enabled": false,
+      "keywords": [],
+      "api_key": "",
+      "privacy_acknowledged": false
+    },
+    "poetry": {
+      "enabled": false,
+      "sources": [
+        "hitokoto",
+        "wikisource"
+      ],
+      "keywords": [],
+      "privacy_acknowledged": false
+    },
+    "weights": {
+      "preset": 100,
+      "crawler": 50,
+      "poetry": 50
+    }
+  },
+  "onebot": {
+    "enabled": false,
+    "self_ids": [],
+    "reply_mode": "pet",
+    "forward_ws": {
+      "enabled": false,
+      "url": "ws://127.0.0.1:3001/",
+      "access_token": "",
+      "reconnect": true,
+      "reconnect_initial_ms": 1000,
+      "reconnect_max_ms": 30000
+    },
+    "reverse_ws": {
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 14321,
+      "path": "/onebot/v11/ws",
+      "access_token": "",
+      "allow_insecure_remote": false
+    },
+    "http_api": {
+      "enabled": false,
+      "api_base": "http://127.0.0.1:3000",
+      "access_token": "",
+      "timeout_s": 10.0
+    },
+    "http_post": {
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 14321,
+      "path": "/onebot/v11/http",
+      "access_token": "",
+      "allow_insecure_remote": false
+    },
+    "hub": {
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 14321,
+      "ws_path": "/onebot/v11/hub",
+      "http_path": "/onebot/v11/hub/http",
+      "access_token": "",
+      "publish_events": true,
+      "allow_send": true,
+      "allow_insecure_remote": false,
+      "push_urls": [],
+      "push_token": "",
+      "push_timeout_s": 5.0
+    },
+    "allow": {
+      "private": true,
+      "groups": true,
+      "require_at": true,
+      "users": [],
+      "group_ids": []
+    },
+    "queue": {
+      "max_pending": 16,
+      "turn_timeout_s": 180.0
+    }
   }
 }

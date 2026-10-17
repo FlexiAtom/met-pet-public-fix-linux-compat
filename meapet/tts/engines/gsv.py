@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -19,6 +20,18 @@ from meapet.tts.common import (
 )
 
 log = get_color_logger("tts")
+
+# 人工 2026-10-12T14:07:28「要禁止并发」。推理子进程吃满 CPU/内存，两个一起跑会互相拖慢到
+# 双双撞上 gsv_timeout（实测 14 字句在受压窗口 241.35 s / 240.38 s 被砍成静默）。VITS 那一路
+# 早有 vits_runtime.py:37 的锁，GSV 这路此前一把都没有——所以排队，不是并行。
+_GSV_INFER_LOCK = threading.Lock()
+
+# 上游 ``TTS_infer_pack/TTS.py:1020`` 的 ``seed`` 默认 ``-1``，而 ``set_seed()``（:194-196）
+# 把 -1 当场换成 ``random.randint(0, 2**32-1)`` ⇒ 同句连 6 发拿到 4 种时长
+# （4.62/4.70/4.74/4.82）、12 个 wav md5 两两不同。人工同刻裁决「seed要改」：钉成定值。
+# 不做成配置键——这一档要的就是"不再飘"，可调等于把飘留在配置里；
+# 与 gsv_infer.py 里 text_split_method/batch_size 那批脚本内定值同档。
+GSV_INFER_SEED = 0
 
 _GSV_LANGUAGE_LABELS = {
     "jp": LANG_TTS,
@@ -71,6 +84,8 @@ class TtsGsvMixin:
             "speed": self.speed,
             "sample_steps": self.sample_steps,
             "output_wav": output_wav,
+            # 钉采样种子：不带这行上游就按 -1 每次随机（模块级 GSV_INFER_SEED 的注释给了实测散布）。
+            "seed": GSV_INFER_SEED,
             # 根不靠解释器路径反推：conda env 在树外时，只有这一路能把根传进子进程。
             "gsv_root": self.gsv_root,
         }
@@ -85,16 +100,31 @@ class TtsGsvMixin:
         try:
             cmd = [self.python_exe, self.infer_script]
             log.info("启动推理子进程…")
-            t1 = time.time()
 
-            proc = subprocess.run(
-                cmd,
-                input=payload_json.encode("utf-8"),
-                capture_output=True,
-                timeout=self.timeout,
-                cwd=project_root(),
-                **hidden_subprocess_kwargs(),
-            )
+            # 禁止并发（人工 2026-10-12T14:07:28）：排队上限取同一条 gsv_timeout——排队本身
+            # 也吃预算，等满了就放弃这一次并留理由，不把调用方（朗读也有 UI 线程上的入口）无限期挂住。
+            queued_at = time.time()
+            if not _GSV_INFER_LOCK.acquire(timeout=float(self.gsv_timeout)):
+                log.warning(
+                    f"GSV 推理已在进行，等满 {self.gsv_timeout:.0f}s 仍未排到 → "
+                    "本次放弃（禁止并发）"
+                )
+                return None, ""
+            try:
+                t1 = time.time()
+                proc = subprocess.run(
+                    cmd,
+                    input=payload_json.encode("utf-8"),
+                    capture_output=True,
+                    timeout=self.gsv_timeout,
+                    cwd=project_root(),
+                    **hidden_subprocess_kwargs(),
+                )
+            finally:
+                _GSV_INFER_LOCK.release()
+            waited = t1 - queued_at
+            if waited > 1.0:
+                log.info(f"排队等前一句 {waited:.1f}s")
             elapsed = time.time() - t1
             # 用 replace 忽略无法解码的字节（GPT-SoVITS 可能会输出 GBK 编码的中文日志）
             stdout_text = proc.stdout.decode('utf-8', errors='replace')
@@ -136,7 +166,12 @@ class TtsGsvMixin:
             return output_wav, result_lang
 
         except subprocess.TimeoutExpired:
-            log.error(f"TTS timeout ({self.timeout}s)")
+            # 超时的形状是"子进程还在干活"，不是"它坏了"：进度停在 audio_cache/_gsv_infer.log，
+            # 那句话是这次量到的最远一步，别把它跟"启动即失败"混成同一条日志。
+            log.error(
+                f"TTS timeout ({self.gsv_timeout}s)——推理子进程仍在运行被截停，"
+                f"走到哪一步看 audio_cache/_gsv_infer.log；句子更长或机器更慢就调 tts.timeout"
+            )
             return None, ""
         except json.JSONDecodeError as e:
             log.error(f"TTS JSON parse error: {type(e).__name__}")
@@ -266,6 +301,26 @@ class TtsGsvMixin:
                 )
                 wav_file, txt_file = alt_wav, alt_txt
                 lang_label = fallback_label
+
+        # 与 VITS 那一档对齐（engines/vits.py:37 判到中文才 [ZH]，其余一律 [JA]）：
+        # 本轮语言不是中文、而池里又没有这门语言的参考时，落 jp 档而不是把这句掐成静默——
+        # 参考只决定音色，念什么由 payload 里另发的 text_language 决定（:57-65），
+        # 跨语言克隆正是这一路的原生能力。随包池只有 zh_/jp_ 两档，英文句因此有声音。
+        # 中文不进这一档：上面那条前人裁决仍然有效（宁可跳过，也不给中文原文配日文参考）。
+        if (
+            (not wav_file or not txt_file)
+            and voice_language
+            and target_language != "zh"
+            and not prefixes[0].startswith("jp")
+        ):
+            alt_wav, alt_txt = _scan(("jp_", "ja_"))
+            if alt_wav and alt_txt:
+                log.warning(
+                    f"无 {prefixes[0]}* 参考，整句非中文 → 落 jp 档 "
+                    f"{os.path.basename(alt_wav)}"
+                )
+                wav_file, txt_file = alt_wav, alt_txt
+                lang_label = LANG_TTS
 
         if not wav_file or not txt_file:
             if not os.path.isdir(ref_folder):

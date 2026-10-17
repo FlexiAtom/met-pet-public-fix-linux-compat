@@ -111,6 +111,19 @@ a = Analysis(
         "wizard.page_vision",
         # desktop modules loaded dynamically
         "meapet.desktop.live2d_widget",
+        # live2d-py 只认 1.0 这一代（人工 2026-10-17 裁决：不背两代兼容债，安装面钉 >=1.0.0）。
+        # 这一格列 `live2d` 是因为桌宠**不静态 import 它**——`meapet/live2d_api.py` 在 try 里
+        # import，PyInstaller 的静态图对"闸门 + 动态加载"这条组合不放心，显式列一次最省。
+        # 旧名 `live2d.v3` 已从这里删掉：v1.0.0 发布正文写着「Removed the live2d.v3 and
+        # live2d.v2cpp modules」，留着它只会在每次构建多一条 warning，并给下一个人留下
+        # "这代还活着"的假印象。
+        # `live2d.v2`（1.0.0 wheel 里 96 个 .py 有 88 个在它下面）**不列**，实测没有任何 import
+        # 边：wheel 内无一处 `import live2d.v2`，`live2d/__init__.py` 唯一的 import 是
+        # `from ._live2d import *`，而 `_live2d.so` 里 `PyImport_Import*`/`import_module`
+        # 两种字符串各 0 次（原生码不回头 import Python 模块）。原生 `init()` 只是把包目录
+        # 交给 `init_internal` 去读着色器资源，那是上面 `collect_data_files("live2d")` 的活。
+        "meapet.live2d_api",
+        "live2d",
         "meapet.desktop.status_panel",
         "meapet.desktop.timeline_viewer",
         "meapet.desktop.chat_input",
@@ -119,6 +132,12 @@ a = Analysis(
         "meapet.agent.agent_link",
         "meapet.agent.openclaw",
         "meapet.agent.hermes",
+        # doctor 那一格 `--agent-script` 用的假 Agent 端。它**不在** `tests/`（PyInstaller 不收
+        # 那目录），而是在产品侧 `meapet/agent/`，所以冻结包里也得带上；它走的是 websockets 的
+        # **服务器**侧，上面那三行只带了 client——漏了这一行，冻结版跑到那一格是
+        # ModuleNotFoundError，不是读数。
+        "meapet.agent.fake_agent",
+        "websockets.asyncio.server",
         # in-process VITS
         "meapet.tts.engines.vits_runtime",
         "scipy",

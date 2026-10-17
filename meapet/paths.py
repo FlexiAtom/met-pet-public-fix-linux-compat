@@ -60,12 +60,31 @@ VOICE_ASR_MODEL_REPO = (
     "pkufool/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
 )
 VOICE_ASR_MODEL_CACHE_NAME = VOICE_ASR_MODEL_REPO.replace("/", "--")
-VOICE_ASR_REQUIRED_FILES = (
-    "encoder-epoch-99-avg-1.int8.onnx",
-    "decoder-epoch-99-avg-1.int8.onnx",
-    "joiner-epoch-99-avg-1.int8.onnx",
-    "tokens.txt",
-)
+
+# 单一真值表：档位 → 运行时真正读取的文件。完整性校验与下载 allow_patterns 都从这张表导出，
+# 免得出现「下了 fp32 却仍读 int8」这种两处各说各话的第三种状态。
+VOICE_ASR_MODEL_FILES = {
+    "int8": {
+        "encoder": "encoder-epoch-99-avg-1.int8.onnx",
+        "decoder": "decoder-epoch-99-avg-1.int8.onnx",
+        "joiner": "joiner-epoch-99-avg-1.int8.onnx",
+        "tokens": "tokens.txt",
+    },
+    "fp32": {
+        "encoder": "encoder-epoch-99-avg-1.onnx",
+        "decoder": "decoder-epoch-99-avg-1.onnx",
+        "joiner": "joiner-epoch-99-avg-1.onnx",
+        "tokens": "tokens.txt",
+    },
+}
+VOICE_ASR_PRECISION_DEFAULT = "int8"
+VOICE_ASR_REQUIRED_FILES_BY_PRECISION = {
+    precision: tuple(files.values())
+    for precision, files in VOICE_ASR_MODEL_FILES.items()
+}
+VOICE_ASR_REQUIRED_FILES = VOICE_ASR_REQUIRED_FILES_BY_PRECISION[
+    VOICE_ASR_PRECISION_DEFAULT
+]
 
 
 def voice_asr_cache_dir() -> Path:
@@ -73,8 +92,17 @@ def voice_asr_cache_dir() -> Path:
     return Path(data_path("voice_asr"))
 
 
-def find_voice_asr_model_dir() -> Path | None:
-    """Find a complete ASR model in the new cache or legacy repository path."""
+def normalize_voice_asr_precision(precision: object) -> str:
+    """把任意配置值收敛到已知档位，未知一律按默认档。"""
+    key = str(precision or "").strip().lower()
+    return key if key in VOICE_ASR_MODEL_FILES else VOICE_ASR_PRECISION_DEFAULT
+
+
+def find_voice_asr_model_dir(precision: object = None) -> Path | None:
+    """Find a complete ASR model for one precision (new cache or legacy path)."""
+    required = VOICE_ASR_REQUIRED_FILES_BY_PRECISION[
+        normalize_voice_asr_precision(precision)
+    ]
     roots: list[Path] = []
     for root in (
         voice_asr_cache_dir(),
@@ -85,7 +113,7 @@ def find_voice_asr_model_dir() -> Path | None:
 
     def complete(directory: Path) -> bool:
         return directory.is_dir() and all(
-            (directory / name).is_file() for name in VOICE_ASR_REQUIRED_FILES
+            (directory / name).is_file() for name in required
         )
 
     for root in roots:

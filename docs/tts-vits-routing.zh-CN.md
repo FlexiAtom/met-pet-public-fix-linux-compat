@@ -95,11 +95,31 @@ Health (vits): core=True model=True config=True torch=False mode=inprocess reaso
 `checks` 里只有量过的事实。以前子进程那一支硬写着 `python=True`，而 health_check
 从不验解释器里装了什么包——空 env（有解释器、无包）因此被放行到 `speak()` 才撞
 `ModuleNotFoundError`；那个键已删，解释器改由 `describe()` 以 `python=<basename>`
-出现。进程内那一支以前对着同样的空缺报绿：这条路没有外部解释器，torch 就装在
-**本进程**里，所以它现在带一个 `torch=` 键，False 时 `health_check()` 返回 False
-并另落一行 warning。判据是 `find_spec`（0.1–0.4 ms；真 `import torch` 3914 ms，
-而 health_check 在 `speak()` 路径上），它只能往「缺失」方向拦——**寻得到不等于
-加载得起来**，打包版 torch 的 DLL/so 起不来那一格仍由 `speak()` 的异常分支出声。
+出现。
+
+进程内那一支的 torch 判据是**两级**的，因为「可用」这件事有两格：
+
+| 档 | 判据 | 成本 | 能证什么 |
+|---|---|---|---|
+| ① 寻址 | `module_present("torch")`（`find_spec`） | 0.1–0.4 ms | 寻不到 ⇒ 一定不可用；寻得到 ⇒ 什么都还不说 |
+| ② 加载 | `vits_runtime.probe_torch_loadable()` | 本机成功档 5.266 s（整合包 torch，2026-10-05 实测）；Windows 打包版失败档 0.8–1.0 s（来源: Neko_mea） | 真 `import torch` 起不起得来 |
+
+②那笔钱不能同步落在 `health_check()` 上（它在 `speak()` 路径里），所以探针只在**首次
+被问时**起一个后台线程跑一次，health_check 读结论：`failed` 才拦，`unprobed` /
+`probing` 一律不拦——把"我还没量到"说成"用户环境坏了"是另一种谎报，与
+`probe_vits_deps` 的 `unknown` 档同一个原则。日志行因此多一个 `probe=` 字段，只有
+进程内那一支且 torch 寻得到时才有：
+
+```
+Health (vits): core=True model=False config=True torch=True probe=probing mode=inprocess reason=explicit_inprocess …   ← 首问，后台还没出结论
+Health (vits): core=True model=False config=True torch=True probe=loaded   mode=inprocess reason=explicit_inprocess …   ← 探针出结论后
+```
+
+探针与真合成共用 `_import_torch()` 那一条装载逻辑（含冻结版对 `torch/lib` 的重试），
+否则探针会对"重试其实能救回来"的现场报假红。
+
+**向导进程不跑这个探针。** 向导里的选路摘要仍只用 `module_present`：向导与产品是两个
+进程，拿向导进程的 torch 状态冒充产品进程的结论，正是这一轮要消灭的那类谎报。
 
 ## 4. 出声的地方
 
@@ -111,6 +131,7 @@ Health (vits): core=True model=True config=True torch=False mode=inprocess reaso
 | `vits_python` 解析失败 | 构造函数一行 warning，写明是空 / pet exe / 不在盘上，并说明已按未配置处理 |
 | 说话人不在模型里 | 一行 warning，列出模型实际可用的说话人名字 |
 | 进程内那条路本进程寻不到 torch | `Health (vits): … torch=False` + 一行 warning（补哪一格：`tts.vits_python` 或去掉 `tts.vits_inprocess`），`health_check()` 返回 False |
+| 寻得到但加载不起来（打包版 `c10.dll` 那一类） | 探针出 `failed` 后：`Health (vits): … torch=False probe=failed` + 一行 warning 带**真因**（`WinError 1114 …`），措辞是「寻得到但加载不起来」——不会把人指向"装 torch"。探针未出结论时**不拦**，仍是报绿 + `speak()` 自己出声 |
 | 两条路都不可用 | `speak()` 报 error 并说明补哪一格 |
 
 向导侧：保存时校验「VITS Python 路径」，不通过就在状态条上写警告（**照存不误**，
@@ -170,6 +191,77 @@ Health (vits): core=True model=True config=True torch=False mode=inprocess reaso
 `vits_core.utils` 导不进来），目前只有 Windows 真跑过（来源: Neko_mea 的回执，非我实测）。
 Linux 侧的等价证据是静态的：
 `vits_core/utils.py` 里 `class HParams():` 不继承 `dict`。
+
+### 打包版读数（2026-10-05 合流后，来源: Neko_mea 的回执，非我实测）
+
+前置配置 `tts.engine=vits` / `vits_inprocess=true` / `vits_python=""`，产物是他按
+`scripts/build_windows.ps1` + `MeaPet.spec` 现打的 onedir 包。回执全文在状态根
+`reference/vits-windows-postmerge-readouts-closeout.zh-CN.md`。这一组只证明**机制**，
+具体的 DLL 失败与他那个构建环境绑定（conda torch 2.12.1+cpu / PyInstaller 6.21），发布构建环境要另复。
+
+| | 读数 | 对判据意味着什么 |
+|---|---|---|
+| 健康行逐字 | `Health (vits): core=True model=True config=True torch=True mode=inprocess reason=explicit_inprocess` | 打包形态**不误伤**：`find_spec` 命中的就是随包那份 torch（`origin=…\_internal\torch\__init__.py`，`loader=PyiFrozenLoader`）。torch 落盘在 `_internal\torch`、`_MEIPASS` 在 `sys.path` 上，所以「寻得到」与「引擎要用的」是同一份。**这行出自改判据之前**，改后同一格会多一个 `probe=`（见 §3） |
+| 同一次运行出不出声 | **不出声**：`speak()` → `(None, '')`；失败点是 `import torch` 抛 `OSError [WinError 1114] … \_internal\torch\lib\c10.dll` | 这就是 `module_present` 证不了的那半格（**寻得到 ≠ 加载得起来**）。当时它报绿是设计上认下的残余盲区、**不是回归**；2026-10-05 裁「机制结论与构建环境属性无关，那么就应该改判据」后，这一格由后台真 import 探针接住——探针出 `failed` 才报红，未出结论仍报绿 |
+| 向导 pet-exe 那行警告 | 那行字在真冻结进程里**打得出来**，但现行调用图**走不到** | `_check_torch` 开头与那条分支用的是**同一个谓词** `_path_is_pet_exe`，上游先返回 `False, "frozen"` ⇒ 两边锁死，当时是防御性死代码。现已接通：tier 0️⃣ 判出 pet exe 后显式排一次 `_ensure_vits_deps`（不 `return`，后面档位找到真解释器就把结论覆盖掉）。**这是接线层面的结论，Windows 上那句字有没有真上屏仍待他复跑** |
+| 依赖探针耗时 | `ok` 档 6.91 / 6.98 / 7.07 s（三次）；`missing` 0.15 s；`unknown` 五种入口都落得住 | Windows 侧比 Linux 的 12–20 s 快一倍以上，90 s 闸余量充足 |
+| `--check-deps` 单独跑 | **rc=2**，stderr 是 `the following arguments are required: -t/--text` | **不是** argparse 不认这个开关（它就在 usage 里）；`-t/--text` 是 `required=True`。探针实际用的形状 `--check-deps --text probe --output NUL` 是 rc=0 / `OK:deps_loaded` / 8.67 s，**契约在探针→脚本这条路上是通的**。**这一行是改码前的读数**：2026-10-05 人已裁「两处小改先改了」，`required` 从 argparse 下移到解析后校验，改后读数见下表 |
+
+### 改判据之后（2026-10-05，我实测）
+
+机制结论与构建环境属性无关（class (b) 的形状在 Linux 上用一个"寻得到但 `__init__` 抛
+`OSError`"的假 torch 包就能复现，两平台共因），所以判据照上节改了。本机读数：
+
+| | 读数 |
+|---|---|
+| 探针成功档耗时 | 5.266 s（整合包 runtime 的 torch，`/home/flexiatom/GPT-SoVITS-v2pro/…/runtime/bin/python`）；结论 `probe=loaded` |
+| 健康行 | `probe=probing` → `probe=loaded` 两条逐字见 §3，均**不拦**（磁盘事实不齐那条除外：`model=False` 是 LFS pointer，本机照常） |
+| class (b) 复现 | 真子进程里 `find_spec('torch')=True`、探针落 `failed`，detail 带 `WinError 1114`——判据不 patch，探针与寻址都跑真的 |
+| 回归 | 全量 `1049 passed, 1 skipped, 218 subtests passed`（基线 1044 + 本轮 5 条新用例） |
+
+**待他复跑**：打包版里 `probe=` 那一格是否如期落到 `failed`、以及向导那句「打包版无法检测
+VITS 依赖」是否真上屏。我这边没有 Windows 冻结件，两条都只能是接线层面的结论。
+
+### 两处小改之后（2026-10-05，我实测）
+
+人裁「两处小改先改了」。两处都在判据/交付脚本面，逐条读数：
+
+| | 读数 |
+|---|---|
+| `--check-deps` 单独跑 | **rc=0** + `OK:deps_loaded`（`/home/flexiatom/vits_e2e/vits_env/bin/python` → 整合包 runtime）。旧形状 `--check-deps --text probe --output /dev/null` 同一次也是 rc=0（31.97 s vs 32.21 s：`--text/--output` 在探针那条支上根本不读） |
+| 探针实发形状 | 随之改成只发 `--check-deps`——脚本既然不再自带必填项，探针就不该喂与这一问无关的参数。改后同一次：`('ok', 'deps importable')` 用时 **47.29 s**；无 torch 那次 `('missing', "ModuleNotFoundError: No module named 'torch'")` 用时 2.16 s |
+| 耗时余量 | 那个 47.29 s 把上表「Linux 12–20 s、90 s 闸余量充足」这句顶掉了：同一台机器、同一套包，本轮比先前记的高出一倍以上。**差在哪一档（页缓存 / 负载）我没隔离**，只能说这个数的散布比我先前写的宽；闸没动 |
+| 不带任何参数 | **rc=2** + `vits_infer.py: error: 合成需要 -t/--text（--check-deps / --warmup 不需要）`（合成那条路仍把文本当必填，只是不再挡探针） |
+| `missing` 档 detail | 同一个无 torch 现场，改前 `⚠ pkg_resources 不可用 (ModuleNotFoundError)；若合成失败请: pip install 'setuptools==69.5.1'` → 改后 `ModuleNotFoundError: No module named 'torch'` |
+| 回归 | 全量 `1052 passed, 1 skipped, 218 subtests passed`（上节 1049 + 本轮 3 条：倒序取行两条 + 合成那条路仍要 `-t` 一条） |
+
+**未做**：§3 那条 stdout 单行错误协议（交付脚本自己声明 `ERR:module_not_found:torch`，而不是从
+stderr 里猜真因）——它不在「两处小改」这句授权里，没动，也没裁。
+
+
+### 判据面的一处缺陷（这条是我在本机实测复现的，两平台共因；2026-10-05 已修）
+
+`probe_vits_deps` 从前取 `missing` 档的 `detail` 用的是：
+
+```python
+next((ln.strip() for ln in stderr.splitlines() if "Error" in ln), stderr[-120:])
+```
+
+——取**第一行**含 `Error` 的。而 `vits_infer.py` 在 `_bootstrap()` 阶段就往 stderr 打一句
+`⚠ pkg_resources 不可用 (ModuleNotFoundError)；若合成失败请: pip install 'setuptools==69.5.1'`，
+它比真正的 `ModuleNotFoundError: No module named 'torch'` **先出现**。本机 `.venv`
+（Python 3.12.13，无 torch）实测：
+
+```
+verdict = missing
+detail  = "⚠ pkg_resources 不可用 (ModuleNotFoundError)；若合成失败请: pip install 'setuptools==69.5.1'"
+```
+
+真因是缺 torch，状态条却把用户指向 `setuptools`。现在改成**倒序**取：先找最后一条含
+`No module named` 的行；那一档在 DLL 失败（`ImportError: DLL load failed…`，没有模块名）下
+会落空，所以再退一步找最后一条含 `Error` 的行；两条都没有才退到 stderr 尾部。
+同一现场改后读数见上节，逐字为 `ModuleNotFoundError: No module named 'torch'`。
+
 
 
 ## 7. 验收

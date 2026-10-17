@@ -12,7 +12,7 @@ import shutil
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Iterable, Mapping, Optional
 
 from meapet.config.defaults import (
     DEFAULT_GSV_GPT_MODEL,
@@ -33,6 +33,7 @@ from meapet.tts.common import (
     DEFAULT_VITS_CONFIG_NAME,
     DEFAULT_VITS_MODEL_NAME,
     DEFAULT_VITS_SPEAKER,
+    GSV_INFER_TIMEOUT_FLOOR_S,
     auto_install_gsv_deps,
     is_git_lfs_pointer,
     is_model_artifact_ready,
@@ -60,30 +61,31 @@ from meapet.tts.language_policy import (
 from meapet.tts.translation import TranslationService
 
 
-def gsv_python_candidates(
+def _gsv_python_with_layout(
     *,
     home: str | os.PathLike[str] | None = None,
     environ: Mapping[str, str] | None = None,
     executable: str | os.PathLike[str] | None = None,
     frozen: bool | None = None,
-) -> tuple[str, ...]:
-    """返回可移植的 GPT-SoVITS Python 候选路径。
+) -> tuple[tuple[Path, str], ...]:
+    """候选解释器 + 它是**从哪套整合包布局**推出来的（推不出就给空串）。
 
-    不扫描整块磁盘，也不假设开发者盘符或某个发布日期。环境变量、当前用户
-    目录和 Conda 的标准目录足以覆盖向导安装与手工解压场景；源码模式最后才
-    回落到当前解释器。
+    第二个值只参与排序，不会被当成根路径交给子进程——"根到底在哪"仍由
+    ``gsv_infer.py`` 按 ``GPT_SoVITS/TTS_infer_pack`` 标记上溯，那是唯一判据
+    （这里不能复用它的判定：`gsv_infer.py:13` 明写子进程里绝不能 import meapet.*）。
     """
     env = dict(os.environ if environ is None else environ)
     home_path = Path(home or os.path.expanduser("~"))
     current_executable = Path(executable or sys.executable)
     is_frozen = _is_frozen() if frozen is None else bool(frozen)
 
-    candidates: list[Path] = []
+    # (解释器, 整合包布局根) —— 空串表示"这格候选说不出根"
+    candidates: list[tuple[Path, str]] = []
     for key in ("CONDA_PREFIX", "VIRTUAL_ENV"):
         prefix = str(env.get(key) or "").strip()
         if prefix:
             candidates.extend(
-                (Path(prefix) / "python.exe", Path(prefix) / "bin" / "python")
+                [(Path(prefix) / "python.exe", ""), (Path(prefix) / "bin" / "python", "")]
             )
 
     for directory in (
@@ -91,15 +93,28 @@ def gsv_python_candidates(
         "GPT-SoVITS-v2pro",
         "GPT_SoVITS",
     ):
+        layout_root = home_path / directory
         candidates.append(
-            Path(prefix_python(home_path / directory / "runtime"))
+            (Path(prefix_python(layout_root / "runtime")), str(layout_root))
         )
+        # 整合包的 zip 解出来通常带一层版本/日期目录
+        # （~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime），只写上一层会漏这一档，
+        # 漏了以后候选表下一格正好命中 ~/miniconda3 那种没装依赖的解释器。
+        # 只在那一个目录里 glob 一层，不扫盘。
+        try:
+            candidates.extend(
+                (Path(prefix_python(entry)), str(entry.parent))
+                for entry in sorted(layout_root.glob("*/runtime"))
+            )
+        except OSError:
+            pass
 
     for root_key in ("ProgramFiles", "ProgramData", "LOCALAPPDATA"):
         root = str(env.get(root_key) or "").strip()
         if root:
+            layout_root = Path(root) / "GPT-SoVITS"
             candidates.append(
-                Path(prefix_python(Path(root) / "GPT-SoVITS" / "runtime"))
+                (Path(prefix_python(layout_root / "runtime")), str(layout_root))
             )
 
     for conda_root in (
@@ -108,29 +123,75 @@ def gsv_python_candidates(
     ):
         candidates.extend(
             (
-                Path(prefix_python(conda_root / "envs" / "GPTSoVits")),
-                Path(prefix_python(conda_root / "envs" / "gpt-sovits")),
-                Path(prefix_python(conda_root)),
+                (Path(prefix_python(conda_root / "envs" / "GPTSoVits")), ""),
+                (Path(prefix_python(conda_root / "envs" / "gpt-sovits")), ""),
+                (Path(prefix_python(conda_root)), ""),
             )
         )
 
     if not is_frozen:
-        candidates.append(current_executable)
+        candidates.append((current_executable, ""))
         for command in ("python", "python3"):
             found = shutil.which(command)
             if found:
-                candidates.append(Path(found))
+                candidates.append((Path(found), ""))
 
-    result: list[str] = []
+    result: list[tuple[Path, str]] = []
     seen: set[str] = set()
-    for candidate in candidates:
+    for candidate, layout_root in candidates:
         value = str(candidate)
         key = os.path.normcase(os.path.abspath(value))
         if key in seen:
             continue
         seen.add(key)
-        result.append(value)
+        result.append((candidate, layout_root))
     return tuple(result)
+
+
+def gsv_python_choices(
+    *,
+    home: str | os.PathLike[str] | None = None,
+    environ: Mapping[str, str] | None = None,
+    executable: str | os.PathLike[str] | None = None,
+    frozen: bool | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """候选表的可读视野： ``(解释器, 它来自的整合包布局根或空串)``。
+
+    不扫描整块磁盘，也不假设开发者盘符或某个发布日期。环境变量、当前用户
+    目录和 Conda 的标准目录足以覆盖向导安装与手工解压场景；源码模式最后才
+    回落到当前解释器。
+    """
+    return tuple(
+        (str(path), root)
+        for path, root in _gsv_python_with_layout(
+            home=home, environ=environ, executable=executable, frozen=frozen
+        )
+    )
+
+
+def select_gsv_python(
+    choices: Iterable[tuple[str, str]],
+    *,
+    exists=Path.is_file,
+) -> tuple[str, str]:
+    """从候选表挑解释器：先挑「自己说得出整合包布局」那格，再退回第一个存在的。
+
+    只看"解释器在不在"会选中产品自己的 venv——``VIRTUAL_ENV`` 排在表头，而依赖一旦
+    也装进那个 venv，闸门放行、子进程却在它旁边找不到 ``GPT_SoVITS`` 树，0.1s 就报
+    ``GSV root not found``（2026-10-08 08:36 实测）。布局是构造候选时就知道的事实，
+    所以这里拿它当**排序信号**，不新建"根在哪"的第二份真值——根仍由子进程按标记上溯。
+
+    返回 ``(解释器, 布局根或空串)``；一格都没有返回 ``("", "")``。
+    """
+    fallback = ""
+    for path, layout_root in choices:
+        if not path or is_pet_executable(path) or not exists(Path(path)):
+            continue
+        if layout_root:
+            return path, layout_root
+        if not fallback:
+            fallback = path
+    return (fallback, "") if fallback else ("", "")
 
 
 class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
@@ -151,18 +212,19 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
 
         if not self.python_exe:
-            # 去重 + 按存在过滤；跳过 pet exe
-            _seen = set()
-            for _p in gsv_python_candidates():
-                if is_pet_executable(_p) or not os.path.isfile(_p):
-                    continue
-                _rp = os.path.realpath(_p)
-                if _rp in _seen:
-                    continue
-                _seen.add(_rp)
-                self.python_exe = _p
-                log.info(f"Detected GPT-SoVITS: {_p}")
-                break
+            _picked, _layout_root = select_gsv_python(gsv_python_choices())
+            if _picked:
+                self.python_exe = _picked
+                if _layout_root:
+                    log.info(f"Detected GPT-SoVITS: {_picked} (整合包布局: {_layout_root})")
+                else:
+                    # 说不出布局根的解释器不是不能用，而是根得由子进程上溯或用户配置——
+                    # 上一条实测就是栽在这里：依赖齐了、旁边没树，子进程 0.1s 失败。
+                    log.warning(
+                        f"Detected GPT-SoVITS: {_picked}——旁边没有整合包布局，"
+                        "子进程将按 GPT_SoVITS/TTS_infer_pack 标记自行上溯找根；"
+                        "报 GSV root not found 就配 tts.gsv_root"
+                    )
             if not self.python_exe:
                 if _is_frozen():
                     log.warning(
@@ -275,6 +337,10 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
 
         # 子进程超时（秒）
         self.timeout = tts_cfg.get("timeout", 60)
+        # GSV 那份单列一格：本地推理每句话都要重付一次冷启动，实测下界比上面的默认值
+        # 大（读数见 common.GSV_INFER_TIMEOUT_FLOOR_S）。取 max 让显式配大的 tts.timeout
+        # 继续生效；云端 mimo 与 vits 不读这格——网络等待不该跟着推理机的冷启动一起涨。
+        self.gsv_timeout = max(float(self.timeout), GSV_INFER_TIMEOUT_FLOOR_S)
 
         # 翻译用于目标语朗读校正和"不受支持语言"兜底，不参与模型故障回退。
         self.translate_enabled = bool(tts_cfg.get("translate_to_jp", False))
@@ -513,6 +579,8 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             return self._deps_ready
 
         if self._vits_mode:
+            from meapet.tts.engines import vits_runtime
+
             route = self._vits_route()
             # 健康检查与 speak 用同一个 route：模型/配置也取引擎真正会用的
             # 那两个路径，不再对着硬编码默认值验 A 而实际合成 B。
@@ -524,6 +592,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 project_path("meapet", "tools", "vits_infer.py")
             )
             external_py = route.external_python
+            probe_state = ""
             if not route.inprocess:
                 # mode 由 route.describe() 给出，这里不重复一份可能分叉的字符串。
                 # checks 里不放 "python" 键：health_check 从不验解释器里装了什么包，
@@ -554,21 +623,32 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
                 # 而同一轮 speak() 撞 ModuleNotFoundError: No module named 'torch'
                 # （Windows 用户报的就是这个形状）。子进程分支本轮刚拆掉同形的
                 # python=True 谎报，这一支不能继续留着一半。
-                # 判据用 find_spec 而不是 import torch：前者实测 0.1–0.4 ms，
-                # 后者 3914 ms（全栈探针 12–20 s），health_check 在 speak() 路径上。
-                # 残余盲区如实留着：find_spec 证不了"能寻到但加载不起来"
-                # （打包版 DLL/so 起不来那一格仍由 speak 的异常分支出声）。
+                # 两级判据，成本与分辨率各管一段：
+                #   ① module_present（find_spec，0.1–0.4 ms）——寻不到就是不可用；
+                #   ② vits_runtime 的后台真 import 探针——寻得到但加载不起来那一格
+                #      （打包版 c10.dll WinError 1114，Windows 侧实测到）只有真
+                #      import 能证，而它 3.9 s（失败 0.8 s）不能落在本路径上，所以
+                #      这里只**排**探针、只读结论：failed 才拦，未出结论不拦。
                 torch_ok = module_present("torch")
+                probe_state, probe_detail = (
+                    vits_runtime.probe_torch_loadable() if torch_ok else ("", "")
+                )
+                if probe_state == vits_runtime.PROBE_FAILED:
+                    torch_ok = False
+                    log.warning(
+                        "Health (vits): torch 寻得到但加载不起来（%s），进程内那条路不可用"
+                        "——配 tts.vits_python 指向带 torch 的解释器，"
+                        "或按随包 torch 的构建环境重新打包",
+                        probe_detail,
+                    )
                 checks = {
                     "core": core_ok,
                     "model": model_ok,
                     "config": config_ok,
                     "torch": torch_ok,
                 }
-                self._deps_ready = all(
-                    [core_ok, model_ok, config_ok, torch_ok]
-                )
-                if not torch_ok:
+                self._deps_ready = all(checks.values())
+                if not torch_ok and probe_state != vits_runtime.PROBE_FAILED:
                     log.warning(
                         "Health (vits): 本进程寻不到 torch，进程内那条路不可用"
                         "——配 tts.vits_python 指向带 torch 的解释器，"
@@ -578,6 +658,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             log.info(
                 "Health (vits): "
                 + " ".join(f"{name}={ok}" for name, ok in checks.items())
+                + (f" probe={probe_state}" if probe_state else "")
                 + f" {route.describe()}"
                 + (f" model={model_path}" if not model_ok else "")
                 + (f" config={config_path}" if not config_ok else "")
@@ -785,15 +866,22 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self,
         clean: str,
         requested_language: str,
+        *,
+        prefer_source_language: bool = False,
     ) -> Optional[tuple[str, str]]:
         action, source_lang, target_lang, reason = self._select_tts_text_route(
             clean,
             requested_language,
+            prefer_source_language=prefer_source_language,
         )
         log.info(f"[tts] 合成原文 chars={len(clean)}")
         log.trace(lambda value=clean: f"[tts] 合成原文:\n{value}")
         if action == "skip":
-            log.warning(f"TTS: 跳过语音 reason={reason}")
+            # 只写 reason 的话，手输 voice_lang: "auto" 的人看不出该改哪个键。
+            log.warning(
+                f"TTS: 跳过语音 reason={reason} target={target_lang or '(空)'} "
+                f"supported={'/'.join(self.supported_languages()) or '(空)'}"
+            )
             return None
         if action == "direct":
             log.info(
@@ -826,19 +914,71 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
         return translated, target_lang
 
+    def _language_checks_bypassed(self) -> bool:
+        """本地出声的两路（VITS、GPT-SoVITS）整条不做语言校验
+        （人工 2026-10-12 裁决「去除校验」，GSV 同档：「GPT-Sovits也需要改这档」）。
+
+        VITS：``supported_languages()`` 是硬编码的 ``('jp',)``（本文件
+        :753-754），而推理前端拿到什么文本都照音素化，只按语言换标记
+        （engines/vits.py:vits_frontend_text）——引擎没有"会不会说这门语言"
+        这一档，照念。
+        GPT-SoVITS：``supported`` 是从参考音频文件名推出来的集合（:774-789），
+        它只说明"池里有哪些语言的参考"，不说明"能不能念别的语言"——跨语言克隆
+        正是这一路的能力，且 payload 里 ``prompt_language`` 与 ``text_language``
+        本来就分开发（engines/gsv.py:57-65）。校验留着只会把每一句非 ``voice_lang``
+        的回复掐成静默（实测 8/8 臂里 4 臂静默，其中 2 臂还是外部翻译池是否可用决定的）。
+        MiMo 不动：云端那一档音色与语言是真绑定，supported 有意义。
+        `vits_mode` 是遗留开关，与 `engine: mimo` 同给时两个 mode 位都真，但 speak 里 MiMo 那一支在前
+        （:1205 早于 :1235）——所以作用域跟着**真正出声的那个引擎**走，不跟标志走。
+        """
+        return not self._mimo_mode
+
     def _select_tts_text_route(
         self,
         clean: str,
         requested_language: str,
+        *,
+        prefer_source_language: bool = False,
     ) -> tuple[str, str, str, str]:
         """返回 action/source/target/reason，不执行网络请求。"""
         claimed = canonical_tts_language(requested_language)
+        if self._language_checks_bypassed():
+            # 早退在这一处而不是每个分支里，是为了只有一条真相：三道闸
+            # （来源语言档、目标语言档、_language_plan 那档）对本地两路引擎一起让位。
+            # target 槽带**文本自己那门语言**（判得出才带），下游各引擎自己消费：
+            # VITS 拿它挑前端标记（engines/vits.py:vits_frontend_text），判不出的
+            # 纯汉字（古诗词那一类 unknown）仍按 claimed 落 [JA] 音读——那是这一档
+            # 改动之前的既有听感，不搭车；GSV 拿它挑参考音频前缀并填 text_language，
+            # 参考自己的语言另走 prompt_language（engines/gsv.py:57-65），
+            # 于是"日语参考念中文"与"中文参考念中文"两种池子都能出声。
+            observed = detect_script_language(clean)
+            synthesis_lang = (
+                observed if observed in {"zh", "jp", "en"} else (claimed or "jp")
+            )
+            return (
+                "direct",
+                claimed or "jp",
+                synthesis_lang,
+                "language_checks_bypassed",
+            )
         supported = self.supported_languages()
         target = self._configured_or_default_target()
         translation_available = self._translation_available()
         prefer_effective = bool(
             self.prefer_model_voice_translation and translation_available
         )
+
+        if prefer_source_language:
+            # 「念文本自己那门语言」那一档：引擎能直接合成就照念，既不翻译也不静默。
+            # 判据取脚本检测而不是调用方声明——走这一档的是互动链（预制回退句、点击反馈），
+            # 它手上没有模型给的 `voice_language` 可信，声明值只是"配置要哪种语言"。
+            observed = detect_script_language(clean)
+            if observed in supported:
+                return "direct", observed, observed, "source_language_supported"
+            if observed in {"zh", "jp", "en"}:
+                # 是一门确定的语言、但引擎不支持：静默并留下理由，不悄悄换成目标语言去念。
+                return "skip", observed, target, "source_language_unsupported"
+            # unknown（纯符号、单个拟声词等）判不出来源语言，按目标语言照常走。
 
         if prefer_effective:
             if not target or target not in supported:
@@ -894,15 +1034,22 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         self,
         clean: str,
         requested_language: str,
+        *,
+        prefer_source_language: bool = False,
     ) -> Optional[tuple[str, str]]:
         action, source_lang, target_lang, reason = self._select_tts_text_route(
             clean,
             requested_language,
+            prefer_source_language=prefer_source_language,
         )
         log.info(f"[tts] 合成原文 chars={len(clean)}")
         log.trace(lambda value=clean: f"[tts] 合成原文:\n{value}")
         if action == "skip":
-            log.warning(f"TTS: 跳过语音 reason={reason}")
+            # 只写 reason 的话，手输 voice_lang: "auto" 的人看不出该改哪个键。
+            log.warning(
+                f"TTS: 跳过语音 reason={reason} target={target_lang or '(空)'} "
+                f"supported={'/'.join(self.supported_languages()) or '(空)'}"
+            )
             return None
         if action == "direct":
             log.info(
@@ -963,11 +1110,15 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         mood: str = "neutral",
         style: str = "",
         language: str = "",
+        *,
+        prefer_source_language: bool = False,
     ) -> Optional[tuple[str, str]]:
         """
         文字 → 语音，返回 (wav_path, lang)
         - engine=mimo: 云端 MiMo TTS（中文/英文音色，不强制译日语）
         - 其它本地引擎: 默认仍走日语合成
+        - `prefer_source_language=True`: 文本自己那门语言能直接合成就照念（互动那一链用，
+          理由见 `_select_tts_text_route` 里那一档）
         """
         if not self.enabled:
             return None
@@ -1037,14 +1188,24 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         # 在 plan_tts_language 之前，先检测 voice_text 是否与目标语言明显不符。
         # 若 should_skip_tts_due_to_language_mismatch 返回 True，则跳过 TTS，
         # 仅显示气泡（原文气泡仍会显示）。
-        if should_skip_tts_due_to_language_mismatch(clean, target_language):
+        # 走「念原文」那一档时这道闸让位给路由：闸门的判据是"文本对不对得上配置的目标语言"，
+        # 而那一档压根不打算念目标语言——不放开它就会把一句能直接念的中文掐成静默。
+        # 本地两路引擎整条不做校验（见 _language_checks_bypassed），否则中文在
+        # voice_lang=jp 下仍会在这里被掐掉，而且是一条与路由 reason 不同名的静默。
+        if (
+            not prefer_source_language
+            and not self._language_checks_bypassed()
+            and should_skip_tts_due_to_language_mismatch(clean, target_language)
+        ):
             log.info(
                 f"TTS: 语言不匹配，跳过语音（文件触发回复含非目标语言内容）"
                 f" lang={target_language} chars={len(clean)}"
             )
             return None
 
-        prepared = self._prepare_tts_text(clean, target_language)
+        prepared = self._prepare_tts_text(
+            clean, target_language, prefer_source_language=prefer_source_language
+        )
         if prepared is None:
             return None
         tts_text, synthesis_language = prepared
@@ -1089,7 +1250,9 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         log.trace(lambda: f"合成: {tts_text[:60]}")
 
         if self._vits_mode:
-            return self._speak_vits(tts_text, output_wav)
+            return self._speak_vits(
+                tts_text, output_wav, language=synthesis_language
+            )
         return self._speak_gsv(
             tts_text,
             output_wav,
@@ -1107,6 +1270,8 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         mood: str = "neutral",
         style: str = "",
         language: str = "",
+        *,
+        prefer_source_language: bool = False,
     ):
         """async 入口：MiMo 走 httpx；本地 GSV/VITS 仍 to_thread(子进程)。"""
         import asyncio
@@ -1131,7 +1296,12 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
         )
 
         # ── 新增：async 路径也做语言不匹配检查 ──
-        if should_skip_tts_due_to_language_mismatch(clean, target_language):
+        # 「念原文」那一档交给路由判，理由与同步路径那一处相同；本地两路整条不校验。
+        if (
+            not prefer_source_language
+            and not self._language_checks_bypassed()
+            and should_skip_tts_due_to_language_mismatch(clean, target_language)
+        ):
             log.info(
                 f"TTS: 语言不匹配，跳过语音（async，文件触发回复含非目标语言内容）"
                 f" lang={target_language} chars={len(clean)}"
@@ -1142,6 +1312,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             prepared = await self._prepare_tts_text_async(
                 clean,
                 target_language,
+                prefer_source_language=prefer_source_language,
             )
             if prepared is None:
                 return None
@@ -1166,6 +1337,7 @@ class MeaTTS(TtsMimoMixin, TtsGsvMixin, TtsVitsMixin):
             mood,
             style,
             target_language,
+            prefer_source_language=prefer_source_language,
         )
 
 

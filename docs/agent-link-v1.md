@@ -261,7 +261,7 @@ MeaPet 只会进入 `ONLINE`，如果：
     "revision": 4,
     "tools": [
       {
-        "name": "meapet.get_state",
+        "name": "meapet_get_state",
         "description": "读取不含路径、密钥、记忆和全文的前端能力与状态摘要。",
         "input_schema": {
           "type": "object",
@@ -272,7 +272,7 @@ MeaPet 只会进入 `ONLINE`，如果：
         }
       },
       {
-        "name": "meapet.capture_screen",
+        "name": "meapet_capture_screen",
         "description": "请求一次本机确认后的截图；授权不复用，截图不落盘。",
         "input_schema": {
           "type": "object",
@@ -320,10 +320,13 @@ MeaPet 当前内置：
 
 | 工具 | 作用 |
 |---|---|
-| `meapet.say` | 排队一到多个完整回复分段，用于 Agent 主动向用户说话 |
-| `meapet.express` | 请求当前前端明确支持的 mood 或 motion |
-| `meapet.get_state` | 读取经过裁剪的前端能力和桌宠状态 |
-| `meapet.capture_screen` | 请求一次本机确认后的截图，结果仅在内存中返回 |
+| `meapet_say` | 排队一到多个完整回复分段，用于 Agent 主动向用户说话 |
+| `meapet_express` | 请求当前前端明确支持的 mood 或 motion |
+| `meapet_get_state` | 读取经过裁剪的前端能力和桌宠状态 |
+| `meapet_capture_screen` | 请求一次本机确认后的截图，结果仅在内存中返回 |
+
+工具名不得含点号：MCP 客户端会把含非法字符的名字重写成带哈希前缀的形式，模型侧就读不到名字自己的语义。
+下划线在合法字符集内，因此内置工具一律 `meapet_<动作>`。
 
 ## 6. 工具调用
 
@@ -338,7 +341,7 @@ MeaPet 当前内置：
   "session_id": "meapet-session-1",
   "reply_to": "",
   "payload": {
-    "name": "meapet.express",
+    "name": "meapet_express",
     "arguments": {
       "mood": "happy",
       "motion": ""
@@ -504,7 +507,8 @@ MeaPet 发起一轮聊天：
 ```
 
 第三方可以先返回可选的 `chat.accepted`，其 `reply_to` 必须等于
-`chat.submit.id`。
+`chat.submit.id`。MeaPet 把它作为一条系统状态上屏，用来区分「还在排队」和
+「Agent 已接手」；`payload.safe_text` 缺失时使用「Agent 已接手，正在处理。」。
 
 ### 7.2 `chat.delta`
 
@@ -541,13 +545,36 @@ MeaPet 发起一轮聊天：
   "reply_to": "turn-unique-001",
   "payload": {
     "state": "started",
-    "safe_text": "正在使用 Agent 能力处理请求。"
+    "safe_text": "正在使用 Agent 能力处理请求。",
+    "call_index": 2,
+    "elapsed_ms": 1450,
+    "tokens": 310
   },
   "extensions": {}
 }
 ```
 
 不得在 `safe_text` 中包含内部工具参数、密钥、推理过程或未经清洗的工具结果。
+这条边界管的是整个载荷，不只 `safe_text` 那一个键：`thought`、`args`、`progress`、
+工具名与 `cost_cny` 都**不是** `chat.tool_status` 的字段，MeaPet 不读它们，也不因为
+对端发了就替它们编一个值。
+
+`call_index`、`elapsed_ms`、`tokens` 三个键都是**可选**的，值由 Agent 写：
+
+- 含义依次是「本回合内第几次工具调用（从 1 起）」「这次调用截至本帧已经花掉的毫秒数」
+  「这次调用消耗的 token 计数」。
+- MeaPet 只接受非负整数（带小数的四舍五入到整数，JS 侧 `performance.now()` 那一类常态）；
+  负数、布尔、字符串、NaN/Inf 与超过 `10^12` 的值一律按「没给」处理——既不夹到上界，
+  也不代填 0，因为「Agent 没给」和「给了但是零」是两句不同的话。
+- 缺席就是缺席：桌面上不出现那一项，MeaPet 不自己数。
+- 这三个键**不改变**这一帧能否被接收。入队判据仍然只看 `state` 与 `safe_text` 都非空
+  （见下），载荷里带一个坏数字不该把整条状态文本一起丢掉。
+
+`chat.tool_status` 也可以不关联任何 MeaPet 回合（`reply_to` 指向一个不存在的
+回合），用于 Agent 自主运行时的进度播报。MeaPet 不丢弃这类消息，而是记入
+回合外状态队列并同样上屏；该队列只保留最近 16 条，超出后最旧一条被挤掉。
+其它 `chat.*` 在没有对应活跃回合时会被丢弃；若该消息 `payload.required=true`，
+MeaPet 返回 `control.error`，错误码为 `NO_ACTIVE_TURN`，`retryable=false`。
 
 ### 7.3 `chat.final`
 
@@ -625,7 +652,7 @@ MeaPet 取消时发送 `chat.cancel`，其 `reply_to` 和
 ## 8. Agent 主动消息
 
 Agent 主动说话不需要另一种消息协议，也不需要第二条连接。第三方在任意
-`ONLINE` 时刻调用当前快照中的 `meapet.say`：
+`ONLINE` 时刻调用当前快照中的 `meapet_say`：
 
 ```json
 {
@@ -635,7 +662,7 @@ Agent 主动说话不需要另一种消息协议，也不需要第二条连接�
   "session_id": "meapet-session-1",
   "reply_to": "",
   "payload": {
-    "name": "meapet.say",
+    "name": "meapet_say",
     "arguments": {
       "segments": [
         {
@@ -675,6 +702,9 @@ MeaPet 返回 `control.pong`，并以 `reply_to=ping-1` 关联。
 第三方发送 `tools.refresh` 时，MeaPet 返回当前完整 `tools.snapshot`。未知的
 可选消息会被忽略；若未知消息在 `payload.required=true`，MeaPet 返回
 `control.error`，错误码为 `UNSUPPORTED_MESSAGE`。
+
+`chat.*` 在没有可承接的活跃回合、且 `payload.required=true` 时同样返回
+`control.error`，错误码为 `NO_ACTIVE_TURN`，`retryable=false`（见 7.2）。
 
 ## 10. MeaPet 能力如何转为 MCP 和 Agent Link Tool
 

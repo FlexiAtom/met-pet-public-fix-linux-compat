@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QObject, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QMovie, QPainter, QPixmap
+from PyQt5.QtGui import QImage, QMovie, QPainter, QPixmap
 from PyQt5.QtWidgets import QWidget
+
+from meapet.utils import safe_print
 
 
 @dataclass
@@ -110,6 +112,10 @@ class SpriteCanvas(QWidget):
             self.resize(self._frame.size())
         self.repaint(self.rect())
 
+    def frame_image(self) -> QImage:
+        """穿透模式下窗口隐藏、`paintEvent` 不派发，layer surface 的像素来源就是这份后备帧。"""
+        return self._frame.toImage()
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         # Source 模式会同时替换颜色与 Alpha，避免透明窗口残留上一帧局部。
@@ -118,6 +124,32 @@ class SpriteCanvas(QWidget):
         if not self._frame.isNull():
             painter.drawPixmap(0, 0, self._frame)
         painter.end()
+
+
+def decode_via_pillow(path: str) -> QPixmap:
+    """用 Pillow 解一张立绘，失败返回空 QPixmap（不抛）。
+
+    立绘资产全是 .webp，而 Qt 的 webp 解码是插件：缺插件时 QPixmap(path) 静默给出 0x0，
+    PNG 模式就没有立绘（本机 Arch 实测：/usr/lib/qt/plugins/imageformats 只有 gif/ico/jpeg/svg，
+    /usr/lib/qt5/plugins/imageformats 根本不存在，PyQt5 自带那份也只到 gif/ico/jpeg/svg）。
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return QPixmap()
+    try:
+        with Image.open(path) as image:
+            image.load()
+            rgba = image.convert("RGBA")
+    except Exception:
+        return QPixmap()
+    buffer = QImage(
+        rgba.tobytes("raw", "RGBA"),
+        rgba.width,
+        rgba.height,
+        QImage.Format_RGBA8888,
+    )
+    return QPixmap.fromImage(buffer.copy())
 
 
 class SpriteRenderer(QObject):
@@ -138,6 +170,8 @@ class SpriteRenderer(QObject):
         self._expression_has_blink = True
         self._pixmap_cache: dict[str, QPixmap] = {}
         self._scaled_pixmap_cache: dict[tuple[str, int, int], QPixmap] = {}
+        self._fallback_notice_shown = False
+        self._failure_notice_shown = False
         self._preload_initial_frames()
         
     @property
@@ -164,6 +198,19 @@ class SpriteRenderer(QObject):
         pixmap = self._pixmap_cache.get(path)
         if pixmap is None:
             pixmap = QPixmap(path)
+            if pixmap.isNull():
+                fallback = decode_via_pillow(path)
+                if not fallback.isNull():
+                    if not self._fallback_notice_shown:
+                        self._fallback_notice_shown = True
+                        safe_print(
+                            "[png] Qt 解不出这张立绘（多半缺 webp 的 imageformats 插件），"
+                            f"改用 Pillow 解码：{path}"
+                        )
+                    pixmap = fallback
+                elif not self._failure_notice_shown:
+                    self._failure_notice_shown = True
+                    safe_print(f"[png] ✗ Qt 与 Pillow 都解不出立绘，PNG 模式没有画面：{path}")
             self._pixmap_cache[path] = pixmap
         return pixmap
 

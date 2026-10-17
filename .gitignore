@@ -73,6 +73,15 @@ debug_grab_frame.png
 /_standby=True
 /stop
 
+# OneBot 测试临时目录
+.tmp/
+# dsh 一次性实验场（verify-in-throwaway-harness.mjs 用）
+.dsh-verify/
+# pnpm 内容寻址存储：`dsh plugin add` 会走 pnpm 并在上层目录建它（不属于本仓库）
+.pnpm-store/
+# jieba 运行期词典缓存（跑一次桌宠就会生成，约 9MB，不是源码）
+jieba.cache
+
 # ===== C / Wayland 原生层编译产物 =====
 # 目标文件
 *.o

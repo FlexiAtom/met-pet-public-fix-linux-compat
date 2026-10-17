@@ -139,19 +139,22 @@ def test_chat_engine_has_no_dead_http_bridge_parameter():
 def test_gsv_runtime_discovery_has_no_developer_machine_or_dated_paths(
     tmp_path,
 ):
-    from meapet.tts.service import MeaTTS, gsv_python_candidates
+    from meapet.tts.service import MeaTTS, gsv_python_choices
 
     source = inspect.getsource(MeaTTS.__init__)
     assert "20250604" not in source
     assert not any(f"{drive}:" in source for drive in "CDE")
 
     conda_prefix = tmp_path / "conda-env"
-    candidates = gsv_python_candidates(
-        home=tmp_path / "home",
-        environ={"CONDA_PREFIX": str(conda_prefix)},
-        executable=tmp_path / "python",
-        frozen=False,
-    )
+    candidates = [
+        path
+        for path, _root in gsv_python_choices(
+            home=tmp_path / "home",
+            environ={"CONDA_PREFIX": str(conda_prefix)},
+            executable=tmp_path / "python",
+            frozen=False,
+        )
+    ]
 
     assert str(conda_prefix / "python.exe") in candidates
     assert all("20250604" not in candidate for candidate in candidates)
@@ -473,6 +476,50 @@ def test_voice_input_installer_does_not_run_frozen_executable_as_python():
     assert command[1:4] == ["-m", "pip", "install"]
     assert "--index-url" in command
     assert any("pypi.tuna.tsinghua.edu.cn" in part for part in command)
+
+
+def test_voice_input_keeps_only_keys_the_engine_reads():
+    """语音输入只认 enabled/language/auto_send/precision/input_device_index。
+
+    换引擎前留下的 engine/model/device 不得再长回来；新增键必须同时被运行时读到，
+    否则它就是这个断言要拦的那类死键。
+    """
+    from meapet.config.store import normalize_config, scrub_secrets
+    import meapet.paths as paths
+
+    cfg = normalize_config({
+        "voice_input": {
+            "enabled": True,
+            "engine": "faster_whisper",
+            "model": "base",
+            "device": "cpu",
+        }
+    })
+    assert set(cfg["voice_input"]) == {
+        "enabled",
+        "language",
+        "auto_send",
+        "precision",
+        "input_device_index",
+    }
+    # 默认值只在这一处给：非法档位收敛到默认档，非法设备号按「自动」处理
+    assert cfg["voice_input"]["precision"] == paths.VOICE_ASR_PRECISION_DEFAULT
+    assert cfg["voice_input"]["input_device_index"] is None
+
+    # api_key 不当死键清掉：那是用户文件里可能的真凭据，只在导出面去掉
+    kept = normalize_config({"voice_input": {"api_key": "sk-legacy"}})
+    assert kept["voice_input"]["api_key"] == "sk-legacy"
+    scrubbed = scrub_secrets({"voice_input": {"enabled": True, "api_key": "sk-legacy"}})
+    assert "api_key" not in scrubbed["voice_input"]
+
+    example = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+    assert set(example["voice_input"]) == set(cfg["voice_input"])
+    assert example["voice_input"]["precision"] == paths.VOICE_ASR_PRECISION_DEFAULT
+
+    for rel in ("meapet/desktop/voice_mixin.py", "wizard/page_voice_input.py"):
+        source = (ROOT / rel).read_text(encoding="utf-8")
+        assert '"engine"' not in source
+        assert "faster_whisper" not in source
 
 
 def test_mimo_reference_browser_uses_runtime_data_path():

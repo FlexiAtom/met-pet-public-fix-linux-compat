@@ -103,6 +103,13 @@ def _log_private_text(label: str, text: str, *, suffix: str = "") -> None:
 
 
 class PetChatFlowMixin:
+    def _notify_channel_turn_finished(self, reply: str = "", reason: str = "") -> None:
+        """回复通道（OneBot 等）挂钩点。
+
+        基础实现是 no-op，由 ``PetOneBotMixin`` 覆盖；这样只继承本 mixin 的测试
+        宿主不需要关心外部通道状态。
+        """
+
     def _refresh_conversation_key(self) -> ConversationKey:
         from meapet.conversation.orchestrator import ConversationOrchestrator
 
@@ -984,6 +991,8 @@ class PetChatFlowMixin:
             for segment in sorted(segments, key=lambda item: item.index)
             if segment.display_text
         ).strip()
+        # 外部通道（OneBot）在回复定稿时立即回收本轮
+        self._notify_channel_turn_finished(reply)
         user_text = str(getattr(self, "_last_user_msg", "") or "").strip()
         if self._is_agent_mode() and user_text and reply:
             history = list(getattr(self, "_agent_history", ()) or ())
@@ -1059,6 +1068,8 @@ class PetChatFlowMixin:
         self._agent_format_repair_pending = False
         if hasattr(self, '_chat_timeout') and self._chat_timeout:
             self._chat_timeout.stop()
+        # 取消不回复 QQ：这是本机主动打断，不是对端提问失败
+        self._notify_channel_turn_finished("", "agent_turn_cancelled")
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
         log.info(f"[chat] 本轮呈现完成: turn={turn_id[:24]}")
@@ -1085,6 +1096,7 @@ class PetChatFlowMixin:
             self._chat_timeout.stop()
         self._show_bubble(str(safe_message or "回复请求失败。"), 10000, mood=None)
         self._position_bubble()
+        self._notify_channel_turn_finished(str(safe_message or ""), "agent_turn_failed")
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
 
@@ -1158,6 +1170,8 @@ class PetChatFlowMixin:
             self._chat_timeout.stop()
         eng = getattr(self, "chat_engine", None)
         known_moods = getattr(eng, "_MOOD_TAGS", ())
+        # 外部通道（OneBot）需要在文字定稿时立即拿到，不能等 TTS 音频
+        self._notify_channel_turn_finished(reply)
         detected = mood if mood in known_moods else self._detect_mood(reply)
         # 气泡只显示中文；TTS 优先用模型附带的日语行（无则回退整段 reply，由 TTS 再翻译）
         voice_text = reply
@@ -1472,6 +1486,9 @@ class PetChatFlowMixin:
             mood=None,
         )
         self._position_bubble()
+        self._notify_channel_turn_finished(
+            str(status_language.model_service_error() or ""), "chat_error"
+        )
         set_awaiting_reply_state(self, False)
         self._complete_turn_context(context)
 
@@ -1491,6 +1508,9 @@ class PetChatFlowMixin:
         set_awaiting_reply_state(self, False)
         self._show_bubble(status_language.chat_timeout(), 3000)
         self._position_bubble()
+        self._notify_channel_turn_finished(
+            str(status_language.chat_timeout() or ""), "chat_timeout"
+        )
         timeline = getattr(self, "_conversation_timeline", None)
         key = (
             getattr(context, "conversation_key", None)
@@ -1515,10 +1535,14 @@ class PetChatFlowMixin:
             self._chat_worker = None
         self._complete_turn_context(context)
 
-    def _speak_and_show(self, text: str, duration_ms: int, mood: str = "neutral"):
-        """互动语音准备好后再同时显示气泡和播放；失败则回退文字。"""
+    def _speak_and_show(self, text: str, duration_ms: int, mood: str = "neutral", tts=None):
+        """互动语音准备好后再同时显示气泡和播放；失败则回退文字。
+
+        `tts` 传对象是给开发者选项用的：那两个测试键各自钉一个引擎，但不能为此去改
+        产品那格 `self.tts`（改了没人还原——气泡等音频的那一两分钟里没有安全还原点）。
+        """
         try:
-            tts = getattr(self, "tts", None)
+            tts = tts if tts is not None else getattr(self, "tts", None)
             if (
                 tts is None
                 or not getattr(tts, "enabled", False)
@@ -1541,7 +1565,13 @@ class PetChatFlowMixin:
                 self._play_audio(cached, audio_type="tts")
                 return
             self._pending_speak_reply = (text, duration_ms, mood)
-            self._speak_worker = TTSWorker(tts, text, mood=mood)
+            # 互动这一链念**文本自己那门语言**：它的文本不是模型带 `voice_language` 回来的
+            # （预制回退句、点击反馈取回的古诗词/改写句），拿配置的目标语言去核对只会把
+            # 「引擎本来能直接念的一句中文」掐成静默。对话回复那一链不走这里，仍按
+            # `prefer_model_voice_translation` 翻到目标语言。
+            self._speak_worker = TTSWorker(
+                tts, text, mood=mood, prefer_source_language=True
+            )
             self._speak_worker.start()
             self._ensure_tts_poll()
         except Exception as e:

@@ -9,15 +9,205 @@
 from __future__ import annotations
 
 import os
+import re
 import traceback
 from typing import Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from meapet.config.normalizers import normalize_input_device_index
 from meapet.log import get_color_logger
-from meapet.paths import find_voice_asr_model_dir
+from meapet.paths import (
+    VOICE_ASR_MODEL_FILES,
+    find_voice_asr_model_dir,
+    normalize_voice_asr_precision,
+)
 
 log = get_color_logger("voice")
+
+# 识别器与采集共用的采样率：设备的可用性按它探测，向导文案也按它标注，别两处各写一个数。
+VOICE_INPUT_SAMPLE_RATE = 16000
+
+
+class AsrModelMissing(RuntimeError):
+    """档位对应的模型不在盘上。取证侧要把它与"加载失败"分开报——处置完全不同（下模型 / 重装）。"""
+
+
+def build_recognizer(precision: object = None, sample_rate: int = VOICE_INPUT_SAMPLE_RATE):
+    """按产品那一份模型表造流式识别器；模型缺席抛 `AsrModelMissing`，sherpa 没装抛 `ImportError`。
+
+    录音那一路（`VoiceEngine._load_model`）与无头取证（`tts.diagnostics.speech_repetition`）
+    共用这一枚：`from_transducer` 那几项（int8 档、greedy_search、feature_dim=80）换掉任何一项，
+    转写串就换一种坏法，两处各写一份等于给同一只耳朵立两副参数。
+    """
+    import sherpa_onnx
+
+    chosen = normalize_voice_asr_precision(precision)
+    model_dir = find_voice_asr_model_dir(chosen)
+    if model_dir is None:
+        raise AsrModelMissing(f"语音识别模型缺失（{chosen} 档）")
+    files = VOICE_ASR_MODEL_FILES[chosen]
+    log.info(f"[voice] loading sherpa-onnx zipformer zh-en model ({chosen})...")
+    recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+        encoder=os.path.join(model_dir, files["encoder"]),
+        decoder=os.path.join(model_dir, files["decoder"]),
+        joiner=os.path.join(model_dir, files["joiner"]),
+        tokens=os.path.join(model_dir, files["tokens"]),
+        num_threads=4,
+        provider="cpu",
+        sample_rate=sample_rate,
+        feature_dim=80,
+        decoding_method="greedy_search",
+    )
+    log.info("[voice] model loaded successfully")
+    return recognizer
+
+
+def _decode_samples(recognizer, samples, sample_rate: int) -> str:
+    """把 float32 单声道样本整块喂进去，取回转写串（SIL 清掉）。
+
+    流式模型走"全量 + `input_finished`"，**不补额外静音**——补了会让它复读（这一格是实测踩出来的，
+    见 `meapet/voice/engine.py` 旧版注释），取证那一发要是悄悄补了尾，读到的连读长度就是假的。
+    """
+    stream = recognizer.create_stream()
+    stream.accept_waveform(sample_rate, samples)
+    stream.input_finished()
+    while recognizer.is_ready(stream):
+        recognizer.decode_stream(stream)
+    result = recognizer.get_result(stream).strip()
+    # 清理 SIL token（\b 对中文无效，直接用简单替换）
+    return re.sub(r"\s*SIL\s*", "", result).strip()
+
+
+def read_wav_samples(wav_path: str):
+    """把一个 wav 读成 `(float32 单声道 [-1,1], 采样率)`——RIFF chunk 自己走一遍。
+
+    不用 stdlib `wave`，因为它到这一格就不够了：VITS 那一路的产物是 `fmt=3`（32-bit IEEE float），
+    `wave.open` 直接抛 `Error: unknown format: 3`。而这台仪器偏偏要读**两臂**——口径
+    「只保证VITS的zh正常」里那一臂就是它读不了的这份。认两种就够：16-bit PCM（GSV 那一路）、
+    32-bit float（VITS 那一路）；**其余按 `fmt`/位深报出去，不静默回零**。
+    """
+    import numpy as np
+
+    with open(wav_path, "rb") as handle:
+        blob = handle.read()
+    if len(blob) < 12 or blob[:4] != b"RIFF" or blob[8:12] != b"WAVE":
+        raise ValueError("不是 RIFF/WAVE 文件")
+    fmt = data = None
+    pos = 12
+    while pos + 8 <= len(blob):
+        tag = blob[pos:pos + 4]
+        size = int.from_bytes(blob[pos + 4:pos + 8], "little")
+        body = blob[pos + 8:pos + 8 + size]
+        if tag == b"fmt " and fmt is None:
+            fmt = body
+        elif tag == b"data" and data is None:
+            data = body
+        pos += 8 + size + (size & 1)
+    if fmt is None or data is None or len(fmt) < 16:
+        raise ValueError("这份 wav 缺 fmt 或 data chunk")
+    form = int.from_bytes(fmt[0:2], "little")
+    channels = max(int.from_bytes(fmt[2:4], "little"), 1)
+    rate = int.from_bytes(fmt[4:8], "little")
+    bits = int.from_bytes(fmt[14:16], "little")
+    frame_bytes = channels * max(bits // 8, 1)
+    if frame_bytes > 1:
+        # 尾上那半帧不收：`frombuffer`/`reshape` 都会为它抛，而抛出来的不是"这份截断了"
+        data = data[: len(data) - len(data) % frame_bytes]
+    if form == 1 and bits == 16:
+        samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+    elif form == 3 and bits == 32:
+        samples = np.frombuffer(data, dtype="<f4").astype(np.float32)
+    else:
+        raise ValueError(f"只支持 16-bit PCM 与 32-bit float，这份是 fmt={form} {bits}-bit")
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+    return samples.astype(np.float32), rate
+
+
+def transcribe_wav(wav_path: str, recognizer, sample_rate: int = VOICE_INPUT_SAMPLE_RATE) -> str:
+    """转写**盘上的一个 wav**（取证用），与录音那一路共用同一个识别器与同一段解码。
+
+    取样走 `read_wav_samples`（GSV 是 16-bit PCM、VITS 是 32-bit float，两种都得读）。
+    采样率不同就线性插值到 `sample_rate`——合成产物是 22.05/32 kHz，模型只吃 16 kHz，
+    这一步不做的话读数不是"这台仪器读出来的"，是"模型被喂了错采样率之后吐出来的"。
+    太短（不足 0.25 s）与录音那一路同判，返回空串。
+    """
+    import numpy as np
+
+    samples, rate = read_wav_samples(wav_path)
+    if rate != sample_rate and rate > 0 and samples.size:
+        points = np.linspace(0, samples.size - 1, int(samples.size * sample_rate / rate))
+        samples = np.interp(points, np.arange(samples.size), samples).astype(np.float32)
+    if samples.size < sample_rate // 4:
+        log.warning("[voice] audio too short, skipping")
+        return ""
+    return _decode_samples(recognizer, samples, sample_rate)
+
+
+def _device_supports_input(p_audio, index: int, sample_rate: int, channels: int) -> bool:
+    """这台设备能否按 (sample_rate, channels, paInt16) 开输入流。
+
+    pyaudio 用 ``ValueError`` 表示"不支持"，实测与真开流的失败一致（hw 设备固定 48k 时
+    16k 直接 Errno -9997）。探针本身出别的错（老版本、缺方法）时**按可用处理**——
+    探测失败不该把设备判死，真开流时自会出声。
+    """
+    try:
+        import pyaudio
+
+        p_audio.is_format_supported(
+            sample_rate,
+            input_device=index,
+            input_channels=channels,
+            input_format=pyaudio.paInt16,
+        )
+    except ValueError:
+        return False
+    except Exception:
+        return True
+    return True
+
+
+def list_input_devices(
+    sample_rate: int = VOICE_INPUT_SAMPLE_RATE, channels: int = 1
+) -> list[tuple[int, str, int, bool]]:
+    """枚举有输入通道的设备 ``[(index, name, channels, 该采样率可用)]``。
+
+    pyaudio 缺失或枚举异常时返回空表，不抛。
+    """
+    try:
+        import pyaudio
+    except ImportError:
+        return []
+
+    devices: list[tuple[int, str, int, bool]] = []
+    audio = None
+    try:
+        audio = pyaudio.PyAudio()
+        for index in range(audio.get_device_count()):
+            info = audio.get_device_info_by_index(index)
+            try:
+                input_channels = int(info.get("maxInputChannels", 0) or 0)
+            except (TypeError, ValueError):
+                input_channels = 0
+            if input_channels > 0:
+                devices.append(
+                    (
+                        index,
+                        str(info.get("name") or f"设备 {index}"),
+                        input_channels,
+                        _device_supports_input(audio, index, sample_rate, channels),
+                    )
+                )
+    except Exception as exc:
+        log.warning(f"[voice] 设备枚举失败: {type(exc).__name__}: {exc}")
+    finally:
+        if audio is not None:
+            try:
+                audio.terminate()
+            except Exception:
+                pass
+    return devices
 
 
 class VoiceEngine(QThread):
@@ -31,15 +221,19 @@ class VoiceEngine(QThread):
     def __init__(
         self,
         language: str = "zh",
-        sample_rate: int = 16000,
+        sample_rate: int = VOICE_INPUT_SAMPLE_RATE,
         channels: int = 1,
         chunk_ms: int = 30,
+        precision: object = None,
+        input_device_index: object = None,
     ):
         super().__init__()
         self._language = str(language or "zh").strip() or "zh"
-        self._sample_rate = int(sample_rate or 16000)
+        self._sample_rate = int(sample_rate or VOICE_INPUT_SAMPLE_RATE)
         self._channels = int(channels or 1)
         self._chunk_size = max(256, self._sample_rate * int(chunk_ms or 30) // 1000)
+        self._precision = normalize_voice_asr_precision(precision)
+        self._input_device_index = normalize_input_device_index(input_device_index)
 
         self._stop = False
         self._toggle = False
@@ -81,7 +275,7 @@ class VoiceEngine(QThread):
 
             self._audio_frames = []
             p = pyaudio.PyAudio()
-            mic_idx = self._find_mic_device(p)
+            mic_idx = self._pick_mic_index(p)
             log.info(f"[voice] using mic device index={mic_idx}")
 
             stream = p.open(
@@ -128,6 +322,37 @@ class VoiceEngine(QThread):
     # 模型加载
     # ------------------------------------------------------------------
 
+    def _pick_mic_index(self, p_audio) -> int:
+        """用户指定的设备优先；那台不可用时回落自动选路（出声，不闷掉）。
+
+        "不可用"有两种，实测都撞到过，日志须分开点名：设备压根枚举不到/没有输入通道，
+        或设备在但开不了这个格式——真开流按 (16000 Hz, 单声道) 试过，同一批设备分别报
+        Errno -9997（采样率）与 -9998（通道数），所以理由按整组格式写，别只指采样率。
+        """
+        if self._input_device_index is None:
+            return self._find_mic_device(p_audio)
+
+        info = None
+        try:
+            info = p_audio.get_device_info_by_index(self._input_device_index)
+        except Exception:
+            info = None
+        reason = ""
+        if not info or int(info.get("maxInputChannels", 0) or 0) <= 0:
+            reason = "枚举不到或没有输入通道"
+        elif not _device_supports_input(
+            p_audio, self._input_device_index, self._sample_rate, self._channels
+        ):
+            reason = f"不支持 {self._sample_rate} Hz/{self._channels} 声道输入"
+
+        if not reason:
+            return self._input_device_index
+
+        log.info(
+            f"[voice] 指定设备 index={self._input_device_index} {reason}，回落自动选路"
+        )
+        return self._find_mic_device(p_audio)
+
     def _find_mic_device(self, p_audio) -> int:
         """找真正的麦克风，跳过立体声混音/扬声器回录等设备。"""
         exclude = {"立体声混音", "stereo mix", "扬声器", "speaker",
@@ -154,29 +379,14 @@ class VoiceEngine(QThread):
             return True
 
         try:
-            import sherpa_onnx
-
-            model_dir = find_voice_asr_model_dir()
-            if model_dir is None:
-                self.error.emit("语音识别模型缺失，请在配置页下载")
-                return False
-            log.info("[voice] loading sherpa-onnx zipformer zh-en model...")
-            self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
-                encoder=os.path.join(model_dir, "encoder-epoch-99-avg-1.int8.onnx"),
-                decoder=os.path.join(model_dir, "decoder-epoch-99-avg-1.int8.onnx"),
-                joiner=os.path.join(model_dir, "joiner-epoch-99-avg-1.int8.onnx"),
-                tokens=os.path.join(model_dir, "tokens.txt"),
-                num_threads=4,
-                provider="cpu",
-                sample_rate=self._sample_rate,
-                feature_dim=80,
-                decoding_method="greedy_search",
-            )
-            log.info("[voice] model loaded successfully")
+            self._recognizer = build_recognizer(self._precision, self._sample_rate)
             return True
 
         except ImportError:
             self.error.emit("sherpa-onnx 未安装，请在配置页下载依赖")
+            return False
+        except AsrModelMissing as exc:
+            self.error.emit(f"{exc}，请在配置页下载")
             return False
         except Exception as exc:
             self.error.emit(f"模型加载失败: {exc}")
@@ -205,18 +415,7 @@ class VoiceEngine(QThread):
                 .astype(np.float32)
                 / 32768.0
             )
-
-            # 流式模型：全量喂入 + input_finished，不补额外静音（避免复读）
-            stream = self._recognizer.create_stream()
-            stream.accept_waveform(self._sample_rate, samples)
-            stream.input_finished()
-            while self._recognizer.is_ready(stream):
-                self._recognizer.decode_stream(stream)
-
-            result = self._recognizer.get_result(stream).strip()
-            # 清理 SIL token（\b 对中文无效，直接用简单替换）
-            import re
-            result = re.sub(r'\s*SIL\s*', '', result).strip()
+            result = _decode_samples(self._recognizer, samples, self._sample_rate)
 
             log.info(
                 f"[voice] transcribed: "
@@ -237,4 +436,6 @@ def create_voice_engine(config: Optional[dict] = None) -> Optional[VoiceEngine]:
         return None
     return VoiceEngine(
         language=cfg.get("language", "zh"),
+        precision=cfg.get("precision"),
+        input_device_index=cfg.get("input_device_index"),
     )

@@ -647,6 +647,9 @@ class PetRenderHostMixin:
                 callback()
             except Exception as exc:
                 safe_print(f"[pet] renderer-ready callback failed: {exc}")
+        # 穿透开关的挂载点从「Live2D 首帧」提到这里：PNG 分支也走到这一格，否则
+        # PNG 模式下面板、后端、推帧定时器全都不存在（人工 2026-10-06「如果没做需要做」）。
+        self._init_layer_overlay_mode()
 
     def _on_live2d_first_frame(self):
         """首帧已经绘制并提交后，调整窗口大小以匹配模型画布，再显现。"""
@@ -657,10 +660,30 @@ class PetRenderHostMixin:
         self._live2d_startup_widget = None
 
         # 首帧就绪后，根据模型实际画布大小调整窗口尺寸
+        layout = None
         try:
-            self._fit_window_to_model()
+            layout = self._fit_window_to_model()
         except Exception as exc:
             safe_print(f"[live2d] fit window to model skipped: {exc}")
+
+        # 「发了要读回」：全仓此前没有任何顶层尺寸回读，而 niri 平铺下客户端的尺寸请求会被吃
+        # （人工现测：请求 461×614、实得 659×736，见 `_request_probe_window` 那段）。所以换引擎
+        # 之后产品连"实得多少"都说不出。只在**手动换引擎**那一发泵（`_toggle_render_mode` 的
+        # else 分支置起标志）：普通启动路径逐字不变，不泵事件、不多一行日志。
+        if getattr(self, "_l2d_switch_size_check", False):
+            self._l2d_switch_size_check = False
+            if layout is not None:
+                want = (int(layout.window_width), int(layout.window_height))
+                got = self._pump_window_size(want)
+                safe_print(f"[live2d] 尺寸请求 期望 {want[0]}x{want[1]} "
+                           f"实得 {got[0]}x{got[1]}")
+                if got != want:
+                    safe_print(
+                        "[live2d] ⚠ 窗口尺寸请求被吃（多半还平铺着）⇒ 按 Mod+V 切成浮动再换引擎")
+                    self._show_bubble(
+                        "窗口尺寸请求被吃（多半还平铺着）⇒ 按 Mod+V 切成浮动再换引擎",
+                        bubble_duration_ms(self.config, "interaction"),
+                    )
 
         # Live2D 的最终窗口尺寸要到首帧后才确定；此时再按保存坐标夹回
         # 当前屏幕，避免先恢复位置、随后尺寸变化又把桌宠推出屏幕。
@@ -668,17 +691,13 @@ class PetRenderHostMixin:
 
         self._reveal_live2d_window()
         self._mark_renderer_ready()
+        # 挂在首帧之后：画布尺寸要到这一格才读得真（`_fit_window_to_model` 刚按它重算过几何），
+        # 而 surface 的尺寸是 `enable()` 一次性定死的——不重发就还是上一台引擎那块。
+        self._remount_layer_after_render_switch("Live2D")
         safe_print(
             f"[pet] Live2D 首帧就绪 size={self.width()}x{self.height()} "
             f"pos=({self.x()},{self.y()})"
         )
-        # ★ Phase 3: 初始化 layer-shell 双模（穿透 / 交互）
-        self._init_layer_overlay_mode()
-
-        # ★ Phase 1: 首帧就绪后，强制启用 layer-shell 穿透（Niri / Wayland）
-        # 独立于 standby 状态，确保真实桌宠运行时也能接通 wayland-layer 后端
-        from PyQt5.QtCore import QTimer
-        from meapet.desktop.click_through import enable_click_through
 
     # ------------------------------------------------------------ 双模架构
     def _layer_geometry(self):
@@ -827,6 +846,61 @@ class PetRenderHostMixin:
             self.raise_()
             safe_print("[layer] → 交互模式（可拖动 / 右键菜单）")
 
+    def _layer_penetrating(self) -> bool:
+        """穿透态此刻挂着没有：跑着的 `_layer_timer` 就是唯一那条真值。
+
+        不另立旗标是因为没有第二个真值可维护——`_do_layer_mount` 起它，
+        `_set_layer_mode(False)` 停它，面板上那格勾选是 UI 不是状态。
+        """
+        timer = getattr(self, "_layer_timer", None)
+        return bool(timer is not None and timer.isActive())
+
+    def _remount_layer_after_render_switch(self, reason: str) -> None:
+        """换渲染引擎时**重发一次挂载请求**：surface 的尺寸是 `enable()` 那一次定死的。
+
+        人工 2026-10-15「PNG切换到Live2D需要重新请求窗口大小，而不是直接切」。L1 探针丙臂
+        （`scripts/engine_switch_size_probe.py`）量的现状：切换之后 `enable_calls 总数=1`、
+        `set_size 调用=[]`、configure 仍是 PNG 那块的 130x260，而新画布是 366x512 ⇒ 新引擎
+        每一帧都被裁进旧尺寸那块 surface 里。交互态没这一格：窗口尺寸归 Qt，`resize()` 直接生效。
+
+        两处刻意不重走面板那条路：① `measured=False` —— 一发 fidus 最坏 13.5 s（H25 口径），
+        换个引擎不该付这一发，轮廓本来就由 `_layer_surface_region` 在新画布上现量；
+        ② 不调 `_set_layer_mode(True)` —— 那条路在 `_fidus_enabled()` 时会走「量完再挂」，
+        可能弹模态要人按 Mod+V，而人此刻只是点了「换渲染引擎」。
+
+        左上角取 `_layer_window_pos`（进穿透前窗口还可见时记下的那两个数），不取 `self.x()/y()`：
+        穿透态顶层是 `hide()` 的，Wayland 下隐藏之后 Qt 那对坐标不再可信
+        （`_set_layer_mode` 里「必须在 hide() 之前取坐标」记的就是同一件事）。
+
+        钩子不落进 `_init_png_renderer` 里面：那条函数被 `_fallback_to_png` 调用后还会
+        `self.show()` + `raise_()`，而挂载这个动作自己会 `hide()` —— 挂在里面等于先 hide 再
+        show。实测（探针丙臂，钩在 `_init_png_renderer` 末）：`enable_calls 总数=2` 但收尾
+        `visible=True` ⇒ 窗口和 surface 同时在上屏，桌宠画两份。所以重挂必须在**换引擎那条链的
+        最后一步**。
+        """
+        backend = getattr(self, "_layer_backend", None)
+        if backend is None or not self._layer_penetrating():
+            return
+        widget = getattr(self, "sprite_label", None)
+        if widget is None:
+            return
+        pos = getattr(self, "_layer_window_pos", None)
+        if pos is None:
+            pos = (int(self.x()), int(self.y()))
+        try:
+            offset = widget.mapTo(self, QPoint(0, 0))
+        except Exception:
+            offset = QPoint(0, 0)
+        x = int(pos[0]) + int(offset.x())
+        y = int(pos[1]) + int(offset.y())
+        w, h = int(widget.width()), int(widget.height())
+        if w <= 0 or h <= 0:
+            return
+        self._layer_timer.stop()
+        self._layer_fit_cancel()
+        safe_print(f"[layer] 渲染引擎换了（{reason}）⇒ 按新画布 {w}x{h}@({x},{y}) 重发挂载请求")
+        self._do_layer_mount(max(0, x), max(0, y), w, h, measured=False)
+
     def _layer_surface_region(self, w: int, h: int) -> tuple[int, int, int, int]:
         """挂载该请求画布帧里的哪一块：`(ox, oy, ow, oh)` = 不透明轮廓（含动作余量）。
 
@@ -836,12 +910,25 @@ class PetRenderHostMixin:
         （1366−910=456、768−305=463，本机 niri 就是"剩多少配多少"）⇒ 撑爆请求的正是那圈透明边，
         而被切掉的却是可见内容。这是几何源头，不是门控。
 
-        取不到帧（PNG 模式没有 `render_offscreen`、渲染还没热）／整帧没有不透明像素／轮廓短于
+        取不到帧（渲染还没热／立绘一张都没解出来）／整帧没有不透明像素／轮廓短于
         `_LAYER_MIN_SURFACE_EDGE` ⇒ 回退整画布并**出声**：那是今天的行为，不是新猜的姿势。
+        出声按**分支**各说各的原因：Live2D 是首帧还没到（等下一次挂载才量得出），PNG 是
+        后备帧为空（解码那一格在前头）——把后者说成「离屏渲染不可用？」会让人去找一个
+        这台机器上不存在的开关（人工 2026-10-15 报的那句）。
+
+        **PNG 在这一格取帧之前就被挡回**：人工 2026-10-06 裁的「穿透＝整窗不可点，没有热区概念」
+        落到挂载形状上就是「不按 alpha 解 PNG 的轮廓」（同一条裁语把候选乙"按 alpha 解矩形"
+        标了否，见 `finished/png-mode-click-through-missing.md`）。这条守卫挡的是**取帧这件事**，
+        不是补第二个 return：挂载出口仍然只有一条，PNG 也一次 `toImage()` 都不付。
+        不写在 `hasattr(render_offscreen)` 上——那等于把一条人工裁决降级成能力巧合。
         """
+        if not getattr(self, "_use_live2d", False):
+            safe_print("[layer] PNG 不按 alpha 解轮廓（裁决 2026-10-06：穿透＝整窗不可点，"
+                       "没有热区）⇒ 按整画布挂")
+            return (0, 0, int(w), int(h))
         frame = self._fidus_current_frame()
         if frame is None:
-            safe_print("[layer] 量不到轮廓 ⇒ 按整画布挂（离屏渲染不可用？）")
+            safe_print(f"[layer] {self._frame_absence_reason()} ⇒ 按整画布挂，下一轮挂载再量轮廓")
             return (0, 0, int(w), int(h))
         try:
             import numpy as np
@@ -915,6 +1002,9 @@ class PetRenderHostMixin:
             backend.enable(None, ow, oh, sx, sy)  # 每次都新建（全新 OVERLAY surface）
         except Exception as exc:
             safe_print(f"[layer] 创建 layer context 失败: {exc}")
+            # 这一支不经 `_premount_refuse`，但结局同形：一个 surface 都没挂，而面板还停在
+            # 人那一次点击翻上去的「开」。回写仍走同一只写口，不另立第二处真值。
+            self._sync_layer_panel(False)
             return
 
         widget = getattr(self, "sprite_label", None)
@@ -923,6 +1013,8 @@ class PetRenderHostMixin:
 
         self.hide()                                 # ③ 最后才隐藏
         self._layer_timer.start()
+        # 成功路径也回写：`enable` 那一段可能是被拒之后重试的，面板还停在上一轮的「关」。
+        self._sync_layer_panel(True)
         canvas = f" ← 画布 {w}x{h}@({x},{y})" if (ox or oy) else ""
         safe_print(f"[layer] → 穿透模式 surface={ow}x{oh} @({sx},{sy}){canvas}"
                    f"{'（测量位）' if measured else ''}")
@@ -1458,6 +1550,21 @@ class PetRenderHostMixin:
         """
         safe_print(f"[layer] ✗ 没切穿透：{why}")
         self._show_bubble(bubble, bubble_duration_ms(self.config, "interaction"))
+        # 面板那格必须跟着真值回去：`_toggle` 先翻 UI 再调回调，回调被拒就留下一个
+        # 「点击穿透：开」的不存在状态，而它是切回交互态的唯一入口——下一轮他照那个状态
+        # 点，读到的仍是假话。真值只有 `_layer_penetrating()`（`_layer_timer.isActive()`）一处。
+        if not self._layer_penetrating():
+            self._sync_layer_panel(False)
+
+    def _sync_layer_panel(self, penetrating: bool) -> None:
+        """把面板那格按宿主真值同步（只写状态，不触发回调）。
+
+        假 host（测试里的那些）普遍没有 `_layer_panel` ⇒ 没有就跳，不替它造一个。
+        """
+        panel = getattr(self, "_layer_panel", None)
+        if panel is None:
+            return
+        panel.set_penetrate(bool(penetrating))
 
     def _content_probe_room(self) -> tuple[int, int, int, int]:
         """子控件在顶层窗口内的**四向空档**——H 手那一发摆得摆不下就看它。
@@ -1535,6 +1642,23 @@ class PetRenderHostMixin:
         from meapet.desktop import fidus_position as FP
 
         return max(int(round(max(abs(dx), abs(dy)))) for dx, dy in FP.PREMOUNT_MOVES)
+
+    def _probe_owns_geometry(self) -> bool:
+        """测量这一轮（含放大窗口那一段）此刻**握着窗口与画布的几何**。
+
+        要两个数一起看，不是一个：`_probe_saved` 在 `_request_probe_window` 里 `resize` 之前
+        就设（下面），而 `_pending_mount` 要到起工那一行才置——中间夹着 `_pump_window_size`
+        那最多 500 ms 的泵事件，眨眼正好能落进这道缝。两端都在所有出口被清
+        （`_restore_probe_window` / `_cancel_premount_measure` / `_finish_premount_measure`）。
+
+        它存在的理由是 PNG 那侧：`SpriteRenderer` 每 ~4000 ms 发一次 `expression_changed`
+        （`renderer.py:315-338`）→ `_update_sprite` → 无条件把画布 `move(0,0)`、把窗口
+        `resize` 回常态，而一发测量要 0.9–13.5 s。那一次 `move(0,0)` 抹掉的正是
+        `_content_probe_shift` 摆出去的 H 手位移 ⇒ 闭环拿到的屏与它以为的位移不同源，
+        后果是**安静地挂歪**，不是响亮拒绝。Live2D 免疫只是因为 `_update_sprite` 对它早退。
+        """
+        return (getattr(self, "_pending_mount", None) is not None
+                or getattr(self, "_probe_saved", None) is not None)
 
     def _pump_window_size(self, want: tuple[int, int]) -> tuple[int, int]:
         """GUI 线程上有界等尺寸落地，回**实得**的 (宽, 高)。
@@ -1692,8 +1816,37 @@ class PetRenderHostMixin:
             return
         frame = self._fidus_current_frame()
         if frame is None:
-            self._premount_refuse("拿不到当前离屏帧（离屏渲染不可用？）",
-                                  "拿不到当前画面，量不了位置，没切穿透")
+            self._premount_refuse(
+                f"拿不到当前帧：{self._frame_absence_reason()}",
+                "拿不到当前画面，量不了位置，没切穿透")
+            return
+        # **预检**：这一发必拒就别先花钱。判据不是新立的——就是 `FP.iter_candidates` 自己那两条
+        # 闸（装不下 + 覆盖率）与 `FP.select_template` 用的同一个 `min_edge` 比较：候选的档全在小档
+        # ⇒ `select_template` 第一次注册之前就停在档限 ⇒ 必然返回 None。**不会造出假拒绝**。
+        # 位置必须在 `_confirm_float_first()` **之前**：`ask_float=True` 时那一发会弹模态请人按
+        # Mod+V，而这一发按了也必拒，不该请人按。省下的成本是实测的：一次 `iter_candidates`
+        # 2.0–5.1 ms（`reference/…/260-coverage-vs-min-coverage.txt`）换掉
+        # 「放大窗口 + 至多四发 × 0.9–13.5 s + 桌宠在屏上滑动 + 20 s 预算」。
+        edges = sorted({c.edge for c in FP.iter_candidates(frame)}, reverse=True)
+        if not any(e >= FP.PREMOUNT_MIN_EDGE for e in edges):
+            # 两种必拒的形状要说两种话：有候选但全在小档 ⇒ 真撞档限；一个候选都没有 ⇒
+            # `select_template` 连档限那一步都到不了（每档要么装不下、要么覆盖率不过）。
+            # 后一格把「停在档限」写进去就是假判语——本案拆的正是这种判语。
+            if edges:
+                why = (f"画布 {w}x{h}：可测的贴片档只有 {edges}，全部低于定位下限 "
+                       f"{FP.PREMOUNT_MIN_EDGE}² ⇒ `select_template` 在第一次注册之前就停在档限"
+                       "（位移闭环一条都没跑，别说它没过）")
+                bubble = ("这个尺寸的立绘量不出可信位置（可用的贴片档比定位下限还小），没切穿透")
+            else:
+                why = (f"画布 {w}x{h}：{FP.SIZES} 各档**一个候选都造不出**"
+                       "（每一档要么装不下、要么覆盖率不过 "
+                       f"`MIN_COVERAGE={FP.MIN_COVERAGE}`）⇒ `select_template` 连档限那一步"
+                       "都到不了，位移闭环一条没跑（别说它没过）")
+                bubble = ("这个尺寸的立绘量不出可信位置（一处可信的贴片都造不出来），没切穿透")
+            self._premount_refuse(
+                why,
+                bubble + "；到「设置与数据 ▸ 桌宠窗口大小」把桌宠调到 75% 或以上再点，"
+                         "调大之后能不能量准还得现场看")
             return
         if not self._confirm_float_first():
             self._premount_refuse("人没确认窗口已切成浮动（平铺下量不准）",
@@ -1835,7 +1988,7 @@ class PetRenderHostMixin:
             # 症状是"启用了 fidus 但什么也不发生"，人无从下手：不知道该查渲染面
             # 还是查引擎。气泡说的是"画面拿不到"，不是"没量准"——后者会把人引去
             # 等校准，而缺口在渲染面这一侧。
-            safe_print("[fidus] ✗ 拿不到当前离屏帧，定位不启动（离屏渲染不可用？）")
+            safe_print(f"[fidus] ✗ 拿不到当前帧，定位不启动：{self._frame_absence_reason()}")
             self._show_bubble(
                 "拿不到当前画面，定位不了位置",
                 bubble_duration_ms(self.config, "interaction"),
@@ -1855,17 +2008,33 @@ class PetRenderHostMixin:
             log=lambda k, v: safe_print(f"[fidus] {k}: {v}"),
         )
 
-    def _fidus_current_frame(self):
-        """取当前离屏帧的 RGBA numpy 视图（副本）—— fidus 的模板与它同源。"""
+    def _current_frame_image(self):
+        """当前画面的 QImage：Live2D 走离屏渲染，PNG 交回它手上那份整帧后备。
+
+        这是**唯一**一处取帧：`_push_layer_frame` 推给 surface 的与 `_fidus_current_frame`
+        喂给定位引擎的模板必须同一份像素，否则量的是 A、上屏的是 B —— 定位再准也没用。
+        PNG 侧那个名字是 `frame_image`（`SpriteCanvas` 的后备帧，`renderer.py:115`），
+        窗口 `hide()` 之后 `paintEvent` 不派发，它仍然是屏上那一张。
+        异常不在这里收：两个调用方各有自己的出声口径（推帧计数 / fidus 拒绝）。
+        """
         widget = getattr(self, "sprite_label", None)
         renderer = getattr(widget, "render_offscreen", None)
         if not callable(renderer):
+            renderer = getattr(widget, "frame_image", None)
+        if not callable(renderer):
             return None
+        img = renderer()
+        if img is None or img.isNull():
+            return None
+        return img
+
+    def _fidus_current_frame(self):
+        """取当前帧的 RGBA numpy 视图（副本）—— 与推给 surface 的是同一份像素。"""
         try:
             import numpy as np
 
-            img = renderer()
-            if img is None or img.isNull():
+            img = self._current_frame_image()
+            if img is None:
                 return None
             if img.format() != QImage.Format_RGBA8888:
                 img = img.convertToFormat(QImage.Format_RGBA8888)
@@ -1877,6 +2046,19 @@ class PetRenderHostMixin:
         except Exception as exc:
             safe_print(f"[fidus] 取帧失败: {exc}")
             return None
+
+    def _frame_absence_reason(self) -> str:
+        """帧没拿到时**该说哪一支**：两种渲染面的这条路坏在不同地方。
+
+        Live2D 那一支有离屏通道，拿不到帧是这一轮还没热或那趟 FBO 没成，值得让人去查渲染面。
+        PNG 那一支从 2026-10-15 起也走同一条取帧口（`_current_frame_image` 的 `frame_image`
+        那一路），所以拿不到帧**只可能是**那份后备帧本身是空的 —— 即立绘一张都没解出来
+        （`_update_sprite` 那句「立绘解码为空」说的是同一件事）。旧文案「PNG 模式没有离屏渲染
+        这一步」在本项实施后就是假话：那条路现在有了。
+        """
+        if getattr(self, "_use_live2d", False):
+            return "Live2D 离屏这一轮没给帧（首帧未到？）"
+        return "PNG 后备帧为空（立绘解码没成？）"
 
     def _fidus_request_move(self, dx: float, dy: float, token: int | None = None) -> bool:
         """在 fidus 线程上被调用：把位移请求交给 GUI 线程，等它落位并提交帧。
@@ -2050,19 +2232,19 @@ class PetRenderHostMixin:
         safe_print(f"[layer] ⚠ {text}")
 
     def _push_layer_frame(self) -> None:
-        """把 Live2D 离屏渲染结果推送到 layer surface。"""
+        """把当前画面推到 layer surface（Live2D 走离屏渲染，PNG 交回它手上的整帧）。
+
+        取帧走 `_current_frame_image()` —— 与 fidus 的模板同一个来源（那份 docstring 里
+        写的"同源"靠的就是这一个调用点，不是靠注释）。
+        """
         backend = getattr(self, "_layer_backend", None)
         if backend is None:
             return
         if self._layer_fit_service():
             return          # 本拍在等回读／刚发出夹移，推了也必被尺寸门控丢掉
-        widget = getattr(self, "sprite_label", None)
-        renderer = getattr(widget, "render_offscreen", None)
-        if not callable(renderer):
-            return
         try:
-            img = renderer()
-            if img is None or img.isNull():
+            img = self._current_frame_image()
+            if img is None:
                 self._layer_fail = getattr(self, "_layer_fail", 0) + 1
                 if self._layer_fail <= 3:
                     print(f"[layer] ✗ 第 {self._layer_fail} 次拿到空帧", flush=True)
@@ -2076,63 +2258,27 @@ class PetRenderHostMixin:
     # ------------------------------------------------------------ 画布尺寸工具
 
     def _read_canvas_size_from_model(self, model) -> tuple[int, int] | None:
-        """从 Live2D 模型读取画布尺寸，带多层回退。
+        """模型自己报的画布（像素口径，见 `Live2DModel.get_suggested_size`），不合格就 None。
 
-        优先使用 get_suggested_size()，然后对返回值做严格范围校验。
-        如果 SDK 返回无效占位值（如 (1, 2)），依次尝试其他可能的 API。
-        全部失败时返回 None，由调用方决定回退策略。
+        这里原来还挂着两层「换个 API 名再试」：`get_canvas_size` / `GetCanvasSize` /
+        `getCanvasSize` 以及 `_model` 上的 `GetCanvasWidth` / `canvasWidth` / `width`。
+        实测这些符号在 `Live2DModel` 和 `live2d.LAppModel`（0.7 那代的模型类，1.0.0 起连这个名字
+        都不存在了）上**一个都不存在**（本机 2026-10-15
+        逐项 `hasattr` 过），所以那两层从来没有可能命中——留着它们只是让读代码的人以为画布
+        还有别的通路，而真通路（`GetCanvasSizePixel`）当时被 `GetCanvasSize` 的单位口径挡掉了。
         """
         if model is None:
             return None
 
-        # 第 1 层：get_suggested_size()
         try:
             w, h = model.get_suggested_size()
             w, h = int(w), int(h)
-            if MIN_CANVAS_SIZE <= w <= MAX_CANVAS_SIZE and MIN_CANVAS_SIZE <= h <= MAX_CANVAS_SIZE:
-                return w, h
-            safe_print(f"[WARN] get_suggested_size 返回异常值 ({w}, {h})，尝试其他 API")
         except (AttributeError, TypeError, ValueError) as exc:
             safe_print(f"[WARN] get_suggested_size 调用失败: {exc}")
-
-        # 第 2 层：尝试其他常见 API 名称
-        for method_name in ("get_canvas_size", "GetCanvasSize", "getCanvasSize"):
-            if hasattr(model, method_name):
-                try:
-                    func = getattr(model, method_name)
-                    result = func() if callable(func) else func
-                    if isinstance(result, (tuple, list)) and len(result) >= 2:
-                        w, h = int(result[0]), int(result[1])
-                    else:
-                        w, h = int(result), int(result)
-                    if MIN_CANVAS_SIZE <= w <= MAX_CANVAS_SIZE and MIN_CANVAS_SIZE <= h <= MAX_CANVAS_SIZE:
-                        safe_print(f"[INFO] 通过 {method_name} 获取画布尺寸: {w}x{h}")
-                        return w, h
-                except Exception as exc:
-                    safe_print(f"[WARN] {method_name} 调用失败: {exc}")
-
-        # 第 3 层：尝试访问底层 SDK 模型的 canvas 属性
-        sdk_model = getattr(model, "_model", None) or getattr(model, "model", None)
-        if sdk_model is not None:
-            for attr_pair in (
-                ("GetCanvasWidth", "GetCanvasHeight"),
-                ("getCanvasWidth", "getCanvasHeight"),
-                ("canvasWidth", "canvasHeight"),
-                ("width", "height"),
-            ):
-                try:
-                    getter_w = getattr(sdk_model, attr_pair[0], None)
-                    getter_h = getattr(sdk_model, attr_pair[1], None)
-                    if getter_w is not None and getter_h is not None:
-                        w = getter_w() if callable(getter_w) else int(getter_w)
-                        h = getter_h() if callable(getter_h) else int(getter_h)
-                        w, h = int(w), int(h)
-                        if MIN_CANVAS_SIZE <= w <= MAX_CANVAS_SIZE and MIN_CANVAS_SIZE <= h <= MAX_CANVAS_SIZE:
-                            safe_print(f"[INFO] 通过 sdk_model.{attr_pair[0]}/{attr_pair[1]} 获取画布尺寸: {w}x{h}")
-                            return w, h
-                except Exception:
-                    continue
-
+            return None
+        if MIN_CANVAS_SIZE <= w <= MAX_CANVAS_SIZE and MIN_CANVAS_SIZE <= h <= MAX_CANVAS_SIZE:
+            return w, h
+        safe_print(f"[WARN] 画布读数 ({w}, {h}) 不在 {MIN_CANVAS_SIZE}..{MAX_CANVAS_SIZE} ⇒ 不采")
         return None
 
     def _live2d_base_size(self) -> tuple[int, int]:
@@ -2168,11 +2314,15 @@ class PetRenderHostMixin:
     # ------------------------------------------------------------ 窗口尺寸调整
 
     def _fit_window_to_model(self):
-        """首帧后按实际画布刷新视觉视口，并保持模型脚底位置。"""
+        """首帧后按实际画布刷新视觉视口，并保持模型脚底位置。
+
+        把 layout 返回出去：`_on_live2d_first_frame` 要知道"这一发请求的是多大"才谈得上读回
+        实得（模型未加载而跳过时返回 None，那条支路本来就没发过尺寸请求）。
+        """
         model = self._l2d_model
         if model is None:
             safe_print("[live2d] _fit_window_to_model: 模型未加载，跳过")
-            return
+            return None
 
         factor = float(getattr(self, "_size_factor", 1.0))
         before = QRect(self.x(), self.y(), self.width(), self.height())
@@ -2193,6 +2343,7 @@ class PetRenderHostMixin:
             f"canvas={layout.widget_width}x{layout.widget_height} "
             f"offset=({layout.widget_x},{layout.widget_y}) factor={factor}"
         )
+        return layout
 
     def _reveal_live2d_window(self):
         """刷新已经正常映射的 OpenGL 子控件，不重置顶层窗口。"""
@@ -2218,6 +2369,9 @@ class PetRenderHostMixin:
     def _fallback_to_png(self, reason: str):
         """清理未就绪的 OpenGL 控件，并在同一最终位置显现 PNG。"""
         self._cancel_live2d_startup_timeout()
+        # 换引擎那一发的读回标志随这一条链作废：否则它悬着，等下一次首帧（可能是普通启动）
+        # 才被泵一次事件、多印一行不属于它的读数。
+        self._l2d_switch_size_check = False
         safe_print(f"[pet] Live2D 不可用，回退 PNG: {reason}")
         old_widget = self.sprite_label
         if old_widget is not None and not isinstance(old_widget, SpriteCanvas):
@@ -2243,10 +2397,14 @@ class PetRenderHostMixin:
         self.show()
         self.raise_()
         self._mark_renderer_ready()
+        # 上面那对 show/raise 把顶层放回屏上，而穿透态该上屏的是 surface 不是窗口：重挂
+        # 挂在这条链最后一步，它会重新 `hide()` 并按 PNG 那块画布向合成器重发尺寸。
+        # 非穿透态（正常启动就是）里这行是 no-op —— `_layer_penetrating()` 直接挡掉。
+        self._remount_layer_after_render_switch("Live2D 不可用，回退 PNG")
 
     def _init_live2d(self):
         from meapet.config.store import resolve_resource_path
-        from meapet.desktop.live2d_widget import Live2DModel
+        from meapet.desktop.live2d_widget import Live2DModel, PLACEHOLDER_CANVAS
         l2d_cfg = self.config.get("live2d", {})
         model_dir = resolve_resource_path(l2d_cfg.get("model_dir", ""))
         safe_print(f"[live2d] 开始初始化，model_dir={model_dir}")
@@ -2266,8 +2424,17 @@ class PetRenderHostMixin:
             self._on_live2d_initialization_failed
         )
         # 子控件保留完整模型画布，顶层窗口只显示配置的视觉视口。
-        layout = self._apply_live2d_viewport_geometry(self._size_factor)
+        # 模型此刻还没加载（`initializeGL` 才加载）⇒ `_live2d_base_size()` 报的是
+        # `PLACEHOLDER_CANVAS`，按它请求顶层尺寸 = 发一个已知是假的数。留给首帧那一发。
+        loaded = getattr(self._l2d_model, "model", None) is not None
+        layout = self._apply_live2d_viewport_geometry(
+            self._size_factor, resize_window=loaded)
         widget.show()
+        if not loaded:
+            safe_print(
+                "[live2d] 画布未加载 ⇒ 这一发不发顶层尺寸请求（现在按占位 "
+                f"{PLACEHOLDER_CANVAS[0]}x{PLACEHOLDER_CANVAS[1]} 请求 = 发一个已知是假的数），"
+                "留给首帧那一发 `_fit_window_to_model`")
         safe_print(
             "[live2d] 控件已创建，等待首帧: "
             f"window={layout.window_width}x{layout.window_height} "
@@ -2298,8 +2465,16 @@ class PetRenderHostMixin:
     def _apply_live2d_viewport_geometry(
         self,
         factor: float,
+        resize_window: bool = True,
     ) -> Live2DViewportLayout:
-        """应用完整画布子控件与裁剪顶层窗口的几何。"""
+        """应用完整画布子控件与裁剪顶层窗口的几何。
+
+        `resize_window=False` 留给"画布还没真加载"那一格：`_live2d_base_size()` 那时读到的是
+        `PLACEHOLDER_CANVAS (525,735)`——一个**已知是假的数**，按它发顶层尺寸请求就是把假信念
+        发给合成器（人工 2026-10-15「PNG 切换到 Live2D 需要重新请求窗口大小，而不是直接切」）
+        ⇒ 这一发连 `self.resize` 与 `_apply_live2d_window_region` 一起跳：region 是按新 layout
+        算的，窗口没跟着变就切 mask 会切错块。子控件的 geometry 照发，否则首帧都引不出来。
+        """
         layout = self._live2d_viewport_layout(factor)
         widget = self.sprite_label
         if widget is not None:
@@ -2309,6 +2484,8 @@ class PetRenderHostMixin:
                 layout.widget_width,
                 layout.widget_height,
             )
+        if not resize_window:
+            return layout
         self.resize(layout.window_width, layout.window_height)
         self._apply_live2d_window_region(layout)
         return layout
@@ -2406,6 +2583,12 @@ class PetRenderHostMixin:
             return
         pixmap = self.renderer.get_current_pixmap()
         if pixmap.isNull():
+            if not getattr(self, "_sprite_empty_noticed", False):
+                self._sprite_empty_noticed = True
+                safe_print(
+                    "[png] 立绘解码为空 ⇒ 窗口停在默认尺寸，屏上不会有立绘"
+                    "（上一条 [png] 行给的是解码失败的具体那张件）"
+                )
             return
         target_w = int(pixmap.width() * self._scale * self._size_factor)
         target_h = int(pixmap.height() * self._scale * self._size_factor)
@@ -2419,12 +2602,19 @@ class PetRenderHostMixin:
                 Qt.SmoothTransformation,
             )
         target_size = scaled.size()
-        if self.sprite_label.pos() != QPoint(0, 0):
-            self.sprite_label.move(0, 0)
-        if self.sprite_label.size() != target_size:
-            self.sprite_label.resize(target_size)
-        if self.size() != target_size:
-            self.resize(target_size)
+        # 测量轮内只跳**几何**这三写，画面照换（下面 `set_frame`）。
+        # 判据见 `_probe_owns_geometry`：那一次 `move(0,0)` 抹掉的是 H 手摆出去的探针位移，
+        # 后果是安静挂歪而不是拒绝。反过来若把 `set_frame` 一起冻住，屏上是旧像素而模板是
+        # 新像素 —— 那是拿另一种分叉去修这一种。
+        # 轮内换了一张**不同尺寸**的立绘时，窗口不跟着 `set_frame` 里那次 widget 自缩，
+        # 四向空档会变；下一发眨眼（~4 s）在轮外重跑本函数就把尺寸补齐，不为此加代码。
+        if not self._probe_owns_geometry():
+            if self.sprite_label.pos() != QPoint(0, 0):
+                self.sprite_label.move(0, 0)
+            if self.sprite_label.size() != target_size:
+                self.sprite_label.resize(target_size)
+            if self.size() != target_size:
+                self.resize(target_size)
         if hasattr(self.sprite_label, "set_frame"):
             self.sprite_label.set_frame(scaled)
         else:
@@ -2925,6 +3115,9 @@ class PetRenderHostMixin:
                     pass
 
     def _toggle_render_mode(self):
+        # 测量在飞时切模式：被删的是它正在量那只 widget，读数与 `_pending_mount` 那份矩形
+        # 会落到切换后的新画布上。先作废这一发（没有待挂时它就是 no-op）。
+        self._cancel_premount_measure()
         if self._use_live2d:
             self._cancel_live2d_startup_timeout()
             if self.sprite_label:
@@ -2945,7 +3138,28 @@ class PetRenderHostMixin:
             self._save_config()
             if getattr(self, "_standby", False):
                 self._ensure_standby_click_through()
+            # 换引擎 ⇒ 向合成器重发一次挂载（surface 尺寸是 `enable()` 一次性定死的）。
+            # 挂在这条链的**最后一步**而不是 `_init_png_renderer` 里面：挂载自己会 `hide()`，
+            # 夹在中间会被后续任何 show/raise 盖回来，见 `_remount_layer_after_render_switch`。
+            self._remount_layer_after_render_switch("PNG")
         else:
+            # 穿透态换引擎**结构上到不了首帧**：`initializeGL` 只由 Qt 的绘制路派发，而穿透态
+            # 顶层被 `_do_layer_mount` 里那句 `hide()` 收掉了（`live2d_widget.py` 的
+            # `render_offscreen` 自己写着"穿透模式下 Qt 不再派发 paintGL"）。切过去的下场是
+            # 5 s 超时 → `_fallback_to_png`，而 `enabled=True` 已经写盘 ⇒ 下次启动再付一次
+            # 「加载→超时→回退」。这一格是**拒绝并说实话**，不是让穿透态换引擎可用。
+            if self._layer_penetrating():
+                safe_print(
+                    "[live2d] ✗ 没换引擎：穿透态里顶层是隐藏的，Live2D 控件不会初始化，"
+                    "切过去 5 秒后会自动退回 PNG（config 未改写、PNG 控件未删）")
+                self._show_bubble(
+                    "穿透态里换引擎先切回交互态：Live2D 控件在窗口隐藏时不初始化，"
+                    "现在切过去 5 秒后会自动退回 PNG",
+                    bubble_duration_ms(self.config, "interaction"),
+                )
+                return
+            # 换引擎要人看见尺寸对不对 ⇒ 首帧那一发之后读回一次实得（见 `_on_live2d_first_frame`）。
+            self._l2d_switch_size_check = True
             if self.renderer:
                 self.renderer.stop_blink_animation()
                 self.renderer = None

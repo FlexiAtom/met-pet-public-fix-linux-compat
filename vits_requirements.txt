@@ -6,6 +6,8 @@ numpy<2
 scipy
 librosa
 Cython
+# ja 前端（vits_core/text/japanese.py:3 无条件 import）。只有 cp36–cp311 的 wheel，
+# 请用 3.10/3.11 建这个环境；3.12 装不上（2026-10-16 现量，理由见 linux_requirements.txt 顶部）。
 pyopenjtalk-prebuilt
 unidecode
 jamo

@@ -80,7 +80,7 @@ goto ready
 echo [MeaPet] failed to create .venv
 echo.
 echo Fix options:
-echo   1. install Python 3.10+ with Add to PATH ^(local VITS recommends 3.10-3.12^)
+echo   1. install Python 3.11+ with Add to PATH ^(Live2D needs 3.11+; local VITS env is separate^)
 echo   2. manual:
 echo      uv python install 3.12
 echo      uv venv --python 3.12 .venv
@@ -163,11 +163,14 @@ exit /b !ERR!
 
 :create_venv_with_system_python
 set "SYS_PY="
+rem Floor is 3.11 here, not the 3.10 the pet itself runs on: live2d-py needs
+rem Requires-Python >=3.11 since 0.8 (its wheel is cp311-abi3), so a 3.10 .venv
+rem can never get Live2D. Existing .venv is reused above this branch untouched.
 where py >nul 2>&1
 if not errorlevel 1 (
-    for %%V in (3.12 3.13 3.11 3.10 3) do (
+    for %%V in (3.12 3.13 3.11 3) do (
         if not defined SYS_PY (
-            py -%%V -c "import sys; raise SystemExit(0 if sys.version_info[:2]>=(3,10) else 1)" >nul 2>&1
+            py -%%V -c "import sys; raise SystemExit(0 if sys.version_info[:2]>=(3,11) else 1)" >nul 2>&1
             if not errorlevel 1 (
                 for /f "delims=" %%i in ('py -%%V -c "import sys; print(sys.executable)" 2^>nul') do set "SYS_PY=%%i"
             )
@@ -177,14 +180,14 @@ if not errorlevel 1 (
 if not defined SYS_PY (
     where python >nul 2>&1
     if not errorlevel 1 (
-        python -c "import sys; raise SystemExit(0 if sys.version_info[:2]>=(3,10) else 1)" >nul 2>&1
+        python -c "import sys; raise SystemExit(0 if sys.version_info[:2]>=(3,11) else 1)" >nul 2>&1
         if not errorlevel 1 (
             for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do set "SYS_PY=%%i"
         )
     )
 )
 if not defined SYS_PY (
-    echo [MeaPet] no system Python 3.10+
+    echo [MeaPet] no system Python 3.11+ ^(Live2D needs it; pet itself runs on 3.10^)
     exit /b 1
 )
 echo [MeaPet] system Python: !SYS_PY!
@@ -205,9 +208,9 @@ if defined UV_CMD (
         "!UV_CMD!" pip install -r linux_requirements.txt --python "!PY_CMD!" --index-url https://pypi.org/simple
     )
     if errorlevel 1 exit /b 1
-    echo [MeaPet] optional live2d-py...
-    "!UV_CMD!" pip install live2d-py --python "!PY_CMD!" --index-url "%UV_INDEX_URL%" >nul 2>&1
-    if errorlevel 1 "!UV_CMD!" pip install live2d-py --python "!PY_CMD!" >nul 2>&1
+    echo [MeaPet] optional live2d-py (need 1.0.0+, python 3.11+ only)...
+    "!UV_CMD!" pip install "live2d-py>=1.0.0" --python "!PY_CMD!" --index-url "%UV_INDEX_URL%" >nul 2>&1
+    if errorlevel 1 "!UV_CMD!" pip install "live2d-py>=1.0.0" --python "!PY_CMD!" >nul 2>&1
     if errorlevel 1 echo [MeaPet] live2d-py skipped, PNG mode
     exit /b 0
 )
@@ -216,7 +219,7 @@ echo [MeaPet] pip install...
 "!PY_CMD!" -m pip install -r linux_requirements.txt --prefer-binary -i "%UV_INDEX_URL%"
 if errorlevel 1 "!PY_CMD!" -m pip install -r linux_requirements.txt --prefer-binary
 if errorlevel 1 exit /b 1
-"!PY_CMD!" -m pip install live2d-py --prefer-binary >nul 2>&1
+"!PY_CMD!" -m pip install "live2d-py>=1.0.0" --prefer-binary >nul 2>&1
 if errorlevel 1 echo [MeaPet] live2d-py skipped, PNG mode
 exit /b 0
 

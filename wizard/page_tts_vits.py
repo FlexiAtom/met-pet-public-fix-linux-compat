@@ -91,20 +91,6 @@ class TtsPageVitsMixin:
         if dir_path:
             input_field.setText(dir_path)
 
-    def _is_pet_exe(self, py_exe: str) -> bool:
-        """判断是否为打包版 MeaPet.exe（非真正 Python 解释器）。"""
-        try:
-            from meapet.tts.common import is_pet_executable
-
-            return is_pet_executable(py_exe)
-        except Exception:
-            if not (getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")):
-                return False
-            try:
-                return os.path.realpath(py_exe) == os.path.realpath(sys.executable)
-            except Exception:
-                return False
-
     @staticmethod
     def _path_is_pet_exe(py_exe: str) -> bool:
         """Static-safe pet-exe check (works when mixin methods are unbound)."""
@@ -121,24 +107,31 @@ class TtsPageVitsMixin:
                 return False
 
     def _check_vits(self):
-        """检查 VITS 模型是否就绪，并预告实际会走哪条路"""
-        from meapet.paths import project_path
+        """检查 VITS 模型是否就绪，并预告实际会走哪条路
+
+        路径按交付码同一判据取：``tts.vits_model`` 有值就用它，没有才回落到随包那份。
+        从前这里写死 ``vits_models/G_latest.pth``，于是把真身放在别处、配置里也如实写
+        了的机器（本机实测：配置指向 158 MB 的 ``~/vits_weights/G_latest.pth``，而随包
+        那格还是 134 B 的 LFS pointer）会被报成「权重仍是 Git LFS pointer」。
+        """
         from meapet.tts.common import (
-            DEFAULT_VITS_CONFIG_NAME,
-            DEFAULT_VITS_MODEL_NAME,
             is_git_lfs_pointer,
+            vits_config_path,
+            vits_model_path,
         )
 
-        model_path = project_path("vits_models", DEFAULT_VITS_MODEL_NAME)
-        config_path = project_path("vits_models", DEFAULT_VITS_CONFIG_NAME)
+        model_path = self._vits_model_path()
+        config_path = self._vits_config_path()
+        configured = model_path != vits_model_path()
+        origin = "来自 tts.vits_model" if configured else "随包默认"
         # exists() 对 LFS 指针为真——从前它会显示"模型就绪（0 MB）"，
         # 而 speak() 那边同一份文件被判不可用（service.py 的 pointer 分支）。
         if is_git_lfs_pointer(model_path):
             set_status(
                 self.vits_status,
                 "error",
-                "VITS 权重仍是 Git LFS pointer（不会自动拉取）"
-                "——运行 git lfs pull，或手动放置真身",
+                f"VITS 权重仍是 Git LFS pointer（{model_path}，{origin}）"
+                "——不会自动拉取，运行 git lfs pull 或手动放置真身",
             )
             return
         if os.path.isfile(model_path) and os.path.isfile(config_path):
@@ -148,14 +141,35 @@ class TtsPageVitsMixin:
             set_status(
                 self.vits_status,
                 "success",
-                f"VITS 模型就绪（{model_size:.0f} MB）{suffix}",
+                f"VITS 模型就绪（{model_size:.0f} MB，{origin}）{suffix}",
+            )
+        elif not os.path.isfile(model_path):
+            set_status(
+                self.vits_status,
+                "error",
+                f"VITS 权重不存在（{model_path}，{origin}）"
+                "——不会自动下载，请放置真身或改 config.json 的 tts.vits_model",
             )
         else:
             set_status(
                 self.vits_status,
                 "error",
-                "VITS 模型文件缺失（不会自动下载，请手动放置或点下方安装）",
+                f"VITS 说话人表缺失（{config_path}）——权重在，但没有它点不出声",
             )
+
+    def _vits_model_path(self) -> str:
+        """本次要用的权重路径：配置优先，留空回落到随包那份（与交付码同一顺序）。"""
+        from meapet.tts.common import vits_model_path
+
+        return str(getattr(self, "_vits_model_cfg", "") or "").strip() or vits_model_path()
+
+    def _vits_config_path(self) -> str:
+        from meapet.tts.common import vits_config_path
+
+        return (
+            str(getattr(self, "_vits_config_cfg", "") or "").strip()
+            or vits_config_path()
+        )
 
     def _vits_route_summary(self) -> str:
         """据当前输入框内容预告实际走哪条路 —— 与交付码同一判据。
@@ -395,6 +409,13 @@ class TtsPageVitsMixin:
             log(f"✓ 当前 Python 已有 torch {ver_info}")
             self._ensure_vits_deps(_sys.executable, log)
             return
+        if TtsPageVitsMixin._path_is_pet_exe(_sys.executable):
+            # 打包版里 _check_torch 在最上游就按 pet exe 返回 False，所以那句
+            # 「打包版无法检测 VITS 依赖」以前走不到（谓词与上游是同一个，两边锁死）。
+            # 这里显式把它请出来出声；不 return——后面的档位找到真解释器就会覆盖这条结论。
+            self._ensure_vits_deps(
+                _sys.executable, log, status_widget=self.vits_status
+            )
 
         # 0️⃣.5️⃣ 项目自带的 _python（embedable，已存在则省去 venv 创建）
         # embeddable 是 Windows 便携包的形态，POSIX 上没有这种目录，isfile 自然为假。

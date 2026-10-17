@@ -8,6 +8,8 @@ MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screen
 
 **Mobile Version**: [mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile) (Lightweight mobile client with core features)
 
+**Official QQ Group**: 1128485088 (in the join request, please state: your purpose + the OS you use)
+
 ## Current Capabilities
 
 | Capability | Description |
@@ -17,15 +19,16 @@ MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screen
 | Agent | Hermes TUI Gateway, OpenClaw Gateway v4, or custom Agent Link v1 over WebSocket |
 | Display | Streaming text bubble without TTS; waits for audio then shows bubble + plays in sync |
 | Multi-segment replies | Each segment has its own bubble, mood, voice text, language, and TTS style |
-| Speech | MiMo cloud TTS, local GPT-SoVITS, local VITS; GPT-SoVITS supports per-language reference audio |
+| Speech | MiMo cloud TTS, local GPT-SoVITS, local VITS; GPT-SoVITS supports per-language reference audio. Content guarantee (see [Multi-language Speech](#multi-language-speech)): **only VITS × zh is confirmed intelligible by human listening; every other combination only guarantees that audio comes out** |
 | Vision | Disabled, inherit main model, or relay via independent vision model |
 | Reverse control | Shared frontend tools over Companion MCP or the same Agent Link connection |
+| QQ channel | OneBot v11 — initiator (forward WebSocket / HTTP API) or receiver (reverse WebSocket / event POST), works with NapCat and SnowLuma, plus a hub endpoint for downstream consumers such as the bundled `dsh-onebot-relay` plugin |
 | Local data | SQLite memory, affection, per-backend/per-session conversation timeline |
 | Rendering | Live2D dynamic model and PNG diff sprites, switchable at runtime |
 
 ## Quick Start
 
-The companion requires Python 3.10+ (project defaults to 3.12). For local VITS, Python 3.10–3.12 is recommended due to dependency compatibility.
+The companion requires Python 3.10+ (project defaults to 3.12). For local VITS, Python 3.10–3.12 is recommended due to dependency compatibility. On Windows, `启动桌宠.bat` picks a **3.11+** interpreter when creating a new environment: Live2D needs it (the upstream package requires 3.11+ since 0.8), while 3.10 only ever gets PNG.
 
 ### Windows
 
@@ -46,7 +49,41 @@ python setup_wizard.py
 python pet.py
 ```
 
-`live2d-py` is optional; falls back to PNG when unavailable. Prebuilt packages are available at [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py).
+`live2d-py` is optional; falls back to PNG when unavailable. This product only speaks the
+**1.0.0-and-later** API surface:
+
+```bash
+pip install "live2d-py>=1.0.0"
+```
+
+That package requires **Python 3.11+** (upstream has shipped `cp311-abi3` and later artifacts
+only, since 0.8). Linux manylinux wheels only reached PyPI at v0.8.0.9 (2026-09-24); the older
+0.7.x line had Windows/macOS artifacts only, so running a 0.7-era Linux wheel here falls back to
+PNG by design rather than by bug. Upstream and prebuilt packages:
+[EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py).
+
+#### Arch-based systems: PyQt5's Qt5 is redirected to the system Qt5
+
+The PyQt5 wheel from pip ships its own Qt5. The Linux bundle/test environment this project is developed against (Arch-based) repoints it at the **system Qt5**:
+
+```text
+site-packages/PyQt5/Qt5/lib     -> /usr/lib
+site-packages/PyQt5/Qt5/plugins -> /usr/lib/qt/plugins
+```
+
+The wheel's own copies are not deleted — they stay in `lib.bak/` and `plugins.bak/` next to the links. The stated motive is resolving conflicts (the maintainer's wording; I did not independently verify the mechanism). No script in this repository does this, so a clean `pip install -r linux_requirements.txt` environment has neither link and needs none of the below.
+
+The cost is that **every Qt5 module family the app actually imports must be installed on the system side** — whichever one is missing, that path fails. Today only speech playback hits this: without `qt5-multimedia`, `from PyQt5.QtMultimedia import QMediaPlayer` always raises `ImportError: libQt5Multimedia.so.5: cannot open shared object file`, playback falls back to `aplay`, and `aplay` takes no volume argument — so the two volume sliders in Settings do nothing (**audio still plays, only the volume setting has no effect**).
+
+Don't guess — ask the diagnostic view:
+
+```bash
+python -m meapet --doctor --skip-tts | grep audio_playback
+```
+
+`绑定=在场 底层=可加载` (binding present, backend loads) means the Qt path works and volume applies; `底层=加载失败：<reason>` (backend fails to load) tells you which system package to install — on Arch it is `qt5-multimedia`. Skipping the redirect and keeping the wheel's own Qt5 works too; both paths play audio, and what differs is who owns the volume setting and whether that library family upgrades with pip or with the system.
+
+**Mixing two Qt5 families in one process aborts (measured 2026-10-16).** If you apply only half of the two symlinks above, or point `QT_PLUGIN_PATH` at the system `/usr/lib/qt/plugins` while `libQt5Core` still loads from the wheel's own family, Qt goes looking for platform plugins in the **system** family. Those plugins need `Qt_5_PRIVATE_API` symbols that only `/usr/lib/libQt5Gui.so.5` exports, and nothing in the bundled family exports them ⇒ the plugin `dlopen` fails ⇒ Qt calls `qFatal + abort()`: the terminal prints `qt.qpa.plugin: Could not load the Qt platform plugin "xcb"/"wayland" ... even though it was found.` and then `已中止（核心已转储）` (Aborted, core dumped). Python's `try/except` **cannot catch it**. The guard (`meapet/desktop/qpa_guard.py`) says so **before** `QApplication` is constructed and repoints **this process's** `QT_QPA_PLATFORM_PLUGIN_PATH` at the `platforms` directory of the family that actually loaded — it leaves `QT_PLUGIN_PATH` alone, because the fcitx5/ibus input-method plugins live there and dropping it would leave you unable to type Chinese in any text field. Set `MEA_PET_QPA_NO_REPAIR=1` if you want the explanation without the repair (the abort then happens exactly as before). Two permanent exits, either one: **start with the project's own `.venv/bin/python`** (it is the full redirect above, same family as the system), or `env -u QT_PLUGIN_PATH python pet.py`.
 
 The configuration wizard can also be reopened from the pet's right-click menu ("Open Settings…") at any time. After saving, the new backend takes effect immediately; any in-flight generations from the old backend are cancelled.
 
@@ -108,7 +145,7 @@ Agent mode treats MeaPet as a pure desktop frontend:
 - Internal tool names and raw parameters are not displayed in character bubbles. Safe status (start, complete, failure) enters the timeline; diagnostic details go to logs only.
 - Agent mode uses WebSocket only. Hermes connects to the native TUI Gateway exposed by `hermes serve`; OpenClaw connects to Gateway v4; a custom backend can implement Agent Link v1. HTTP/SSE model endpoints belong exclusively to direct mode.
 - Connections are reused across turns and carry bidirectional streaming, cancellation, ping/pong, and protocol-specific reconnect recovery. OpenClaw retries with the same idempotency key; Hermes resumes the stored session and reconciles history instead of blindly resubmitting a possibly executed tool turn.
-- Agent Link uses one outbound connection for chat and frontend tool calls. MeaPet publishes typed tool schemas after the handshake, so the third-party connector can register them in its own Agent loop and can proactively call `meapet.say`.
+- Agent Link uses one outbound connection for chat and frontend tool calls. MeaPet publishes typed tool schemas after the handshake, so the third-party connector can register them in its own Agent loop and can proactively call `meapet_say`.
 - Agent responses must follow the MeaPet segmented output format. Malformed output raises an explicit format-repair state; no Agent path silently falls back to an HTTP model endpoint.
 
 The local `session_id` identifies MeaPet's timeline scope. OpenClaw additionally persists its Gateway `session_key`; Hermes persists the server-returned `remote_session_id` and uses `session.resume` after restart or reconnect. "Clear memory" in Agent mode explicitly starts a new upstream Agent session. Old timelines remain readable.
@@ -137,6 +174,28 @@ Both direct and Agent modes share the same presentation layer, so switching back
 
 ## Multi-language Speech
 
+### What is actually intelligible
+
+A human-ear pass over every engine × language combination on 2026-10-13 fixed this guarantee:
+**only VITS × zh is guaranteed to be correct; everything else is guaranteed to make sound.**
+Every row below the first only promises that audio is produced and played — not that what it says
+is correct, complete, or intelligible.
+
+| Engine × language | Guarantee |
+|------|------|
+| VITS × zh | **Correct** (confirmed by human listening) |
+| VITS × ja / en | Sound only. ja is unconfirmed ("sounds like Japanese" is not evidence of intelligibility); en measurably breaks down |
+| GPT-SoVITS × zh / ja | Sound only. zh is unreadable in practice (half sentences, repetition); ja has no judge at all — the person doing the listening does not read Japanese, so verification stops at "it made sound" |
+| GPT-SoVITS × en | Not even sound: currently produces no audio, missing NLTK `averaged_perceptron_tagger_eng` |
+| MiMo cloud TTS | No content verification was done this round; no guarantee claimed here |
+
+This does not change how the configuration keys below work, and it does not contradict the health
+checks: `python -m meapet --doctor` and the green light on the speech page report whether the
+**preconditions are met** (interpreter, dependencies, weights, reference audio) — never whether the
+words came out right. Machine proxies here (this repo ships a zh/en-only ASR) can tell "collapsed"
+or "repeating", but cannot tell "it read the wrong sentence". Only an ear settles content, and so
+far only the first row above has one.
+
 GPT-SoVITS can be configured with a fixed reference audio per language in `tts.reference_audios`. Each entry must specify the language; paths can be project-relative or absolute. Reference text can be left empty:
 
 ```json
@@ -154,6 +213,20 @@ GPT-SoVITS can be configured with a fixed reference audio per language in `tts.r
 ```
 
 Legacy `gsv_ref_wav` + `gsv_ref_lang` fields are read-only migrated to a single reference audio entry. A `.txt` file with the same name as the WAV is used as reference text.
+
+The GPT-SoVITS project root normally needs no configuration: the app walks up from `tts.python_exe` looking for the `GPT_SoVITS/TTS_infer_pack/` marker. Only one case has to state it explicitly — an interpreter installed **outside** the source tree (typically a conda env, e.g. `/home/you/miniconda3/envs/GPTSoVits/bin/python`), where the upward walk never reaches the marker. Point `tts.gsv_root` at the absolute path of the directory containing `GPT_SoVITS/`:
+
+```json
+{
+  "tts": {
+    "engine": "gpt_sovits",
+    "python_exe": "/home/you/miniconda3/envs/GPTSoVits/bin/python",
+    "gsv_root": "/home/you/GPT-SoVITS-v2pro"
+  }
+}
+```
+
+This key has no wizard entry and can only be set in `config.json`; if the directory you give lacks `GPT_SoVITS/TTS_infer_pack/`, it is ignored and the automatic upward walk is used instead. Paths are not `~`-expanded — write a full absolute path.
 
 Speech translation uses MeaPet's built-in non-LLM machine translation service pool, rotating services on single-segment failure (max 3 total attempts). When "prefer model voice translation" is enabled, the model's returned `voice_language` and `voice_text` are checked against the configured target language — if inconsistent, they are translated to the target. A separate "translate when unsupported" toggle controls fallback for unsupported output languages. When translation ultimately fails, the voice segment is skipped and the text bubble is preserved.
 
@@ -183,10 +256,10 @@ Only four tools are exposed:
 
 | Tool | Capability |
 |------|-----------|
-| `meapet.say` | Queue one or more complete reply segments; does not preempt pending user replies |
-| `meapet.express` | Request a mood or action the frontend explicitly supports; no implicit mapping |
-| `meapet.get_state` | Read rendering, TTS capability, character state, and affection level summary; does not return paths, secrets, memory, or full chat history |
-| `meapet.capture_screen` | Request a screenshot (fullscreen, region, or application); requires local per-shot confirmation; results never written to disk |
+| `meapet_say` | Queue one or more complete reply segments; does not preempt pending user replies |
+| `meapet_express` | Request a mood or action the frontend explicitly supports; no implicit mapping |
+| `meapet_get_state` | Read rendering, TTS capability, character state, and affection level summary; does not return paths, secrets, memory, or full chat history |
+| `meapet_capture_screen` | Request a screenshot (fullscreen, region, or application); requires local per-shot confirmation; results never written to disk |
 
 Security constraints:
 
@@ -197,6 +270,31 @@ Security constraints:
 - The service also validates source IP, Host, Origin, request size, and rate.
 
 Custom Agent Link does not start this second listener. It projects the same capability registry over the existing WebSocket, so chat, proactive messages, and tool calls remain on one connection.
+
+## QQ Channel (OneBot v11)
+
+MeaPet can also be a QQ bot. It implements OneBot v11 in both directions, so it plugs into NapCat or
+SnowLuma either way round:
+
+- **Initiator** — `forward_ws` (connect out to the peer's WebSocket server) and `http_api` (call the
+  peer's HTTP API to send).
+- **Receiver** — `reverse_ws` (listen, let the peer connect in) and `http_post` (accept event POSTs).
+- **Hub** — an endpoint downstream consumers attach to as OneBot clients: they receive QQ events and
+  can send replies. This is how the bundled `dsh-onebot-relay` dsh plugin drives dsh agent sessions
+  from QQ.
+
+`onebot.reply_mode` decides who answers: `pet` (the desktop pet's own backend), `hub` (only the
+downstream consumer, e.g. dsh), or `both`. Group chats require an `@` by default, and per-user /
+per-group allowlists are available.
+
+Inbound QQ text is never echoed into the pet's bubble — bubbles are character speech, so only the
+pet's own reply appears there. Turns are serialized (one at a time) with a timeout on both sides,
+so a lost reply cannot wedge the queue.
+
+Full contract, config reference, endpoint table, NapCat/SnowLuma wiring, security notes, and the dsh
+plugin install steps: [`docs/onebot.md`](docs/onebot.md).
+Overall architecture (component map, threading model, routing, failure modes, extension points,
+deployment/rollback runbook): [`docs/onebot-architecture.md`](docs/onebot-architecture.md).
 
 ## Configuration
 
@@ -245,7 +343,7 @@ Secret priority: environment variable > `config.json` plaintext. Config values a
 | `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway token |
 | `AGENT_LINK_TOKEN` / `MEAPET_AGENT_TOKEN` | Custom Agent Link token |
 | `MEAPET_CONTROL_TOKEN` | Companion MCP Bearer Token |
-| `GSV_PYTHON` | GPT-SoVITS environment `python.exe` |
+| `MEA_PET_GSV_PYTHON` | GPT-SoVITS environment `python.exe` |
 | `MEAPET_PIP_INDEX_URL` / `PIP_INDEX_URL` | Python package index override; defaults to Tsinghua TUNA |
 | `MEAPET_TORCH_INDEX_URL` / `TORCH_INDEX_URL` | Optional PyTorch wheel index override |
 | `MEAPET_HF_ENDPOINT` / `HF_ENDPOINT` | Optional Hugging Face endpoint override |

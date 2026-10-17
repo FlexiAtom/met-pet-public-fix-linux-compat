@@ -151,8 +151,8 @@ class UiRefactorTests(unittest.TestCase):
 
         self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
         self.assertEqual(normalize_theme_mode("LIGHT"), "light")
-        self.assertEqual(normalize_theme_mode("whatever"), "system")
-        self.assertIn(resolved_scheme("system"), ("light", "dark"))
+        self.assertEqual(normalize_theme_mode("whatever"), "dark")
+        self.assertEqual(resolved_scheme("system"), "dark")
         self.assertEqual(resolved_scheme("light"), "light")
 
         set_ui_theme_mode("dark")
@@ -164,6 +164,191 @@ class UiRefactorTests(unittest.TestCase):
         self.assertNotEqual(dark_sheet, light_sheet)
         set_ui_theme_mode("dark")
         self.assertEqual(get_named_style("WIZARD_STYLESHEET"), dark_sheet)
+
+    def test_system_theme_preference_cannot_reach_the_scheme(self) -> None:
+        """深浅色只认配置：系统探测整条撤掉后，任何 OS 读数都不得改变方案。
+
+        跨机器复现时字色不一致的那条源就在这里——Linux 分支的判据是
+        ``"light" in gsettings stdout``，同一份配置在不同桌面环境下会解出不同方案。
+        """
+        import json
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        import meapet.ui_theme as ui_theme
+        from meapet.ui_theme import (
+            get_active_scheme,
+            get_ui_theme_mode,
+            load_ui_colors_from_config,
+            normalize_theme_mode,
+            set_ui_theme_mode,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.assertFalse(
+            hasattr(ui_theme, "resolve_system_theme"),
+            "系统深浅色探测又回来了：meapet.ui_theme.resolve_system_theme",
+        )
+        source = (
+            Path(__file__).resolve().parents[1] / "meapet" / "ui_theme.py"
+        ).read_text(encoding="utf-8")
+        for probe in (
+            "AppsUseLightTheme",
+            "AppleInterfaceStyle",
+            "org.freedesktop.appearance",
+            "color-scheme",
+        ):
+            # assertFalse 而非 assertNotIn：后者失败时会把整份源码打进报告。
+            self.assertFalse(
+                probe in source,
+                f"深浅色 OS 探测残留：{probe}",
+            )
+
+        self.assertEqual(normalize_theme_mode("system"), "dark")
+
+        # 配置里没写 ui.theme，且 gsettings 当场报 light ⇒ 仍落在默认档。
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(json.dumps({"ui": {}}), encoding="utf-8")
+            fake = subprocess.CompletedProcess([], 0, stdout="light\n", stderr="")
+            with patch("subprocess.run", return_value=fake), patch(
+                "shutil.which", return_value="/bin/gsettings"
+            ):
+                load_ui_colors_from_config(path)
+            self.assertEqual(get_active_scheme(), "dark")
+
+    def test_text_color_from_config_overrides_the_scheme_token(self) -> None:
+        from meapet.ui_theme import (
+            PALETTE,
+            TEXT_COLOR_DEFAULT,
+            effective_text_color,
+            get_text_color,
+            get_ui_theme_mode,
+            set_text_color,
+            set_ui_theme_mode,
+            text_color_note,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.addCleanup(set_text_color, get_text_color())
+        set_ui_theme_mode("dark")
+        set_text_color(TEXT_COLOR_DEFAULT)
+        self.assertEqual(text_color_note(), "")
+        self.assertEqual(PALETTE["text_primary"], "#F5F5F5")
+        self.assertEqual(effective_text_color(), "#F5F5F5")
+
+        # 一个深色底上读得出来的自定义字色，必须真的走到令牌与样式表。
+        effective = set_text_color("#9FE7C4")
+        self.assertEqual(effective, "#9FE7C4")
+        self.assertEqual(PALETTE["text_primary"], "#9FE7C4")
+        from meapet.desktop import theme as desktop_theme
+
+        self.assertEqual(desktop_theme.COLOR_TEXT, "#9FE7C4")
+        self.assertIn(
+            "color: #9FE7C4",
+            desktop_theme.DIALOGUE_STYLE,
+            "字色覆盖必须重建命名 QSS，否则气泡沿用方案里那份字色",
+        )
+
+    def test_text_color_normalizes_illegal_values_to_default(self) -> None:
+        from meapet.ui_theme import (
+            TEXT_COLOR_DEFAULT,
+            get_text_color,
+            get_ui_theme_mode,
+            normalize_text_color,
+            set_text_color,
+            set_ui_theme_mode,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.addCleanup(set_text_color, get_text_color())
+        self.assertEqual(normalize_text_color("f5f5f5"), "#F5F5F5")
+        self.assertEqual(normalize_text_color("#F5F5F5"), "#F5F5F5")
+        for bad in ("", None, "white", "#FFF", "#GGGGGG", "rgb(255,0,0)"):
+            with self.subTest(value=bad):
+                self.assertEqual(normalize_text_color(bad), TEXT_COLOR_DEFAULT)
+        set_text_color("not-a-color")
+        self.assertEqual(get_text_color(), TEXT_COLOR_DEFAULT)
+
+    def test_unreadable_text_color_is_refused_with_a_note(self) -> None:
+        from meapet.ui_theme import (
+            TEXT_COLOR_DEFAULT,
+            TEXT_COLOR_MIN_CONTRAST,
+            effective_text_color,
+            get_text_color,
+            get_ui_theme_mode,
+            set_text_color,
+            set_ui_theme_mode,
+            text_color_note,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.addCleanup(set_text_color, get_text_color())
+        set_ui_theme_mode("light")
+        # 默认白字配浅底（实测最低对比度 1.01）⇒ 拒这个覆盖值、回落到方案字色并留一行。
+        effective = set_text_color(TEXT_COLOR_DEFAULT)
+        self.assertEqual(effective, "#1C1C1E")
+        self.assertEqual(effective_text_color(), "#1C1C1E")
+        note = text_color_note()
+        self.assertTrue(note, "覆盖被拒时必须留下一行原因")
+        self.assertIn("对比度", note)
+        self.assertIn(str(TEXT_COLOR_MIN_CONTRAST), note)
+
+        # 换一个浅色底上读得出来的字色 ⇒ 覆盖生效，且不留那行说明。
+        self.assertEqual(set_text_color("#0A0A0A"), "#0A0A0A")
+        self.assertEqual(text_color_note(), "")
+
+    def test_text_color_override_survives_scheme_switch(self) -> None:
+        from meapet.ui_theme import (
+            effective_text_color,
+            get_text_color,
+            get_ui_theme_mode,
+            set_text_color,
+            set_ui_theme_mode,
+        )
+
+        self.addCleanup(set_ui_theme_mode, get_ui_theme_mode())
+        self.addCleanup(set_text_color, get_text_color())
+        set_ui_theme_mode("dark")
+        # 用一枚"深色底读得出来、浅色底读不出来"的字色：方案切换若没重放覆盖，
+        # 切回深色会拿到深底自带那份 #F5F5F5，这条断言当场红。
+        set_text_color("#9FE7C4")
+        self.assertEqual(effective_text_color(), "#9FE7C4")
+        set_ui_theme_mode("light")
+        self.assertEqual(effective_text_color(), "#1C1C1E")
+        set_ui_theme_mode("dark")
+        self.assertEqual(effective_text_color(), "#9FE7C4")
+
+    def test_example_and_store_agree_on_text_color_default(self) -> None:
+        import json
+        from pathlib import Path
+
+        from meapet.config.store import normalize_config
+        from meapet.ui_theme import TEXT_COLOR_DEFAULT, UI_THEME_MODE_DEFAULT
+
+        root = Path(__file__).resolve().parents[1]
+        example = json.loads(
+            (root / "config.example.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(example["ui"]["theme"], UI_THEME_MODE_DEFAULT)
+        self.assertEqual(example["ui"]["text_color"], TEXT_COLOR_DEFAULT)
+        ui = normalize_config({"ui": {}})["ui"]
+        self.assertEqual(ui["theme"], UI_THEME_MODE_DEFAULT)
+        self.assertEqual(ui["text_color"], TEXT_COLOR_DEFAULT)
+        # 老配置里的 "system" 与坏值一起被归一，不留第二个真值。
+        legacy = normalize_config(
+            {"ui": {"theme": "system", "text_color": "white"}}
+        )["ui"]
+        self.assertEqual(legacy["theme"], UI_THEME_MODE_DEFAULT)
+        self.assertEqual(legacy["text_color"], TEXT_COLOR_DEFAULT)
+
+    def test_wizard_theme_offers_no_system_option(self) -> None:
+        from wizard.app import SetupWizard
+
+        wizard = self._track(SetupWizard())
+        self.assertEqual(set(wizard._theme_radios), {"light", "dark"})
+        self.assertNotIn("跟随系统", [r.text() for r in wizard._theme_radios.values()])
 
     def test_wizard_check_controls_have_visible_focus_ring(self) -> None:
         from wizard.styles import WIZARD_STYLESHEET
@@ -420,7 +605,7 @@ class UiRefactorTests(unittest.TestCase):
         self.assertIsInstance(wizard.tabs.list, QListWidget)
         self.assertEqual(
             [wizard.tabs.tabText(index) for index in range(wizard.tabs.count())],
-            ["环境", "Live2D", "对话", "语音", "屏幕识图", "语音输入"],
+            ["环境", "Live2D", "对话", "语音", "屏幕识图", "语音输入", "OneBot"],
         )
         live2d_scroll = wizard.tabs.widget(wizard.TAB_LIVE2D)
         self.assertIs(
@@ -745,6 +930,66 @@ class UiRefactorTests(unittest.TestCase):
             side_effect=deleted_widget_error,
         ):
             page._run_checks()
+
+    def test_packaged_build_reports_bundle_without_offering_to_install(self) -> None:
+        """打包版那一页只报随包内容：假动作（安装钮/那句承诺）与清不掉的永久红标一起消失。"""
+        from wizard.page_env import EnvCheckPage
+        from wizard.platform_info import PYTHON_CHECK_NAME
+
+        with patch(
+            "wizard.page_env.is_frozen", return_value=True
+        ), patch("wizard.platform_info.is_frozen", return_value=True):
+            page = self._track(EnvCheckPage())
+            page._check_timer.stop()
+            page._set_item_status("pip", False)
+            page._set_item_status(PYTHON_CHECK_NAME, False)
+            page._set_item_status("httpx", False)
+            page._mark_optional_missing("PyOpenGL")
+            page._finish_check_summary()
+
+        for name, (_label, _status, button, _hint) in page.items.items():
+            with self.subTest(name=name):
+                self.assertFalse(button.isVisibleTo(page))
+        # pip 与 Python 两格在打包版不再算必需；其余必需项一格没被顺手放宽。
+        self.assertEqual(page.required_missing(), ["httpx 环境"])
+        description = self._page_description(page)
+        self.assertIn("随包内容", description.text())
+        self.assertIn("装不了", description.text())
+        self.assertNotIn("按需获取", page.total_status.text())
+
+    def _page_description(self, page):
+        return next(
+            label
+            for label in page.findChildren(QLabel)
+            if label.objectName() == "PageDescription"
+        )
+
+    def test_source_build_still_offers_install_and_requires_pip(self) -> None:
+        """反证那一发：源码态这一页一字未改——缺 pip 既标红又给得出按钮。"""
+        from wizard.page_env import EnvCheckPage
+        from wizard.platform_info import PYTHON_CHECK_NAME
+
+        with patch(
+            "wizard.page_env.is_frozen", return_value=False
+        ), patch("wizard.platform_info.is_frozen", return_value=False):
+            page = self._track(EnvCheckPage())
+            page._check_timer.stop()
+            page._set_item_status("pip", False)
+            page._set_item_status(PYTHON_CHECK_NAME, False)
+            page._set_item_status("httpx", False)
+            page._finish_check_summary()
+
+        self.assertEqual(
+            page.required_missing(),
+            ["Python 3.10+ 环境", "pip 环境", "httpx 环境"],
+        )
+        _label, _status, button, _hint = page.items["pip"]
+        self.assertTrue(button.isVisibleTo(page))
+        self.assertIn("缺失项可点“安装”按需获取", page.total_status.text())
+        self.assertEqual(
+            self._page_description(page).text(),
+            "仅检测环境；组件默认不自动下载，需要时点「安装」按需获取",
+        )
 
     def test_configuration_startup_callbacks_use_owned_timers(self) -> None:
         from wizard.app import SetupWizard
@@ -1991,12 +2236,8 @@ class UiRefactorTests(unittest.TestCase):
         host = self._make_menu_host()
         host.config["display"] = {"size_factor": 1.25}
         menu = self._track(host._build_context_menu())
-        display_menu = next(
-            action.menu()
-            for action in menu.actions()
-            if action.menu() is not None
-            and action.menu().title() == "显示与立绘"
-        )
+        display_menu = self._find_menu(menu, "显示与立绘")
+        self.assertIsNotNone(display_menu, "归并后它在「设置与数据」下面，根层直取找不到")
         size_menu = next(
             action.menu()
             for action in display_menu.actions()
@@ -2019,10 +2260,25 @@ class UiRefactorTests(unittest.TestCase):
         ]
         self.assertEqual(checked, ["125%"])
 
+    @staticmethod
+    def _find_menu(menu, title):
+        """按标题在整棵菜单树里找子菜单——归并后设置项嵌了一层，根层直取不再成立。"""
+        for action in menu.actions():
+            child = action.menu()
+            if child is None:
+                continue
+            if child.title() == title:
+                return child
+            found = UiRefactorTests._find_menu(child, title)
+            if found is not None:
+                return found
+        return None
+
     def _make_menu_host(self):
+        from meapet.desktop.dev_options import PetDevOptionsMixin
         from meapet.desktop.window_chrome import PetWindowChromeMixin
 
-        class MenuHost(QWidget, PetWindowChromeMixin):
+        class MenuHost(QWidget, PetWindowChromeMixin, PetDevOptionsMixin):
             def __init__(self):
                 super().__init__()
                 self.config = {
@@ -2082,6 +2338,18 @@ class UiRefactorTests(unittest.TestCase):
             def _toggle_fidus_enabled(self):
                 pass
 
+            def _toggle_click_feedback_source(self, _name):
+                pass
+
+            def _set_click_feedback_poetry_source(self, _source, _enabled):
+                pass
+
+            def _open_click_feedback_keywords(self, _name):
+                pass
+
+            def _open_click_feedback_weights(self):
+                pass
+
 
         return self._track(MenuHost())
 
@@ -2100,23 +2368,69 @@ class UiRefactorTests(unittest.TestCase):
                 "养成状态",
                 "看看我在干嘛",
                 "切换表情",
-                "识图与观察",
-                "开启语音输入",
-                "显示与立绘",
-                "定位与穿透",
                 "设置与数据",
                 "关于",
                 "退出",
             ],
+            "根层只留高频动作；要写 config 的都收进「设置与数据」（人工 2026-10-06 点的形状）",
         )
         submenu_labels = {
             action.menu().title()
             for action in menu.actions()
             if action.menu() is not None
         }
+        self.assertEqual(submenu_labels, {"切换表情", "设置与数据"})
+
+        settings_menu = self._find_menu(menu, "设置与数据")
         self.assertEqual(
-            submenu_labels,
-            {"切换表情", "识图与观察", "显示与立绘", "定位与穿透", "设置与数据"},
+            [
+                action.text()
+                for action in settings_menu.actions()
+                if not action.isSeparator()
+            ][:4],
+            ["识图与观察", "开启语音输入", "显示与立绘", "定位与穿透"],
+            "三组设置子菜单 + 散落的语音输入开关，都排在原有设置项之前",
+        )
+        self.assertNotIn(
+            "开发者选项",
+            [action.text() for action in settings_menu.actions()],
+            "没解锁时这一支压根不存在",
+        )
+
+    def test_context_menu_has_no_version_item_of_its_own(self) -> None:
+        """版本号不另开根菜单项——彩蛋点的是「关于」里那一行（人工 2026-10-06 矫正）。"""
+        from meapet.desktop.dev_options import version_label_text
+
+        host = self._make_menu_host()
+        menu = self._track(host._build_context_menu())
+        self.assertNotIn(
+            version_label_text(),
+            [action.text() for action in menu.actions() if not action.isSeparator()],
+        )
+
+    def test_context_menu_shows_dev_branch_only_after_unlock(self) -> None:
+        from meapet.desktop.dev_options import DEV_MENU_LABELS
+
+        host = self._make_menu_host()
+        menu = self._track(host._build_context_menu())
+        settings_labels = [
+            action.text()
+            for action in self._find_menu(menu, "设置与数据").actions()
+            if not action.isSeparator()
+        ]
+        self.assertNotIn("开发者选项", settings_labels, "未解锁时这一支压根不存在")
+
+        host._dev_unlocked = True
+        unlocked = self._track(host._build_context_menu())
+        dev_menu = self._find_menu(unlocked, "开发者选项")
+        self.assertIsNotNone(dev_menu, "解锁后「设置与数据」里应多出这一支")
+        self.assertEqual(
+            [
+                action.text()
+                for action in dev_menu.actions()
+                if not action.isSeparator()
+            ],
+            list(DEV_MENU_LABELS),
         )
 
     def test_context_menu_opens_as_movable_standalone_window(self) -> None:
@@ -2137,13 +2451,11 @@ class UiRefactorTests(unittest.TestCase):
         self.assertTrue(flags & int(Qt.WindowStaysOnTopHint))
 
         # 根窗口只登记第一层分组；更深层目录在侧边面板打开后才按需创建。
+        # 归并后根层只剩两支：表情 + 设置与数据（其余设置项在后者面板里）。
         self.assertEqual(
             [title for _button, _menu, title in window._groups],
             [
                 "切换表情",
-                "识图与观察",
-                "显示与立绘",
-                "定位与穿透",
                 "设置与数据",
             ],
         )
@@ -2221,22 +2533,22 @@ class UiRefactorTests(unittest.TestCase):
         window = self._track(host._menu_window)
         root_height = window.height()
 
-        display_button = next(
-            button
-            for button, _menu, title in window._menu_groups
-            if title == "显示与立绘"
-        )
-        display_button.click()
+        def group_button(surface, title):
+            """按 surface 取那一层的分组按钮——`_menu_groups` 是各层自己的登记。"""
+            return next(
+                button for button, _menu, label in surface._menu_groups
+                if label == title
+            )
+
+        # 归并后「显示与立绘」不在根层了：先开「设置与数据」，级联往下多一层。
+        settings = group_button(window, "设置与数据")
+        settings.click()
         QApplication.processEvents()
         self.assertEqual(window.height(), root_height)
         self.assertEqual(len(window._submenu_panels), 1)
 
-        size_button = next(
-            button
-            for button, _menu, title in window._groups
-            if title == "窗口大小 · 100%"
-        )
-        size_button.click()
+        display = group_button(window._submenu_panels[0], "显示与立绘")
+        display.click()
         QApplication.processEvents()
         self.assertEqual(window.height(), root_height)
         self.assertEqual(len(window._submenu_panels), 2)
@@ -2244,16 +2556,19 @@ class UiRefactorTests(unittest.TestCase):
         self.assertEqual(second.parent_surface, first)
         self.assertEqual(second.placement_side, first.placement_side)
 
-        # 同层切换目录时复用级联深度，不累积已经关闭的面板。
-        vision_button = next(
-            button
-            for button, _menu, title in window._menu_groups
-            if title == "识图与观察"
-        )
-        vision_button.click()
+        size = group_button(second, "窗口大小 · 100%")
+        size.click()
         QApplication.processEvents()
-        self.assertEqual(len(window._submenu_panels), 1)
-        self.assertEqual(window._submenu_panels[0]._title, "识图与观察")
+        self.assertEqual(window.height(), root_height)
+        self.assertEqual(len(window._submenu_panels), 3)
+        self.assertEqual(window._submenu_panels[2].parent_surface, second)
+
+        # 同层切换目录时复用级联深度，不累积已经关闭的面板。
+        vision = group_button(first, "识图与观察")
+        vision.click()
+        QApplication.processEvents()
+        self.assertEqual(len(window._submenu_panels), 2)
+        self.assertEqual(window._submenu_panels[1]._title, "识图与观察")
         self.assertEqual(window.height(), root_height)
 
     def test_context_menu_side_panel_chooses_screen_safe_direction(self) -> None:
@@ -2753,7 +3068,7 @@ class UiRefactorTests(unittest.TestCase):
 
         self.assertIn("思考", status_language.thinking())
         self.assertIn("稍等", status_language.thinking_busy())
-        self.assertIn("截屏", status_language.menu_watch_enable())
+        self.assertIn("屏幕观察", status_language.menu_watch_toggle())
         self.assertIn("Live2D", status_language.menu_render_to_live2d())
         self.assertIn("回忆", status_language.empty_memories())
 

@@ -199,6 +199,11 @@ class AgentTurnRequest:
 class ToolStatus:
     state: str
     safe_text: str
+    #: 载荷里那三个可选计数（`docs/agent-link-v1.md` §7.2）。Agent 没给就是 None——
+    #: 桌宠不替它数、也不夹成 0，那会让「没发」读起来像「发了但为零」。
+    call_index: int | None = None
+    elapsed_ms: int | None = None
+    tokens: int | None = None
 
 
 @dataclass(frozen=True)

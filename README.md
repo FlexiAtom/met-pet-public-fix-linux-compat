@@ -8,6 +8,8 @@ MeaPet 有清晰的职责边界：角色呈现、聊天气泡、TTS、截图授�
 
 **移动版**：[mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile)（包含核心功能的轻量移动客户端）
 
+**官方Q群**：1128485088（加群备注：**来意 + 使用的系统**）
+
 ## 当前功能
 
 | 功能 | 说明 |
@@ -17,15 +19,16 @@ MeaPet 有清晰的职责边界：角色呈现、聊天气泡、TTS、截图授�
 | Agent | 通过 WebSocket 支持 Hermes TUI Gateway、OpenClaw Gateway v4 或自定义 Agent Link v1 |
 | 显示 | 未启用 TTS 时流式显示文本气泡；启用 TTS 时等待音频生成，再同步显示气泡并播放 |
 | 多段回复 | 每段回复分别包含气泡、情绪、朗读文本、语言和 TTS 风格 |
-| 语音 | 支持 MiMo 云端 TTS、本地 GPT-SoVITS、本地 VITS；GPT-SoVITS 支持按语言配置参考音频 |
+| 语音 | 支持 MiMo 云端 TTS、本地 GPT-SoVITS、本地 VITS；GPT-SoVITS 支持按语言配置参考音频。内容保证口径见[多语言语音](#多语言语音)：**仅 VITS × zh 经人耳确认可用，其余组合只保证出声** |
 | 视觉 | 可禁用、继承主模型，或通过独立视觉模型中继 |
 | 反向控制 | 通过 Companion MCP 或同一 Agent Link 连接共享前端工具 |
+| QQ 通道 | OneBot v11：发起端（反向 WebSocket / HTTP API）或接收端（正向 WebSocket / 事件 HTTP POST），可对接 NapCat 与 SnowLuma；另有 hub 端点供下游消费者（如自带的 `dsh-onebot-relay` 插件）接入 |
 | 本地数据 | SQLite 记忆、好感度，以及按后端和会话隔离的对话时间线 |
 | 渲染 | Live2D 动态模型与 PNG 差分立绘，可在运行时切换 |
 
 ## 快速开始
 
-桌宠需要 Python 3.10 或更高版本（项目默认使用 3.12）。由于依赖兼容性限制，使用本地 VITS 时建议使用 Python 3.10-3.12。
+桌宠需要 Python 3.10 或更高版本（项目默认使用 3.12）。由于依赖兼容性限制，使用本地 VITS 时建议使用 Python 3.10-3.12。Windows 下 `启动桌宠.bat` 新建环境时按 **3.11+** 取解释器：Live2D 那一档要它（上游从 0.8 起要求 3.11+），3.10 只会拿到 PNG。
 
 ### Windows
 
@@ -46,7 +49,39 @@ python setup_wizard.py
 python pet.py
 ```
 
-`live2d-py` 是可选依赖；不可用时会回退到 PNG。预编译包可从 [EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py) 获取。
+`live2d-py` 是可选依赖；不可用时会回退到 PNG。产品只认 **1.0.0 及以上**那一代的接口名：
+
+```bash
+pip install "live2d-py>=1.0.0"
+```
+
+它要求 **Python 3.11+**（0.8 起上游就只发 `cp311-abi3` 及以后的制品）。Linux 的 manylinux 轮子是
+v0.8.0.9（2026-09-24）才进 PyPI 的，更早的 0.7.x 在索引上只有 Windows/macOS 制品——所以拿 0.7 时代的
+Linux wheel 跑本产品会安静退回 PNG，那是预期行为，不是 bug。上游与预编译包见
+[EasyLive2D/live2d-py](https://github.com/EasyLive2D/live2d-py)。
+
+#### Arch 系：PyQt5 的 Qt5 被重指向系统 Qt5
+
+pip 装的 PyQt5 wheel 自带一整族 Qt5。本项目的 Linux 整合包/测试环境（Arch 系）把它改成**用系统 Qt5**：
+
+```text
+site-packages/PyQt5/Qt5/lib     -> /usr/lib
+site-packages/PyQt5/Qt5/plugins -> /usr/lib/qt/plugins
+```
+
+wheel 自带的原件没删，整族留在同级的 `lib.bak/` 与 `plugins.bak/`。这么做的动机是**解决冲突**（口径由维护者给出，机制细节我没有独立取证）；仓库里没有任何脚本做这件事，它是环境那一侧铺的，所以 `pip install -r linux_requirements.txt` 出来的干净环境**不带这两个链接**，也不需要下面这条。
+
+代价是**系统侧必须装齐程序真正会 import 的那几族 Qt5 模块**——缺哪族，那一路就起不来。目前唯一会撞到的是语音播报：没装 `qt5-multimedia` 时 `from PyQt5.QtMultimedia import QMediaPlayer` 必报 `ImportError: libQt5Multimedia.so.5: cannot open shared object file`，播放回退到 `aplay`；`aplay` 不吃音量参数，于是设置里那两个音量滑条是空的（**声音照出，只是音量不生效**）。
+
+不用猜，直接问诊断面：
+
+```bash
+python -m meapet --doctor --skip-tts | grep audio_playback
+```
+
+`绑定=在场 底层=可加载` 说明 Qt 那一路起得来、音量档生效；`底层=加载失败：<原因>` 就照那个原因补系统包，Arch 系缺的是 `qt5-multimedia`。不做重指向（保留 wheel 自带那一族）同样能跑，两条路都能出声，区别在音量档归谁负责、那族库随 pip 还是随系统升级。
+
+**一个进程里混了两套 Qt 会 abort（2026-10-16 现量）**：如果只做了上面那两个链接的一半，或把 `QT_PLUGIN_PATH` 指向系统 `/usr/lib/qt/plugins` 而 `libQt5Core` 仍从 wheel 自带那一族加载，Qt 就会去加载**系统那套**的平台插件。系统插件要的 `Qt_5_PRIVATE_API` 符号只有 `/usr/lib/libQt5Gui.so.5` 导出，打包那一族里一个都没有 ⇒ 插件 `dlopen` 失败 ⇒ Qt 直接 `qFatal + abort()`：终端先打两行 `qt.qpa.plugin: Could not load the Qt platform plugin "xcb"/"wayland" ... even though it was found.`，随后 `已中止（核心已转储）`，Python 侧的 `try/except` **接不住**。程序里的闸门（`meapet/desktop/qpa_guard.py`）会在 `QApplication` **之前**把这件事说实话，并把**本进程**的 `QT_QPA_PLATFORM_PLUGIN_PATH` 指回与已加载那一套同一路的 `platforms`——`QT_PLUGIN_PATH` 原样不动，那里挂着 fcitx5/ibus 输入法插件，撤掉会让输入框打不出中文。不想让闸门动环境就设 `MEA_PET_QPA_NO_REPAIR=1`（只说不改，那道 abort 照原样发生）。两条永久出口任一即可：**用项目自己的 `.venv/bin/python` 起**（它就是上面那套完整重指向，与系统同路），或 `env -u QT_PLUGIN_PATH python pet.py`。
 
 随时可以通过桌宠右键菜单中的“打开设置...”再次打开配置向导。保存后，新后端会立即生效，旧后端仍在进行的生成任务会被取消。
 
@@ -88,7 +123,7 @@ pyinstaller MeaPet.spec
 
 - **VITS**：在应用进程内运行（应用内包含 torch 和 `vits_core`）。模型存在时不需要外部 Python。
 - **MiMo**：云端 TTS（需要 API Key）。
-- **GPT-SoVITS**：仍需要独立 GPT-SoVITS 运行环境中的 `python.exe`；不要将路径指向 `MeaPet.exe`。
+- **GPT-SoVITS**：仍需要独立 GPT-SoVITS 运行环境里的解释器（Windows 是 `python.exe`，Linux 是 `bin/python`）；不要把路径指向打包版自己的可执行文件。
 
 不要发布包含 API Key 的开发者 `config.json`。打包时只应将 `config.example.json` 作为模板。不要提交 `dist/` 或 `build/`。
 
@@ -116,7 +151,7 @@ Agent 模式将 MeaPet 作为纯桌面前端：
 - 内部工具名称和原始参数不会显示在角色气泡中。安全的状态（开始、完成、失败）会进入时间线，诊断详情只写入日志。
 - Agent 模式只使用 WebSocket。Hermes 连接 `hermes serve` 暴露的原生 TUI Gateway，OpenClaw 连接 Gateway v4，自定义后端可以实现 Agent Link v1。HTTP/SSE 模型端点只属于直连模式。
 - 连接会跨轮次复用，支持双向流式传输、取消、ping/pong 以及各协议自己的断线恢复。OpenClaw 使用相同的幂等键重试；Hermes 会恢复已保存的会话并核对历史，而不是盲目重新提交可能已经执行过工具调用的轮次。
-- Agent Link 使用同一个出站连接完成聊天和前端工具调用。握手后 MeaPet 会发布带类型的工具 schema，第三方连接器可以在自己的 Agent 循环中注册这些工具，并主动调用 `meapet.say`。
+- Agent Link 使用同一个出站连接完成聊天和前端工具调用。握手后 MeaPet 会发布带类型的工具 schema，第三方连接器可以在自己的 Agent 循环中注册这些工具，并主动调用 `meapet_say`。
 - Agent 回复必须遵循 MeaPet 的分段输出格式。格式错误会进入明确的格式修复状态；任何 Agent 路径都不会静默回退到 HTTP 模型端点。
 
 本地 `session_id` 用于标识 MeaPet 的时间线范围。OpenClaw 还会持久化其 Gateway `session_key`；Hermes 会持久化服务器返回的 `remote_session_id`，并在重启或重连后使用 `session.resume`。在 Agent 模式中，“清除记忆”会明确启动一个新的上游 Agent 会话。旧时间线仍可读取。
@@ -145,6 +180,25 @@ Agent 模式将 MeaPet 作为纯桌面前端：
 
 ## 多语言语音
 
+### 能力口径：哪一格真的听得懂
+
+2026-10-13 做过一次人耳逐档现听，定下这条口径：**只保证 VITS 的 zh 正常，其他的只保证出动静**。
+换句话说，下表第一行以外的任何「引擎 × 语言」组合，都只保证能产出并播放一段音频，
+**不保证念出来的内容正确、完整或可懂**。
+
+| 引擎 × 语言 | 口径 |
+|------|------|
+| VITS × zh | **正常**（人耳确认可用） |
+| VITS × ja / en | 只保证出声。ja 未确认（「很像日语」不等于可懂）；en 实测有崩坏 |
+| GPT-SoVITS × zh / ja | 只保证出声。zh 实测不可读（半句、复读）；ja 没有判据——验收的人不懂日语，只到「出声」为止 |
+| GPT-SoVITS × en | 连出声都不保证：当前实测无音频，缺 NLTK `averaged_perceptron_tagger_eng` |
+| MiMo 云端 TTS | 本轮未做内容验收，这里不作保证 |
+
+这条口径不改变上面配置项的用法，也不与体检冲突：`python -m meapet --doctor` 和语音页的绿灯判的是
+**前置条件齐不齐**（解释器、依赖、权重、参考音频），不是**念得对不对**。内容和时长这两格，
+机器判据（本仓库带的是中文/英文 ASR）只能看出「塌了/在复读」，判不了「念的是不是这句话」——
+最终裁决权在耳朵，而目前只有第一行那一格有耳朵给过的正证。
+
 GPT-SoVITS 可以通过 `tts.reference_audios` 为每种语言配置固定参考音频。每一项都必须指定语言；路径可以相对于项目，也可以使用绝对路径。参考文本可以留空：
 
 ```json
@@ -163,7 +217,96 @@ GPT-SoVITS 可以通过 `tts.reference_audios` 为每种语言配置固定参考
 
 旧版 `gsv_ref_wav` 和 `gsv_ref_lang` 字段只会被读取，并迁移为一条参考音频配置。与 WAV 同名的 `.txt` 文件会作为参考文本。
 
+GPT-SoVITS 的项目根一般不用填：程序从 `tts.python_exe` 所在目录逐级向上找 `GPT_SoVITS/TTS_infer_pack/` 这个标记。只有一种情形必须自己说——解释器装在源码树**之外**（典型是 conda env，如 `/home/you/miniconda3/envs/GPTSoVits/bin/python`），上溯永远撞不到标记。这时把 `tts.gsv_root` 指向含 `GPT_SoVITS/` 的那一层绝对路径：
+
+```json
+{
+  "tts": {
+    "engine": "gpt_sovits",
+    "python_exe": "/home/you/miniconda3/envs/GPTSoVits/bin/python",
+    "gsv_root": "/home/you/GPT-SoVITS-v2pro"
+  }
+}
+```
+
+这一项向导里没有入口，只能写在 `config.json` 里；填了但那个目录下没有 `GPT_SoVITS/TTS_infer_pack/` 会被忽略，仍回落到自动上溯。路径不做 `~` 展开，请写完整绝对路径。
+
 语音翻译使用 MeaPet 内置的非 LLM 机器翻译服务池。单个分段失败时会轮换服务，总尝试次数最多为 3 次。启用“优先使用模型语音翻译”后，模型返回的 `voice_language` 和 `voice_text` 会与配置的目标语言核对；若不一致，则翻译到目标语言。单独的“不支持时翻译”开关控制输出语言不受支持时的回退策略。翻译最终失败时会跳过该语音分段，但保留文本气泡。
+
+## Linux 手动配置本地语音
+
+Linux 没有官方 GPT-SoVITS 整合包（上游给 Linux 的那条路是 conda + `requirements.txt`，全程不创建 `runtime/` 目录），向导在 Linux 上也就没有“帮你建环境”的按钮。两个本地引擎都能用，只是环境和权重得自己动手。
+
+程序找 GPT-SoVITS 解释器的顺序只有三级：**配置那一格 → 环境变量 `MEA_PET_GSV_PYTHON` → 候选表自动检测**。候选表覆盖 `CONDA_PREFIX`/`VIRTUAL_ENV`、家目录下的 `GPT-SoVITS*`（含解压多带一层日期目录那档）、`~/miniconda3` 与 `~/anaconda3` 里的 `envs/GPTSoVits`、`envs/gpt-sovits`；源码运行时最后才回落到跑桌宠的那个解释器。三条都没命中才算“未配置”。
+
+### GPT-SoVITS
+
+以 v2Pro 源码树 + 一个自建 CPU 环境为例（`runtime/` 只是名字，程序按标记认根，不看你叫它什么）：
+
+```bash
+# 1) 源码树：整合包解压后的目录，或 git clone https://github.com/RVC-Boss/GPT-SoVITS
+#    下面假定落在 ~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604
+# 2) 建环境并装依赖（CPU 版 torch 就够；用 conda 的人把 venv 换成 conda env 即可）
+python3.10 -m venv ~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime
+PY=~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime/bin/python
+$PY -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+$PY -m pip install -r ~/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/requirements.txt
+$PY -m pip install matplotlib   # 上游 requirements.txt 缺这一个（AR/modules/lr_schedulers.py 顶层 import）
+```
+
+`onnxruntime-gpu` 会连带拉数 GB 的 nvidia-* 轮子，纯 CPU 机器可以先把那一行改成 `onnxruntime`，funasr / gradio / tensorboard / modelscope 这几包推理用不到，跳过装得更快。上游另一份 `extra-req.txt` 里只有 `faster-whisper`，那是 ASR（从音频里自动提参考）用的，朗读不需要。
+
+然后把环境指给程序，任选一种：
+
+```json
+{
+  "tts": {
+    "engine": "gpt_sovits",
+    "enabled": true,
+    "python_exe": "/home/you/GPT-SoVITS-v2pro/GPT-SoVITS-v2pro-20250604/runtime/bin/python"
+  }
+}
+```
+
+- 向导里那一格填**文件夹**或**解释器**都行：填 `.../GPT-SoVITS-v2pro-20250604` 时程序自己在里面找 `runtime/bin/python`，直接填解释器路径也照收。
+- 环境建在源码树**之外**（conda env 那种）时，光有解释器反推不到根，须再写 `tts.gsv_root`，见上面「多语言语音」。
+- 权重随仓库是 Git LFS pointer，程序不会自动拉取。`models/GPT_weights/*.ckpt` 与 `models/SoVITS_weights/*.pth` 要 `git lfs pull`，或手动放置真身，或用 `tts.gpt_weights_dir` / `tts.sovits_weights_dir` 指到别处。
+- 参考音频目录是 `tts.ref_dir`（仓库里那份 `GPT-Sovits/` 装的是 wav+txt 样本，**不是** GPT-SoVITS 源码树，只是名字撞车）。多语言固定参考见「多语言语音」。
+
+### VITS
+
+VITS 只需要一个装了 PyTorch 的解释器，CPU 版即可（本机实测 Python 3.10 + `torch 2.5.1+cpu` 端到端出声）。
+
+```bash
+python3.10 -m venv ~/vits_env
+~/vits_env/bin/pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+~/vits_env/bin/pip install -r vits_requirements.txt   # 已含 torch，重复装不会换轮子
+```
+
+权重同样不自动下载：`vits_models/G_latest.pth` 在仓库里是 LFS pointer，`git lfs pull` 或手动放真身；`vits_models/finetune_speaker.json` 是普通文件，随包已有。
+
+```json
+{
+  "tts": {
+    "engine": "vits",
+    "enabled": true,
+    "vits_python": "/home/you/vits_env/bin/python",
+    "vits_model": "/home/you/vits_weights/G_latest.pth",
+    "vits_config": "/home/you/work/met-pet/vits_models/finetune_speaker.json",
+    "vits_speaker": "Mea"
+  }
+}
+```
+
+- `vits_python` 留空时，源码运行会用跑桌宠的那个解释器起子进程——那条要求桌宠自己的环境里也有 torch。指定 `vits_python` 是最省事的一档。
+- `vits_model` / `vits_config` 留空即走随包路径 `vits_models/`；填了就以配置原样为准——既不做 `~` 展开，也不会相对项目根重写，所以请写绝对路径。随包那格在仓库里是 LFS pointer，`git lfs pull` 之前它不是模型。
+- `vits_speaker` 必须出现在 `vits_config` 的说话人表里，默认 `Mea`。
+
+### 配完怎么确认
+
+- 无头取证：`python -m meapet --doctor`，看 `tts.gpt_sovits` 与 `tts.vits` 两行的“前置=齐/不齐”，事实串里点名缺哪一格（解释器、依赖、权重是不是还是 pointer）。想连真合成延迟一起量再加 `--speech-latency`（这会起推理子进程、落 wav，不播放）。
+- 在 GUI 里：右键菜单 ▸ 设置与数据 ▸ 开发者选项 ▸「朗读测试（GPT-SoVITS）」/「朗读测试（VITS）」，两引擎各一条，失败会把判据写出来。
+- 语音页打开即给读数：绿灯后面写着那条路是**从哪来的**（选的文件夹 / 填的解释器 / 环境变量 / 自动检测），你填的那条如果被丢掉也会一并说出来。
 
 ## 屏幕视觉
 
@@ -191,10 +334,10 @@ http(s)://<listen_host>:<port>/mcp
 
 | 工具 | 能力 |
 |------|------|
-| `meapet.say` | 将一个或多个完整回复分段加入队列；不会抢占等待中的用户回复 |
-| `meapet.express` | 请求前端明确支持的情绪或动作；不做隐式映射 |
-| `meapet.get_state` | 读取渲染、TTS 能力、角色状态和好感度摘要；不返回路径、密钥、记忆或完整聊天历史 |
-| `meapet.capture_screen` | 请求截取全屏、区域或应用；每次都需要本地确认，结果绝不写入磁盘 |
+| `meapet_say` | 将一个或多个完整回复分段加入队列；不会抢占等待中的用户回复 |
+| `meapet_express` | 请求前端明确支持的情绪或动作；不做隐式映射 |
+| `meapet_get_state` | 读取渲染、TTS 能力、角色状态和好感度摘要；不返回路径、密钥、记忆或完整聊天历史 |
+| `meapet_capture_screen` | 请求截取全屏、区域或应用；每次都需要本地确认，结果绝不写入磁盘 |
 
 安全约束：
 
@@ -205,6 +348,25 @@ http(s)://<listen_host>:<port>/mcp
 - 服务还会验证来源 IP、Host、Origin、请求大小和速率。
 
 自定义 Agent Link 不会启动第二个监听器。它会在现有 WebSocket 上投影相同的能力注册表，使聊天、主动消息和工具调用保持在同一个连接中。
+
+## QQ 通道（OneBot v11）
+
+MeaPet 也可以是一个 QQ 机器人：它双向实现 OneBot v11，因此无论 NapCat 还是 SnowLuma，正反两个方向都能对接：
+
+- **发起端** —— `forward_ws`（主动连对端的 WebSocket 服务端）与 `http_api`（调用对端 HTTP API 发送）。
+- **接收端** —— `reverse_ws`（监听，等对端连进来）与 `http_post`（接收事件上报）。
+- **下游端点（hub）** —— 下游消费者以 OneBot 客户端身份接入：既能收到 QQ 事件，也能发送回复。
+  自带的 `dsh-onebot-relay` dsh 插件就是通过它把 QQ 会话接到 dsh agent。
+
+`onebot.reply_mode` 决定由谁回答：`pet`（桌宠自己的回复后端）、`hub`（只给下游消费者，例如 dsh）或 `both`。
+群聊默认需要 @ 机器人，并支持按用户 / 按群的准入白名单。
+
+来自 QQ 的文本不会被回显到桌宠气泡里——气泡是角色台词，只显示桌宠自己的回复。轮次串行处理，两侧都带超时，
+所以一次丢回复不会把队列卡死。
+
+完整契约、配置项、端点表、NapCat/SnowLuma 接线、安全说明与 dsh 插件安装步骤见
+[`docs/onebot.md`](docs/onebot.md)；架构（组件图、线程模型、路由、失败模式、扩展点、部署与回滚 runbook）见
+[`docs/onebot-architecture.md`](docs/onebot-architecture.md)。
 
 ## 配置
 
@@ -253,7 +415,7 @@ http(s)://<listen_host>:<port>/mcp
 | `OPENCLAW_GATEWAY_TOKEN` / `MEAPET_AGENT_TOKEN` | OpenClaw Gateway Token |
 | `AGENT_LINK_TOKEN` / `MEAPET_AGENT_TOKEN` | 自定义 Agent Link Token |
 | `MEAPET_CONTROL_TOKEN` | Companion MCP Bearer Token |
-| `GSV_PYTHON` | GPT-SoVITS 环境中的 `python.exe` |
+| `MEA_PET_GSV_PYTHON` | GPT-SoVITS 环境的解释器（Windows `python.exe` / Linux `bin/python`） |
 | `MEAPET_PIP_INDEX_URL` / `PIP_INDEX_URL` | Python 包索引覆盖；默认使用清华 TUNA |
 | `MEAPET_TORCH_INDEX_URL` / `TORCH_INDEX_URL` | 可选的 PyTorch wheel 索引覆盖 |
 | `MEAPET_HF_ENDPOINT` / `HF_ENDPOINT` | 可选的 Hugging Face 端点覆盖 |
@@ -337,7 +499,7 @@ python -m compileall -q meapet wizard
 <details>
 <summary>有文本气泡，但没有语音</summary>
 
-请检查是否启用了 TTS、引擎健康检查是否通过、回复中的 `voice_language` 是否受支持，以及该语言是否配置了有效参考音频（GPT-SoVITS）。如果语言不受支持且未配置翻译，按设计会跳过语音并保留文本气泡。
+请检查是否启用了 TTS、引擎健康检查是否通过、回复中的 `voice_language` 是否受支持，以及该语言是否配置了有效参考音频（GPT-SoVITS）。如果语言不受支持且未配置翻译，按设计会跳过语音并保留文本气泡。若是有声音但念不对，先看[能力口径](#能力口径哪一格真的听得懂)：只有 VITS × zh 保证内容，其余组合只保证出声。
 </details>
 
 <details>

@@ -14,6 +14,12 @@ import os
 import sys
 
 
+def _set_openjtalk_dict(path: str) -> None:
+    # pyopenjtalk reads only the bare name (once, at import); without it the bundled dic/ is never used.
+    os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = path
+    os.environ["OPEN_JTALK_DICT_DIR"] = path
+
+
 def _bootstrap() -> str:
     """Locate project / _MEIPASS root and put *only* vits_core on sys.path.
 
@@ -70,7 +76,7 @@ def _bootstrap() -> str:
 
     builtin_dic = os.path.join(base, "dic", "open_jtalk_dic_utf_8-1.11")
     if os.path.isdir(builtin_dic):
-        os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = builtin_dic
+        _set_openjtalk_dict(builtin_dic)
         print("  ✓ 使用项目内置日语词典", file=sys.stderr, flush=True)
     else:
         pyjt_dir = os.path.join(
@@ -78,7 +84,7 @@ def _bootstrap() -> str:
         )
         dic_dir = os.path.join(pyjt_dir, "open_jtalk_dic_utf_8-1.11")
         if os.path.isdir(dic_dir):
-            os.environ["MEA_PET_OPEN_JTALK_DICT_DIR"] = dic_dir
+            _set_openjtalk_dict(dic_dir)
             print(f"  ✓ 使用已缓存日语词典: {dic_dir}", file=sys.stderr, flush=True)
         else:
             print("  ❌ 未找到日语词典 open_jtalk_dic_utf_8-1.11", file=sys.stderr, flush=True)
@@ -232,7 +238,7 @@ def synthesize(
 if __name__ == "__main__":
     base = _bootstrap()
     parser = argparse.ArgumentParser(description="VITS 语音合成（独立脚本）")
-    parser.add_argument("-t", "--text", required=True, help="合成文本（含语言标记）")
+    parser.add_argument("-t", "--text", default="", help="合成文本（含语言标记）")
     parser.add_argument("-o", "--output", default="output.wav", help="输出音频路径")
     parser.add_argument("-s", "--speaker", default="Mea", help="说话人名称")
     parser.add_argument("--noise_scale", type=float, default=0.667)
@@ -248,6 +254,12 @@ if __name__ == "__main__":
     parser.add_argument("--model", default="", help="模型权重路径")
     parser.add_argument("--config", default="", help="模型配置路径")
     args = parser.parse_args()
+
+    # 必填从 argparse 下移到这里：只有 synthesize 那一支读 args.text，挂在
+    # argparse 上时"只验证依赖能否 import"那句 help 自己做不到——单跑
+    # --check-deps 撞 rc=2，required 比 check_deps 分支先出口。
+    if not (args.check_deps or args.warmup) and not args.text.strip():
+        parser.error("合成需要 -t/--text（--check-deps / --warmup 不需要）")
 
     # 就绪探针走这条路：判据就是 _load_torch_stack 那份 import 面本身。
     # 另写一份"该装哪些包"的清单会与 vits_requirements.txt、与本函数的导入集合

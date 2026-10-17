@@ -6,21 +6,33 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QPushButton,
+    QSlider,
     QSpinBox,          # ← 新增导入
     QVBoxLayout,
 )
 
-from meapet import __version__
+from meapet.config.normalizers import (
+    FEEDBACK_KEYWORD_LIMIT,
+    FEEDBACK_KEYWORD_MAX_CHARS,
+    normalize_feedback_keywords,
+)
 from meapet.desktop.capture_selection import select_screen_region
-from meapet.desktop.screen_geometry import resize_dialog_to_content
+from meapet.desktop.dev_options import version_label_text
+from meapet.desktop.disclaimer import PAID_CHANNEL_NOTICE, ACQUISITION_CHANNELS
+from meapet.desktop.screen_geometry import (
+    available_geometry_for,
+    calculate_centered_position,
+    resize_dialog_to_content,
+)
 from meapet.desktop.theme import CONSENT_DIALOG_STYLE
 from meapet.ui_theme import (
     MIN_TARGET_SIZE,
@@ -943,6 +955,213 @@ class VolumeDialog(QDialog):
         self.cancel_button.setFocus(Qt.OtherFocusReason)
 
 
+def _center_dialog_over_parent(dialog: QDialog) -> None:
+    """摆在锚点（父窗中心，没有父窗就摆屏幕中心），并夹进可用区。
+
+    用 `calculate_centered_position` 而不是再抄一份 `adjusted(24, …)` 的手算：抄了就是
+    第二套边距真值，改一处漏一处。
+    """
+    parent = dialog.parentWidget()
+    area = available_geometry_for(parent.frameGeometry() if parent is not None else None)
+    if area is None:
+        return
+    anchor = parent.frameGeometry() if parent is not None else area
+    dialog.move(calculate_centered_position(anchor, dialog.size(), area))
+
+
+class ClickFeedbackKeywordsDialog(QDialog):
+    """点击反馈某一源的关键词表：一行一个，粘成一串也认。
+
+    写回什么形状由 `normalize_feedback_keywords` 定（去重、截断、上限），这里不自己数——
+    否则对话框存一份口径、加载时再归一一份，两边会漂。
+    """
+
+    def __init__(self, config: dict, source: str, parent=None):
+        super().__init__(parent)
+        from meapet.click_feedback.feedback import POETRY, SOURCE_TITLES
+
+        ensure_application_fonts()
+        section = ((config.get("click_feedback") or {}).get(source)) or {}
+        title = f"{SOURCE_TITLES.get(source, source)}关键词"
+        self.setObjectName("ClickFeedbackKeywordsRoot")
+        self.setWindowTitle(title)
+        self.setWindowFlags(
+            Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+        )
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        apply_named_style(self, "DIALOG_STYLE")
+        self.setAccessibleName(f"点击反馈 {title}")
+
+        self.config = config
+        self.source = source
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        card = QFrame()
+        card.setObjectName("FeedbackDialogCard")
+        outer.addWidget(card)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 16, 20, 18)
+        layout.setSpacing(10)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("PageTitle")
+        layout.addWidget(title_label)
+
+        # 同一格关键词，两个源吃法不同：说错会让人对着随机那档白填一堆词。
+        field_label = QLabel(
+            ("只有「古籍检索」用这些词做检索词；「一句随机诗词」按类目随机给，不查词。\n"
+             if source == POETRY else "")
+            + "一行一个，也可以整串粘进来（逗号、顿号、分号都当分隔）"
+        )
+        field_label.setObjectName("FieldLabel")
+        field_label.setWordWrap(True)
+        layout.addWidget(field_label)
+
+        self.editor = QPlainTextEdit()
+        self.editor.setPlainText("\n".join(str(w) for w in (section.get("keywords") or ())))
+        self.editor.setMinimumHeight(140)
+        self.editor.setAccessibleName("关键词列表")
+        layout.addWidget(self.editor)
+
+        helper = QLabel(
+            f"最多 {FEEDBACK_KEYWORD_LIMIT} 条，每条 {FEEDBACK_KEYWORD_MAX_CHARS} 字；"
+            "超出的会被截掉，不会悄悄多收。"
+        )
+        helper.setObjectName("HelperText")
+        helper.setWordWrap(True)
+        layout.addWidget(helper)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        self.ok_button = QPushButton("保存")
+        self.ok_button.setObjectName("PrimaryButton")
+        self.ok_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.ok_button.setAccessibleName("保存关键词")
+        self.ok_button.clicked.connect(self._on_ok)
+        buttons.addWidget(self.ok_button, 1)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.cancel_button.setAccessibleName("取消关键词修改")
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button, 1)
+        layout.addLayout(buttons)
+
+        resize_dialog_to_content(self, QSize(420, 300))
+
+    def _on_ok(self) -> None:
+        click = self.config.setdefault("click_feedback", {})
+        section = click.setdefault(self.source, {})
+        section["keywords"] = normalize_feedback_keywords(self.editor.toPlainText())
+        self.accept()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        _center_dialog_over_parent(self)
+        self.cancel_button.setFocus(Qt.OtherFocusReason)
+
+
+class ClickFeedbackWeightDialog(QDialog):
+    """三路反馈的抽中权重（0–100 的相对值）。
+
+    存原始值、抽样时才归一，所以这里不做"凑成 100"的校验，也不显示百分比——用户给的是
+    「多一点还是少一点」的偏好，不是分布。
+    """
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        from meapet.click_feedback.feedback import SOURCE_TITLES
+
+        ensure_application_fonts()
+        self.setObjectName("ClickFeedbackWeightRoot")
+        self.setWindowTitle("抽中权重")
+        self.setWindowFlags(
+            Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+        )
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        apply_named_style(self, "DIALOG_STYLE")
+        self.setAccessibleName("点击反馈抽中权重")
+
+        self.config = config
+        weights = ((config.get("click_feedback") or {}).get("weights")) or {}
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        card = QFrame()
+        card.setObjectName("FeedbackDialogCard")
+        outer.addWidget(card)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 16, 20, 18)
+        layout.setSpacing(8)
+
+        title_label = QLabel("抽中权重")
+        title_label.setObjectName("PageTitle")
+        layout.addWidget(title_label)
+
+        self._sliders: dict[str, QSlider] = {}
+        for name, weight_title in SOURCE_TITLES.items():
+            row = QHBoxLayout()
+            label = QLabel(weight_title)
+            label.setObjectName("FieldLabel")
+            label.setMinimumWidth(96)
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 100)
+            slider.setValue(int(weights.get(name, 0) or 0))
+            slider.setMinimumHeight(MIN_TARGET_SIZE)
+            slider.setAccessibleName(f"{weight_title}权重")
+            value = QLabel(str(slider.value()))
+            value.setObjectName("HelperText")
+            value.setMinimumWidth(30)
+            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            slider.valueChanged.connect(
+                lambda v, w=value: w.setText(str(v))
+            )
+            self._sliders[name] = slider
+            row.addWidget(label)
+            row.addWidget(slider, 1)
+            row.addWidget(value)
+            layout.addLayout(row)
+
+        helper = QLabel(
+            "按相对值抽，不必凑成 100；给 0 等于关掉那一路。"
+            "爬虫与古诗词要先在各自的子菜单里开启并确认过隐私告知，才会参与抽样。"
+        )
+        helper.setObjectName("HelperText")
+        helper.setWordWrap(True)
+        layout.addWidget(helper)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        self.ok_button = QPushButton("保存")
+        self.ok_button.setObjectName("PrimaryButton")
+        self.ok_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.ok_button.setAccessibleName("保存权重")
+        self.ok_button.clicked.connect(self._on_ok)
+        buttons.addWidget(self.ok_button, 1)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setMinimumHeight(MIN_TARGET_SIZE)
+        self.cancel_button.setAccessibleName("取消权重修改")
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button, 1)
+        layout.addLayout(buttons)
+
+        resize_dialog_to_content(self, QSize(420, 240))
+
+    def _on_ok(self) -> None:
+        click = self.config.setdefault("click_feedback", {})
+        weights = click.setdefault("weights", {})
+        for name, slider in self._sliders.items():
+            weights[name] = slider.value()
+        self.accept()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        _center_dialog_over_parent(self)
+        self.cancel_button.setFocus(Qt.OtherFocusReason)
+
+
 class AboutDialog(QDialog):
     """关于 MeaPet：版本信息，以及 Live2D 模型的来源致谢。
 
@@ -984,9 +1203,16 @@ class AboutDialog(QDialog):
         title_label.setObjectName("ConsentTitle")
         layout.addWidget(title_label)
 
-        version_label = QLabel(f"版本 {__version__}")
-        version_label.setObjectName("FieldLabel")
-        layout.addWidget(version_label)
+        self.version_label = QLabel(version_label_text())
+        self.version_label.setObjectName("FieldLabel")
+        # 开发者选项的彩蛋入口就挂在这一行版本号上（人工 2026-10-06 矫正：版本号本来
+        # 就在「关于」里，不该为它另开一个根菜单项）。不做成按钮——外观要保持一行字。
+        self.version_label.installEventFilter(self)
+        layout.addWidget(self.version_label)
+
+        self.dev_hint_label = QLabel("")
+        self.dev_hint_label.setObjectName("FieldLabel")
+        layout.addWidget(self.dev_hint_label)
 
         credit_title = QLabel("Live2D 模型来源致谢")
         credit_title.setObjectName("FieldLabel")
@@ -1001,6 +1227,39 @@ class AboutDialog(QDialog):
             link.setMinimumHeight(MIN_TARGET_SIZE)
             layout.addWidget(link)
 
+        notice_title = QLabel("获取渠道")
+        notice_title.setObjectName("FieldLabel")
+        layout.addWidget(notice_title)
+
+        for label, value in ACQUISITION_CHANNELS:
+            if value.startswith("http"):
+                # URL 整串得看得见：只挂在 href 上时，人不知道这一点会进哪家仓库，也没法抄下来。
+                # 次级行 `<small>` 且去掉 `https://`：实测那行长 353 px，关于页 387×583（改前
+                # 360×581，只高 2 px）；留着 scheme 是 400 px 一行，关于页要宽到 427，越过
+                # `test_the_notice_does_not_bloat_the_dialog` 那条 400 px 守卫。
+                visible_url = value[len("https://"):] if value.startswith("https://") else value
+                row = QLabel(f'<a href="{value}">{label}</a><br><small>{visible_url}</small>')
+                row.setTextInteractionFlags(Qt.TextBrowserInteraction)
+                row.setOpenExternalLinks(True)
+            else:
+                # 群号没有可点开的形态，给成可选中复制的一行字。
+                row = QLabel(f"{label}: {value}")
+                row.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            row.setObjectName("AboutLink")
+            row.setTextFormat(Qt.RichText)
+            row.setMinimumHeight(MIN_TARGET_SIZE)
+            row.setAccessibleName(f"获取渠道 · {label}")
+            layout.addWidget(row)
+
+        notice = QLabel(PAID_CHANNEL_NOTICE)
+        notice.setObjectName("ConsentBody")
+        notice.setWordWrap(True)
+        # 不设这个就会被关于页撑到 573 px 宽：word-wrap label 的 sizeHint 按单行算（实测 1040 px），
+        # 而 resize_dialog_to_content 取的是 sizeHint 与设计基准的最大值。
+        notice.setMaximumWidth(300)
+        notice.setAccessibleName("付费渠道免责提示")
+        layout.addWidget(notice)
+
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self.close_button = QPushButton("关闭")
@@ -1012,4 +1271,14 @@ class AboutDialog(QDialog):
 
         resize_dialog_to_content(self, QSize(360, 220))
         self.close_button.setFocus(Qt.OtherFocusReason)
+
+    def eventFilter(self, watched, event):
+        if watched is self.version_label and event.type() == QEvent.MouseButtonPress:
+            self._note_version_click()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _note_version_click(self) -> None:
+        """把这一击记到宿主那边，反馈显示在对话框里（气泡在模态窗后面，看不见）。"""
+        self.dev_hint_label.setText(self.parent()._dev_note_version_click())
 

@@ -1,6 +1,8 @@
 """VITS 选路与旋钮口径的回归测试。
 
-对应 working/community 件 ``vits-windows-knobs-divergence`` 的 D1–D4。
+对应 working/community 件 ``vits-windows-knobs-divergence`` 的 D1–D4，
+外加 ``vits-synthesis-silent-under-current-config`` 落地的前端语言标记
+（文件末尾那一节）。
 
 D1 的病根是一个恒真式：``prefer_subprocess = bool(external_py) and not (force
 and not external_py)`` 后面的 ``if external_py: prefer_subprocess = True``
@@ -24,7 +26,7 @@ from meapet.tts.common import (
     resolve_vits_route,
     resolve_vits_speaker,
 )
-from meapet.tts.engines.vits import TtsVitsMixin
+from meapet.tts.engines.vits import TtsVitsMixin, vits_frontend_text
 from meapet.tts import service as service_mod
 
 
@@ -156,13 +158,13 @@ def test_speak_vits_warns_when_inprocess_declaration_is_overridden(
 
     calls: list[str] = []
 
-    def fake_sub(self, text, out, py, knobs=None):
+    def fake_sub(self, text, out, py, knobs=None, **kwargs):
         calls.append("subprocess")
-        return out, "jp"
+        return out, kwargs.get("language", "jp")
 
-    def fake_in(self, text, out):
+    def fake_in(self, text, out, **kwargs):
         calls.append("inprocess")
-        return out, "jp"
+        return out, kwargs.get("language", "jp")
 
     with mock.patch.object(
         TtsVitsMixin, "_vits_external_python", lambda self: "C:/py/python.exe"
@@ -361,6 +363,120 @@ def test_engine_and_health_read_one_decision(tmp_path):
     assert (
         TtsVitsMixin._vits_route(tts).reason == tts._vits_route().reason
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# 前端语言标记 · 人工 2026-10-12 裁决「[ZH] 能听，按语言分段包」
+# （件 vits-synthesis-silent-under-current-config）
+# ══════════════════════════════════════════════════════════════════
+
+def test_frontend_marker_follows_the_language_slot():
+    """只有两档：判成中文才换 ``[ZH]``，其余（含 None/空/ja）一律 ``[JA]``。
+
+    ``cjke_cleaners2`` 只对括号内的文本做罗马化，未标记的汉字会被逐字丢弃
+    （实测无标记句只剩 1 个音素 ``.``）。所以标记本身是出声的前提，不是修饰。
+    """
+    assert vits_frontend_text("今天的风好大", "zh") == "[ZH]今天的风好大[ZH]"
+    assert vits_frontend_text("今天的风好大", "zh-CN") == "[ZH]今天的风好大[ZH]"
+    assert vits_frontend_text("今日はいい天気", "jp") == "[JA]今日はいい天気[JA]"
+    for quiet in (None, "", "ja", "en"):
+        assert vits_frontend_text("x", quiet).startswith("[JA]"), quiet
+
+
+def test_subprocess_argv_marker_follows_language(tmp_path):
+    """argv 里那句 ``--text`` 才是引擎真正读到的东西，标错等于没改。"""
+    host = _RobustHost(vits_python="C:/py/python.exe")
+    captured: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        captured.append(list(argv))
+        out = argv[argv.index("--output") + 1]
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    with mock.patch("meapet.tts.engines.vits.subprocess.run", fake_run):
+        TtsVitsMixin._speak_vits_subprocess(
+            host, "今天的风好大", str(tmp_path / "a.wav"), "C:/py/python.exe"
+        )
+        TtsVitsMixin._speak_vits_subprocess(
+            host,
+            "今天的风好大",
+            str(tmp_path / "b.wav"),
+            "C:/py/python.exe",
+            language="zh",
+        )
+
+    texts = [
+        argv[argv.index("--text") + 1] for argv in captured
+    ]
+    assert texts == ["[JA]今天的风好大[JA]", "[ZH]今天的风好大[ZH]"]
+
+
+def test_both_routes_get_the_same_frontend_text(tmp_path, monkeypatch):
+    """两路口径一致这条老约束，覆盖到标记上：不许进程内永远 [JA]。"""
+    host = _RobustHost(vits_python="C:/py/python.exe")
+    seen: dict[str, str] = {}
+
+    def fake_run(argv, **kwargs):
+        seen["sub"] = argv[argv.index("--text") + 1]
+        out = argv[argv.index("--output") + 1]
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    import meapet.tts.engines.vits_runtime as runtime_mod
+
+    def fake_synth(text, out, **kwargs):
+        seen["in"] = text
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        return out
+
+    monkeypatch.setattr(runtime_mod, "synthesize_vits", fake_synth)
+    with mock.patch("meapet.tts.engines.vits.subprocess.run", fake_run):
+        TtsVitsMixin._speak_vits_subprocess(
+            host,
+            "今天的风好大",
+            str(tmp_path / "s.wav"),
+            "C:/py/python.exe",
+            language="zh",
+        )
+        TtsVitsMixin._speak_vits_inprocess(
+            host, "今天的风好大", str(tmp_path / "i.wav"), language="zh"
+        )
+
+    assert seen["sub"] == seen["in"] == "[ZH]今天的风好大[ZH]"
+
+
+def test_returned_language_slot_is_the_requested_one(tmp_path, monkeypatch):
+    """以前两处硬编码 ``"jp"``：读中文那句回手的语言是假的，下游据此记账会错。"""
+    host = _RobustHost(vits_python="C:/py/python.exe")
+    out = str(tmp_path / "o.wav")
+
+    def fake_run(argv, **kwargs):
+        with open(argv[argv.index("--output") + 1], "w", encoding="utf-8") as fh:
+            fh.write("x")
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    with mock.patch("meapet.tts.engines.vits.subprocess.run", fake_run):
+        result = TtsVitsMixin._speak_vits_subprocess(
+            host, "今天的风好大", out, "C:/py/python.exe", language="zh"
+        )
+    assert result == (out, "zh")
+
+    import meapet.tts.engines.vits_runtime as runtime_mod
+
+    def fake_synth(text, path, **kwargs):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        return path
+
+    monkeypatch.setattr(runtime_mod, "synthesize_vits", fake_synth)
+    inprocess = TtsVitsMixin._speak_vits_inprocess(
+        host, "今天的风好大", out, language="zh"
+    )
+    assert inprocess == (out, "zh")
 
 
 # ══════════════════════════════════════════════════════════════════

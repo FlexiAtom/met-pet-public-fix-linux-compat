@@ -345,6 +345,71 @@ class TestConversationConfigMigration(unittest.TestCase):
             "ws://192.168.1.8:18789",
         )
 
+    def test_agent_kind_is_inferred_from_the_gateway_address_signature(self):
+        """kind 没写时按地址里的**网关签名**反推；`ws://` 本身不算签名。
+
+        三种网关的默认地址全都是 ws://（`defaults.py:17-19`），所以"是 ws 就算
+        agent_link"那种写法会把 hermes/openclaw 原本猜对的那份改错。
+        """
+        from meapet.config.store import normalize_config
+
+        cases = {
+            "ws://127.0.0.1:18789": "openclaw",
+            "ws://127.0.0.1:8766/agent-link": "agent_link",
+            "ws://dsh.local:9000/agent-link": "agent_link",
+            "ws://127.0.0.1:9119/api/ws": "hermes",
+        }
+        for base_url, expected in cases.items():
+            with self.subTest(base_url=base_url):
+                cfg = normalize_config(
+                    {"llm": {"mode": "agent", "agent": {"base_url": base_url}}}
+                )
+                self.assertEqual(cfg["llm"]["agent"]["kind"], expected)
+
+    def test_agent_kind_guess_without_a_signature_says_so_in_the_log(self):
+        """认不出签名才退回历史默认 hermes，而这一条**必须出声**。
+
+        不出声时，"配置里真写了 hermes"和"程序猜出来的 hermes"在日志里长得一模一样，
+        连不上的人只会去查 hermes 那一路。
+        """
+        from meapet.config.store import infer_agent_kind, normalize_config
+
+        kind, basis = infer_agent_kind("ws://dsh.local:9000/foo")
+        self.assertEqual(kind, "hermes")
+        self.assertIn("猜", basis)
+
+        with self.assertLogs("config", level="WARNING") as captured:
+            cfg = normalize_config(
+                {
+                    "llm": {
+                        "mode": "agent",
+                        "agent": {"base_url": "ws://dsh.local:9000/foo"},
+                    }
+                }
+            )
+        self.assertEqual(cfg["llm"]["agent"]["kind"], "hermes")
+        self.assertTrue(
+            any("llm.agent.kind" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_explicit_agent_kind_wins_over_the_address_signature(self):
+        """kind 写明了就不该被反推插手：地址签名只服务"没写"那一路。"""
+        from meapet.config.store import normalize_config
+
+        cfg = normalize_config(
+            {
+                "llm": {
+                    "mode": "agent",
+                    "agent": {
+                        "kind": "hermes",
+                        "base_url": "ws://127.0.0.1:8766/agent-link",
+                    },
+                }
+            }
+        )
+        self.assertEqual(cfg["llm"]["agent"]["kind"], "hermes")
+
     def test_legacy_http_model_agent_migrates_to_direct_instead_of_fake_ws(self):
         from meapet.config.store import normalize_config
 

@@ -278,22 +278,22 @@ def build_companion_capabilities(broker) -> CapabilityRegistry:
 
     registry.add_tool(
         meapet_say,
-        name="meapet.say",
+        name="meapet_say",
         description=meapet_say.__doc__ or "",
     )
     registry.add_tool(
         meapet_express,
-        name="meapet.express",
+        name="meapet_express",
         description=meapet_express.__doc__ or "",
     )
     registry.add_tool(
         meapet_get_state,
-        name="meapet.get_state",
+        name="meapet_get_state",
         description=meapet_get_state.__doc__ or "",
     )
     registry.add_tool(
         meapet_capture_screen,
-        name="meapet.capture_screen",
+        name="meapet_capture_screen",
         description=meapet_capture_screen.__doc__ or "",
         result_modalities=("image",),
     )

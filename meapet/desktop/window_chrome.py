@@ -18,6 +18,7 @@ from PyQt5.QtCore import QRect, Qt
 
 from meapet.desktop import status_language
 from meapet.desktop.icons import standard_icon
+from meapet.desktop.menu_window import SWITCH_ACTION_NAME
 from meapet.config.defaults import DEFAULT_OLLAMA_VISION_MODEL
 from meapet.desktop.screen_geometry import (
     available_geometry_for,
@@ -35,6 +36,22 @@ from meapet.ui_theme import (
     normalize_pet_size_factor,
     apply_named_style, )
 from meapet.utils import safe_print
+
+
+def _tavily_key_hint(status: str) -> str:
+    """爬虫子菜单那行灰字：Tavily key 现在从哪来（`secret_status` 的取值口径）。
+
+    菜单不收 key（人工口径「Key什么的让用户自己填」），但也不许用户对着"没反应"猜。
+    免注册档是实测过的（案文 2026-10：keyless 可用），所以"没填"不是故障；至于填了之后
+    key 有效与否，这一层量不出来（实测「无效 key 不退回 keyless」），文案就不替它作保。
+    """
+    if status == "missing":
+        return "Tavily key 没填：走免注册档，可用"
+    if status == "file":
+        return "Tavily key 读自配置文件"
+    if status.startswith("env:"):
+        return "Tavily key 读自环境变量"
+    return "Tavily key 已配置"
 
 
 class PetWindowChromeMixin:
@@ -135,6 +152,12 @@ class PetWindowChromeMixin:
         if callable(stop_control):
             try:
                 stop_control()
+            except Exception:
+                pass
+        stop_onebot = getattr(self, "_stop_onebot", None)
+        if callable(stop_onebot):
+            try:
+                stop_onebot()
             except Exception:
                 pass
         try:
@@ -345,6 +368,14 @@ class PetWindowChromeMixin:
         menu.addAction(snap_action)
         menu.addSeparator()
 
+        # 「设置与数据」先建出来：凡是要写 self.config 的项都挂它下面，根层只留高频动作
+        # （人工 2026-10-06 点的形状：根＝养成状态·看看我在干嘛·切换表情·设置与数据▸·关于·退出）。
+        settings_menu = QMenu("设置与数据", self)
+        settings_menu.setIcon(standard_icon("settings"))
+        settings_menu.setObjectName("SettingsAndDataMenu")
+        apply_named_style(settings_menu, "MENU_STYLE")
+        settings_menu.setAccessibleName("设置与数据")
+
         expr_menu = QMenu("切换表情", self)
         expr_menu.setIcon(standard_icon("expression"))
         expr_menu.setObjectName("ExpressionMenu")
@@ -403,13 +434,13 @@ class PetWindowChromeMixin:
             vision_menu.addAction(tip)
 
         vision_menu.addSeparator()
-        w_enabled = self.config.get("watcher", {}).get("enabled", False)
-        watch_text = (
-            status_language.menu_watch_disable()
-            if w_enabled
-            else status_language.menu_watch_enable()
-        )
-        watch_action = QAction(watch_text, self)
+        w_enabled = bool((self.config.get("watcher") or {}).get("enabled", False))
+        watch_action = QAction(status_language.menu_watch_toggle(), self)
+        # 这一项是状态开关而不是动作：文字恒定，状态由拨杆本身表示
+        # （人工 2026-10-06 点的形状）。菜单窗口见到这个 objectName 才画拨杆。
+        watch_action.setObjectName(SWITCH_ACTION_NAME)
+        watch_action.setCheckable(True)
+        watch_action.setChecked(w_enabled)
         watch_action.setToolTip("开启后可能定时截取屏幕内容")
         watch_action.triggered.connect(self._toggle_watcher_enabled)
         vision_menu.addAction(watch_action)
@@ -422,7 +453,7 @@ class PetWindowChromeMixin:
         standby_action = QAction(standby_text, self)
         standby_action.triggered.connect(self._toggle_standby)
         vision_menu.addAction(standby_action)
-        menu.addMenu(vision_menu)
+        settings_menu.addMenu(vision_menu)
 
         voice_enabled = self.config.get("voice_input", {}).get("enabled", False)
         voice_text = (
@@ -433,8 +464,7 @@ class PetWindowChromeMixin:
         voice_action = QAction(voice_text, self)
         voice_action.setToolTip("开启后输入框出现麦克风按钮，点击录音转文字（本地离线）")
         voice_action.triggered.connect(self._toggle_voice_input)
-        menu.addAction(voice_action)
-        menu.addSeparator()
+        settings_menu.addAction(voice_action)
 
         display_menu = QMenu("显示与立绘", self)
         display_menu.setIcon(standard_icon("display"))
@@ -473,7 +503,7 @@ class PetWindowChromeMixin:
         size_action.triggered.connect(self._open_size_dialog)
         size_menu.addAction(size_action)
         display_menu.addMenu(size_menu)
-        menu.addMenu(display_menu)
+        settings_menu.addMenu(display_menu)
 
         # 穿透是写侧（我们告诉系统怎么对待指针）、定位是读侧（我们想知道系统把我们
         # 安置在哪），同属"surface 与合成器之间的那层合同"，故并为一个子菜单。
@@ -494,13 +524,10 @@ class PetWindowChromeMixin:
         )
         fidus_action.triggered.connect(self._toggle_fidus_enabled)
         locate_menu.addAction(fidus_action)
-        menu.addMenu(locate_menu)
+        settings_menu.addMenu(locate_menu)
 
-        settings_menu = QMenu("设置与数据", self)
-        settings_menu.setIcon(standard_icon("settings"))
-        settings_menu.setObjectName("SettingsAndDataMenu")
-        apply_named_style(settings_menu, "MENU_STYLE")
-        settings_menu.setAccessibleName("设置与数据")
+        settings_menu.addMenu(self._build_click_feedback_menu())
+
         auto_started = self._is_auto_start()
         auto_action = QAction("开机自启", self)
         auto_action.setCheckable(True)
@@ -542,6 +569,17 @@ class PetWindowChromeMixin:
             rotate_token_action = QAction("重新生成 Agent 控制令牌…", self)
             rotate_token_action.triggered.connect(self._regenerate_agent_control_token)
             settings_menu.addAction(rotate_token_action)
+        if (self.config.get("onebot") or {}).get("enabled"):
+            onebot_status = QAction(
+                status_language.menu_onebot_status_prefix()
+                + str(getattr(self, "_onebot_status_text", lambda: "")() or ""),
+                self,
+            )
+            onebot_status.setEnabled(False)
+            settings_menu.addAction(onebot_status)
+            onebot_reload = QAction(status_language.menu_onebot_reload(), self)
+            onebot_reload.triggered.connect(self._reload_onebot)
+            settings_menu.addAction(onebot_reload)
         settings_menu.addSeparator()
         reset_label = (
             "新建 Agent 会话…"
@@ -554,6 +592,9 @@ class PetWindowChromeMixin:
         reset_action.setIcon(standard_icon("reset"))
         reset_action.triggered.connect(self._reset_memory)
         settings_menu.addAction(reset_action)
+        if getattr(self, "_dev_unlocked", False):
+            # 未解锁时这一支压根不存在（不是禁用摆在那儿）
+            settings_menu.addMenu(self._dev_build_menu())
         menu.addMenu(settings_menu)
 
         menu.addSeparator()
@@ -566,6 +607,108 @@ class PetWindowChromeMixin:
         quit_action.setIcon(standard_icon("quit"))
         quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
+        return menu
+
+    def _build_click_feedback_menu(self) -> QMenu:
+        """「点击反馈」子菜单：两路走网的内容各自开关，抽中哪一路看权重。
+
+        拨杆读 `is_source_live`（开了**且**点过隐私告知）而不是裸 `enabled`：手改配置把
+        `enabled` 拧成 true 却从没确认过告知时，这一路压根不参与抽样，拨杆跟着显示开着就成了
+        「开了但没反应，还没处问」。状态与理由一起给——紧跟着的那行灰字读 `participation_gap`。
+        """
+        from meapet.click_feedback import feedback
+        from meapet.click_feedback.sources import SOURCE_LABELS
+        from meapet.config.store import secret_status
+
+        menu = QMenu("点击反馈", self)
+        menu.setIcon(standard_icon("expression"))
+        menu.setObjectName("ClickFeedbackMenu")
+        apply_named_style(menu, "MENU_STYLE")
+        menu.setAccessibleName("点击反馈")
+
+        # 顶层这一行是三路各自状态的合成结果：开关分散在下一层，这里给"那么我点什么会怎样"。
+        live_titles = [
+            feedback.SOURCE_TITLES.get(name, name)
+            for name, _weight in feedback.participating_sources(self.config)
+        ]
+        summary_text = (
+            "现在点击会从：" + " · ".join(live_titles)
+            if live_titles
+            else "三路都不抽中，点击还是原来的反应（预制语音）"
+        )
+        summary = QAction(summary_text, self)
+        summary.setEnabled(False)
+        menu.addAction(summary)
+
+        for name in (feedback.CRAWLER, feedback.POETRY):
+            title = feedback.SOURCE_TITLES[name]
+            submenu = QMenu(title, self)
+            submenu.setObjectName(f"ClickFeedback{name.capitalize()}Menu")
+            apply_named_style(submenu, "MENU_STYLE")
+            submenu.setAccessibleName(f"点击反馈 {title}")
+
+            switch = QAction(status_language.menu_click_feedback_toggle(title), self)
+            # 状态开关不是动作：文字恒定，状态由拨杆表示（与屏幕观察那一项同形）。
+            switch.setObjectName(SWITCH_ACTION_NAME)
+            switch.setCheckable(True)
+            switch.setChecked(feedback.is_source_live(self.config, name))
+            switch.triggered.connect(
+                lambda _checked, n=name: self._toggle_click_feedback_source(n)
+            )
+            submenu.addAction(switch)
+
+            if name == feedback.POETRY:
+                poetry = ((self.config.get("click_feedback") or {}).get(name)) or {}
+                chosen = [str(s) for s in (poetry.get("sources") or ())]
+                for sname in sorted(SOURCE_LABELS):
+                    label, description = SOURCE_LABELS[sname]
+                    source_action = QAction(label, self)
+                    # 这两档也用拨杆而不是勾：`PetMenuWindow` 对普通可勾项只在 accessible
+                    # 名字里写「已选中」，屏上看不出差别（尺寸预设那几项正有此病）。拨杆是唯一
+                    # 看得见状态的那一形。
+                    source_action.setObjectName(SWITCH_ACTION_NAME)
+                    source_action.setCheckable(True)
+                    source_action.setChecked(sname in chosen)
+                    source_action.setToolTip(description)
+                    source_action.triggered.connect(
+                        lambda checked, s=sname: self._set_click_feedback_poetry_source(
+                            s, bool(checked)
+                        )
+                    )
+                    submenu.addAction(source_action)
+
+            keywords_action = QAction("关键词…", self)
+            keywords_action.setToolTip(
+                "检索围绕这些词，一行一个"
+                if name == feedback.CRAWLER
+                else "只有「古籍检索」用这些词做检索词；「一句随机诗词」不查词"
+            )
+            keywords_action.triggered.connect(
+                lambda _checked, n=name: self._open_click_feedback_keywords(n)
+            )
+            submenu.addAction(keywords_action)
+
+            if name == feedback.CRAWLER:
+                # key 不在菜单里收（人工口径：「Key什么的让用户自己填」），只说它现在从哪来。
+                key_line = QAction(
+                    _tavily_key_hint(secret_status(self.config).get("tavily", "")), self
+                )
+                key_line.setEnabled(False)
+                submenu.addAction(key_line)
+
+            gap = feedback.participation_gap(self.config, name)
+            if gap:
+                gap_line = QAction(gap, self)
+                gap_line.setEnabled(False)
+                submenu.addAction(gap_line)
+
+            menu.addMenu(submenu)
+
+        menu.addSeparator()
+        weight_action = QAction("抽中权重…", self)
+        weight_action.setToolTip("三路各给 0–100 的相对值，不必凑成 100")
+        weight_action.triggered.connect(self._open_click_feedback_weights)
+        menu.addAction(weight_action)
         return menu
 
     def _show_about(self):

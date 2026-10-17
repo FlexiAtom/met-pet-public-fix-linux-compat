@@ -404,10 +404,6 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
             def _on_vits_env_done(self, ok, message):
                 self.completed = (ok, message)
 
-            # _is_pet_exe: page_tts_vits 调用此方法判断 python 是否为打包后的 exe
-            def _is_pet_exe(self, py_exe):
-                return False
-
         class CheckResult:
             returncode = 1
             stdout = ""
@@ -775,6 +771,7 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
                 "speed": 1.0,
                 "sample_steps": 8,
                 "timeout": 1,
+                "gsv_timeout": 1,
             },
         )()
         with mock.patch("meapet.tts.engines.gsv.subprocess.run", side_effect=fake_run):
@@ -821,6 +818,7 @@ class TestRefactorRuntimeRegressions(unittest.TestCase):
                 "speed": 1.0,
                 "sample_steps": 8,
                 "timeout": 1,
+                "gsv_timeout": 1,
             },
         )()
         with mock.patch("meapet.tts.engines.gsv.subprocess.run", side_effect=fake_run):

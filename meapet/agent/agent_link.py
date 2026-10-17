@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections import OrderedDict
+import math
+import threading
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Any, AsyncIterator, Mapping
@@ -72,6 +74,36 @@ _SAFE_CATEGORIES = frozenset(
     }
 )
 _MAX_TERMINAL_TOOL_RESULTS = 32
+_MAX_IDLE_TOOL_STATUSES = 16
+#: `chat.tool_status` 载荷里那三个可选计数（`docs/agent-link-v1.md` §7.2）。名字就是载荷上的
+#: 名字，桌宠只按这些名字取，不猜别名——猜别名等于替 Agent 决定它没写的那个字段是什么。
+#: 公开是给 `fake_agent` 的分母与 `doctor` 的分子共用的，那两处数的是同一串键。
+COUNTER_FIELDS = ("call_index", "elapsed_ms", "tokens")
+#: 上界只是**拒绝**明显不可能是计数的一串（负数、1e18、NaN），不是把它夹到 1e12 后照登。
+_MAX_COUNTER_VALUE = 10 ** 12
+
+
+def safe_counter(value: object) -> int | None:
+    """计数/耗时字段：只收非负整数（浮点按四舍五入），其余一律 ``None``。
+
+    公开是给 `fake_agent` 那一份分母用的——假端算「这趟应当有几个计数」必须调**这同一个**
+    判据，复制一份就会漂移（读数里分子来自客户端、分母来自剧本）。
+
+    布尔必须挡掉：Python 里 ``isinstance(True, int)`` 为真，不挡就会把 ``true`` 读成 1，
+    而「第 1 次调用」和「这个字段是个 true」是两句不同的话。缺席与坏值都归 None，
+    因为**载荷不猜**：把坏值报成 0 会让「Agent 没给」读起来像「给了但是零」。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        # 带小数的 elapsed_ms 是 JS 网关的常态（performance.now() 那一类），四舍五入到毫秒
+        # 量的还是它给的那个量；按「不是整数」丢掉会让真网关这一格永远读成「没给」。
+        value = round(value)
+    if value < 0 or value > _MAX_COUNTER_VALUE:
+        return None
+    return int(value)
 
 
 def _package_version() -> str:
@@ -224,6 +256,10 @@ class AgentLinkAdapter:
         self._cancelled_turns: set[str] = set()
         self._tool_tasks: dict[str, asyncio.Task] = {}
         self._tool_terminal: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._idle_statuses: deque[ToolStatus] = deque(
+            maxlen=_MAX_IDLE_TOOL_STATUSES
+        )
+        self._idle_status_lock = threading.Lock()
         self._registry_sync_tasks: set[asyncio.Task] = set()
         self._transport = PersistentJsonWebSocket(
             config.base_url,
@@ -577,6 +613,27 @@ class AgentLinkAdapter:
             or str(frame.payload.get("request_id") or "").strip()
         )
 
+    def _tool_status_from_payload(
+        self,
+        payload: Mapping[str, object],
+    ) -> ToolStatus | None:
+        state_name = _safe_text(payload.get("state"), limit=64)
+        safe_status = _safe_text(payload.get("safe_text"), limit=300)
+        if not state_name or not safe_status:
+            return None
+        # 计数只跟着走，不参与上面那道判据：载荷里带了个坏数字也不该把这一帧的状态文本丢掉。
+        counters = {name: safe_counter(payload.get(name)) for name in COUNTER_FIELDS}
+        return ToolStatus(state_name, safe_status, **counters)
+
+    def take_idle_tool_statuses(self) -> tuple[ToolStatus, ...]:
+        """回合外 chat.tool_status 的出口；入队在读任务、出队在 Qt 主线程，故加锁。"""
+        with self._idle_status_lock:
+            if not self._idle_statuses:
+                return ()
+            taken = tuple(self._idle_statuses)
+            self._idle_statuses.clear()
+            return taken
+
     async def _dispatch_frame(self, raw: object) -> None:
         frame = AgentLinkFrame.parse(raw)
         if frame.session_id != self._remote_session_id:
@@ -618,10 +675,33 @@ class AgentLinkAdapter:
             self._cancel_tool_call(frame)
             return
         if frame.type.startswith("chat."):
-            target = self._frame_target(frame)
-            state = self._active.get(target)
+            state = self._active.get(self._frame_target(frame))
             if state is not None:
                 await state.queue.put(frame)
+                return
+            if frame.type == "chat.tool_status":
+                status = self._tool_status_from_payload(frame.payload)
+                if status is not None:
+                    with self._idle_status_lock:
+                        self._idle_statuses.append(status)
+                    return
+            if bool(frame.payload.get("required", False)):
+                await self._send_protocol(
+                    make_agent_link_frame(
+                        "control.error",
+                        {
+                            "code": "NO_ACTIVE_TURN",
+                            "safe_message": (
+                                "MeaPet 当前没有可承接该消息的回合。"
+                            ),
+                            "retryable": False,
+                        },
+                        session_id=self._remote_session_id,
+                        reply_to=frame.id,
+                        extensions=self.config.extensions,
+                    ),
+                    timeout=5.0,
+                )
             return
         if frame.type == "control.error":
             target = self._frame_target(frame)
@@ -997,18 +1077,18 @@ class AgentLinkAdapter:
                 if not isinstance(item, AgentLinkFrame):
                     continue
                 if item.type == "chat.accepted":
+                    yield ToolStatus(
+                        "accepted",
+                        _safe_text(
+                            item.payload.get("safe_text"), limit=300
+                        )
+                        or "Agent 已接手，正在处理。",
+                    )
                     continue
                 if item.type == "chat.tool_status":
-                    state_name = _safe_text(
-                        item.payload.get("state"),
-                        limit=64,
-                    )
-                    safe_status = _safe_text(
-                        item.payload.get("safe_text"),
-                        limit=300,
-                    )
-                    if state_name and safe_status:
-                        yield ToolStatus(state_name, safe_status)
+                    status = self._tool_status_from_payload(item.payload)
+                    if status is not None:
+                        yield status
                     continue
                 if item.type == "chat.delta":
                     sequence = item.payload.get("seq")
