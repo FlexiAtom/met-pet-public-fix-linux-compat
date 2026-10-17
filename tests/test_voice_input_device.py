@@ -487,9 +487,15 @@ def test_build_recognizer_uses_the_product_parameters_not_a_headless_copy(tmp_pa
 
 
 def test_build_recognizer_names_the_missing_tier_instead_of_returning_none(monkeypatch):
-    """`None` 与"缺哪一档"是两种处置（下模型 / 重装），取证侧要把它们分开报。"""
+    """`None` 与"缺哪一档"是两种处置（下模型 / 重装），取证侧要把它们分开报。
+
+    桩掉 `sherpa_onnx` 是必须的：`build_recognizer` 先 import 再查模型目录（那两步各对应一种
+    缺席，`engine.py:37` 的 docstring 写明了），CI 装的是 `.[linux]` 那一份依赖、没有 sherpa，
+    不桩就会拿到 `ModuleNotFoundError` 而不是这里要验的那一支。
+    """
     from meapet.voice import engine as engine_module
 
+    _install_fake_sherpa(monkeypatch, {})
     monkeypatch.setattr(engine_module, "find_voice_asr_model_dir", lambda _p: None)
     with pytest.raises(engine_module.AsrModelMissing, match="int8"):
         engine_module.build_recognizer("int8")

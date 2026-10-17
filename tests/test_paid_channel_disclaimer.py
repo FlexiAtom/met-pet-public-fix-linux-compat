@@ -164,12 +164,44 @@ class AboutDialogTest(unittest.TestCase):
         self.assertEqual(labels[0].text(), PAID_CHANNEL_NOTICE)
 
     def test_the_notice_does_not_bloat_the_dialog(self) -> None:
-        """单行 sizeHint 实测 1040 px；放任就会把关于页从 360 撑到 573。"""
+        """免责句占多行、但不许撑宽——四条各挡一种崩法，都不写死绝对像素。
+
+        旧判据是一条 `grown.width() <= 400`，它标定的是**本机字体**（Noto Sans CJK SC 12pt 实测
+        387 px），runner 的回退字体量到 407 就当场红了（2026-10-17 CI）。同一份版式把
+        `QT_FONT_DPI` 抬到 144 本机也是 541 ⇒ 那条红是字体误报，不是有人撑宽了弹窗。反过来拿
+        实测矩阵量它挡不挡得住真回归：关掉换行（`setWordWrap(False)`）、撤掉 `dialogs.py:1259`
+        那枚 `setMaximumWidth(300)` 各都**不红**——宽度那格现在本来就是被那枚上限夹住的，与换行无关。
+        所以按判据拆成四条，每条各自有名有姓的对手（完整矩阵见该案文件）：
+
+        - `wordWrap()` 为真：挡"换行被关"。
+        - 换行后的高度 > 同一句关掉换行的高度：挡"换行没生效"（比值随字体同步缩放，换机器不翻）。
+        - 摘掉免责句前后宽度相等：挡"撑宽"——实测只有**同时**关换行又撤上限才触发（387 → 784）。
+        - 宽 >= 360：设计基准还在，前一条才不会因为两边一起塌掉而自证成立。
+        """
         notice = _notice_labels(self.dialog)[0]
-        self.assertTrue(notice.wordWrap())
+        self.assertTrue(notice.wordWrap(), "免责句的换行被关了：单行 sizeHint 实测 792 px")
         grown = resize_dialog_to_content(self.dialog, QSize(360, 220))
-        self.assertLessEqual(grown.width(), 400, f"关于页被撑到 {grown.width()} px")
-        self.assertGreater(notice.height(), 0)
+        self.assertGreaterEqual(grown.width(), 360, "设计基准宽度都没保住，差值断言会自证成立")
+
+        wrapped_height = notice.height()
+        notice.setWordWrap(False)
+        _app.processEvents()
+        one_line_height = notice.height()
+        notice.setWordWrap(True)
+        _app.processEvents()
+        self.assertGreater(
+            wrapped_height, one_line_height, f"换行没生效，仍占 {one_line_height} px 高"
+        )
+
+        notice.setVisible(False)
+        _app.processEvents()
+        bare = resize_dialog_to_content(self.dialog, QSize(360, 220))
+        notice.setVisible(True)
+        self.assertEqual(
+            grown.width(),
+            bare.width(),
+            f"免责句把关于页撑宽了 {grown.width() - bare.width()} px（换行没生效？）",
+        )
 
 
 class AcquisitionChannelsTest(unittest.TestCase):
