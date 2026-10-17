@@ -690,7 +690,7 @@ class TestRepositoryIgnoreRules(unittest.TestCase):
         chinese = (ROOT / "README.md").read_text(encoding="utf-8")
         english = (ROOT / "README.en.md").read_text(encoding="utf-8")
 
-        self.assertTrue(chinese.startswith("# MeaPet - 桌面宠物\n"))
+        self.assertTrue(chinese.startswith("# MeaPet PC - 桌面宠物\n"))
         self.assertIn("**简体中文** | [English](README.en.md)", chinese)
         self.assertIn("## 快速开始", chinese)
         self.assertIn("[简体中文](README.md) | **English**", english)

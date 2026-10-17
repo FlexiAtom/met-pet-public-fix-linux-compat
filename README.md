@@ -1,12 +1,26 @@
-# MeaPet - 桌面宠物
+# MeaPet PC - 桌面宠物
 
 **简体中文** | [English](README.en.md)
 
-MeaPet 是一款 Windows 与 Linux 并重的 PyQt5 透明桌面宠物。它将角色立绘、AI 对话、语音合成、屏幕视觉、SQLite 记忆和好感度整合在一个桌面前端中，同时支持 Live2D 和 PNG 两种渲染方式。
+MeaPet PC 是一款 Windows 与 Linux 并重的 PyQt5 透明桌面宠物。它将角色立绘、AI 对话、语音合成、屏幕视觉、SQLite 记忆和好感度整合在一个桌面前端中，同时支持 Live2D 和 PNG 两种渲染方式。
 
-MeaPet 有清晰的职责边界：角色呈现、聊天气泡、TTS、截图授权和本地状态由 MeaPet 管理；使用 Agent 作为回复后端时，模型、长期记忆和内部工具由 Agent 管理。
+MeaPet PC 有清晰的职责边界：角色呈现、聊天气泡、TTS、截图授权和本地状态由 MeaPet PC 管理；使用 Agent 作为回复后端时，模型、长期记忆和内部工具由 Agent 管理。
 
-**移动版**：[mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile)（包含核心功能的轻量移动客户端）
+## 命名口径
+
+**MeaPet**（仓库名写作 `mea-pet`）是整个产品的名字。它有两个平台实现，谁都不独占这个名字：
+
+| 名字 | 是什么 | 代码在哪 |
+|------|--------|----------|
+| **MeaPet PC** | Windows / Linux 的 PyQt5 桌面宠物，**本文档描述的就是它** | 本仓库 |
+| **MeaPet Android** | Android 上的移动版客户端 | [mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile) |
+
+`MeaPet` 不等于 `MeaPet PC`，也不等于 `MeaPet Android`。本文档里凡是说这个桌面程序的，一律写 **MeaPet PC**。
+
+一串**历史产物名**不在这个口径之内，也不要拿它们反推产品边界：代码包名 `meapet`、PyPI 分发名 `mea-pet`、
+可执行文件 `MeaPet.exe`、`MeaPet.spec`、环境变量前缀 `MEAPET_` / `MEA_PET_`、日志名 `meapet_boot.log`、
+MCP 工具名 `meapet_say`。它们是 **MeaPet PC** 这一个实现的产物名，改动会断安装、构建与协议契约，
+所以不随本口径一起改。
 
 **官方Q群**：1128485088（加群备注：**来意 + 使用的系统**）
 
@@ -108,7 +122,7 @@ pyinstaller MeaPet.spec
 
 缺这个产物时 Linux 上的打包会直接中止并提示上面第一条命令——带着缺件打出来的包没有穿透模式，而这件事只在真机上看得见。
 
-`mea-pet` wheel 只是用于开发和依赖分发的 Python 包组件，不包含完整桌面资源目录或独立启动器。请使用源码检出目录或 PyInstaller onedir 包运行完整桌宠。
+MeaPet PC 的 wheel（PyPI 分发名 `mea-pet`）只是用于开发和依赖分发的 Python 包组件，不包含完整桌面资源目录或独立启动器。请使用源码检出目录或 PyInstaller onedir 包运行完整桌宠。
 
 便携版目录结构（用户可写数据与程序包一起放在 `_internal` 下）：
 
@@ -131,7 +145,7 @@ pyinstaller MeaPet.spec
 
 ### 直连模型 API
 
-直连模式由 MeaPet 管理角色提示词、近期上下文、SQLite 记忆和输出约束。这是唯一会直接连接 LLM HTTP API 的模式。
+直连模式由 MeaPet PC 管理角色提示词、近期上下文、SQLite 记忆和输出约束。这是唯一会直接连接 LLM HTTP API 的模式。
 
 在向导中需要配置三项内容：API 基础 URL、模型名称（可以通过“获取模型”自动发现）和 API Key。保存后的 `provider` 始终为 `custom`。传输方式由 `protocol` 和 `api_base` 决定：Ollama 本地 URL 会自动选择 `ollama_chat`，其他地址默认使用 OpenAI 兼容的 Chat 协议。URL 提示只影响从哪个环境变量读取 Key，以及 TTS/视觉与 MiMo/Ollama 的联动。
 
@@ -144,17 +158,17 @@ pyinstaller MeaPet.spec
 
 ### Agent
 
-Agent 模式将 MeaPet 作为纯桌面前端：
+Agent 模式将 MeaPet PC 作为纯桌面前端：
 
-- MeaPet 调用 Agent 生成回复，并提供情绪、动作、TTS 语言和角色状态等上下文。
-- Agent 使用自己的模型、记忆和内部工具；MeaPet 不要求 Agent 额外实现“查询记忆”能力。
+- MeaPet PC 调用 Agent 生成回复，并提供情绪、动作、TTS 语言和角色状态等上下文。
+- Agent 使用自己的模型、记忆和内部工具；MeaPet PC 不要求 Agent 额外实现“查询记忆”能力。
 - 内部工具名称和原始参数不会显示在角色气泡中。安全的状态（开始、完成、失败）会进入时间线，诊断详情只写入日志。
 - Agent 模式只使用 WebSocket。Hermes 连接 `hermes serve` 暴露的原生 TUI Gateway，OpenClaw 连接 Gateway v4，自定义后端可以实现 Agent Link v1。HTTP/SSE 模型端点只属于直连模式。
 - 连接会跨轮次复用，支持双向流式传输、取消、ping/pong 以及各协议自己的断线恢复。OpenClaw 使用相同的幂等键重试；Hermes 会恢复已保存的会话并核对历史，而不是盲目重新提交可能已经执行过工具调用的轮次。
-- Agent Link 使用同一个出站连接完成聊天和前端工具调用。握手后 MeaPet 会发布带类型的工具 schema，第三方连接器可以在自己的 Agent 循环中注册这些工具，并主动调用 `meapet_say`。
-- Agent 回复必须遵循 MeaPet 的分段输出格式。格式错误会进入明确的格式修复状态；任何 Agent 路径都不会静默回退到 HTTP 模型端点。
+- Agent Link 使用同一个出站连接完成聊天和前端工具调用。握手后 MeaPet PC 会发布带类型的工具 schema，第三方连接器可以在自己的 Agent 循环中注册这些工具，并主动调用 `meapet_say`。
+- Agent 回复必须遵循 MeaPet PC 的分段输出格式。格式错误会进入明确的格式修复状态；任何 Agent 路径都不会静默回退到 HTTP 模型端点。
 
-本地 `session_id` 用于标识 MeaPet 的时间线范围。OpenClaw 还会持久化其 Gateway `session_key`；Hermes 会持久化服务器返回的 `remote_session_id`，并在重启或重连后使用 `session.resume`。在 Agent 模式中，“清除记忆”会明确启动一个新的上游 Agent 会话。旧时间线仍可读取。
+本地 `session_id` 用于标识 MeaPet PC 的时间线范围。OpenClaw 还会持久化其 Gateway `session_key`；Hermes 会持久化服务器返回的 `remote_session_id`，并在重启或重连后使用 `session.resume`。在 Agent 模式中，“清除记忆”会明确启动一个新的上游 Agent 会话。旧时间线仍可读取。
 
 完整的自定义后端契约见 [`docs/agent-link-v1.md`](docs/agent-link-v1.md)。普通 WebSocket 端点并不足够；后端必须实现其中定义的信封格式、握手、工具快照、请求关联、幂等、取消、离线和重连语义。
 
@@ -231,7 +245,7 @@ GPT-SoVITS 的项目根一般不用填：程序从 `tts.python_exe` 所在目录
 
 这一项向导里没有入口，只能写在 `config.json` 里；填了但那个目录下没有 `GPT_SoVITS/TTS_infer_pack/` 会被忽略，仍回落到自动上溯。路径不做 `~` 展开，请写完整绝对路径。
 
-语音翻译使用 MeaPet 内置的非 LLM 机器翻译服务池。单个分段失败时会轮换服务，总尝试次数最多为 3 次。启用“优先使用模型语音翻译”后，模型返回的 `voice_language` 和 `voice_text` 会与配置的目标语言核对；若不一致，则翻译到目标语言。单独的“不支持时翻译”开关控制输出语言不受支持时的回退策略。翻译最终失败时会跳过该语音分段，但保留文本气泡。
+语音翻译使用 MeaPet PC 内置的非 LLM 机器翻译服务池。单个分段失败时会轮换服务，总尝试次数最多为 3 次。启用“优先使用模型语音翻译”后，模型返回的 `voice_language` 和 `voice_text` 会与配置的目标语言核对；若不一致，则翻译到目标语言。单独的“不支持时翻译”开关控制输出语言不受支持时的回退策略。翻译最终失败时会跳过该语音分段，但保留文本气泡。
 
 ## Linux 手动配置本地语音
 
@@ -318,11 +332,11 @@ python3.10 -m venv ~/vits_env
 | `inherit` | 主回复模型支持图片时，在同一多模态请求中附带截图 |
 | `relay` | 先由独立视觉模型生成描述，再传给回复后端 |
 
-`inherit` 适用于原生支持图片的直连模型或 Agent。直连模式下，`relay` 可以选择 Ollama 或 MiMo 作为视觉模型。Agent 模式应使用 Agent 自己的视觉能力，或关闭视觉；不要在 MeaPet 侧通过另一个视觉模型中继。TTS 机器翻译不参与视觉链路。
+`inherit` 适用于原生支持图片的直连模型或 Agent。直连模式下，`relay` 可以选择 Ollama 或 MiMo 作为视觉模型。Agent 模式应使用 Agent 自己的视觉能力，或关闭视觉；不要在 MeaPet PC 侧通过另一个视觉模型中继。TTS 机器翻译不参与视觉链路。
 
 隐私规则会被强制执行：屏幕观察默认关闭；每张截图都需要本地确认，授权仅对当前一次截图有效。确认范围默认为全屏，也可以限定为区域或特定应用。新链路只在内存中传递截图，绝不会将其写入磁盘。使用云端视觉还必须明确设置 `watcher.allow_cloud` 同意项。
 
-## Companion MCP：Agent 控制 MeaPet
+## Companion MCP：Agent 控制 MeaPet PC
 
 对于 Hermes 和 OpenClaw，Agent 模式可以选择暴露标准 MCP Streamable HTTP 端点：
 
@@ -351,7 +365,7 @@ http(s)://<listen_host>:<port>/mcp
 
 ## QQ 通道（OneBot v11）
 
-MeaPet 也可以是一个 QQ 机器人：它双向实现 OneBot v11，因此无论 NapCat 还是 SnowLuma，正反两个方向都能对接：
+MeaPet PC 也可以是一个 QQ 机器人：它双向实现 OneBot v11，因此无论 NapCat 还是 SnowLuma，正反两个方向都能对接：
 
 - **发起端** —— `forward_ws`（主动连对端的 WebSocket 服务端）与 `http_api`（调用对端 HTTP API 发送）。
 - **接收端** —— `reverse_ws`（监听，等对端连进来）与 `http_post`（接收事件上报）。
@@ -429,7 +443,7 @@ MeaPet 也可以是一个 QQ 机器人：它双向实现 OneBot v11，因此无�
 
 - 默认保留最近 5 轮时间线，可在向导中配置为 0-100。
 - 时间线按直连 provider / Agent 类型和 Agent 会话隔离；切换后端不会串线。
-- SQLite 记忆（直连模式）与 Agent 自己的记忆边界彼此独立。MeaPet 不会复制 Agent 的长期记忆。
+- SQLite 记忆（直连模式）与 Agent 自己的记忆边界彼此独立。MeaPet PC 不会复制 Agent 的长期记忆。
 - 应用新配置、切换会话和轮换 Token 都会使旧异步结果失效；迟到的回复、TTS 或截图不会进入新会话。
 - 运行时数据位于 `mea_memory.db`、`logs/`、`audio_cache/`、`voice_cache/` 和 `voice_asr/`，这些内容都不应发布。随包分发的互动音频位于包资源 `meapet/assets/interaction_voices/`。
 - 普通日志默认只记录长度、状态等元数据，按天轮换并保留 7 天。正文只会进入明确的 TRACK/debug 诊断。API Key、认证头、推理内容、内部工具参数/结果和截图内容都不得写入普通日志。

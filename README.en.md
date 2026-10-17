@@ -1,12 +1,23 @@
-# MeaPet — Desktop Companion
+# MeaPet PC — Desktop Companion
 
 [简体中文](README.md) | **English**
 
-A PyQt5 transparent desktop companion for Windows and Linux alike. It integrates character sprites, AI conversation, speech synthesis, screen vision, SQLite memory, and affection into a single desktop frontend, supporting Live2D / PNG dual rendering.
+MeaPet PC is a PyQt5 transparent desktop companion for Windows and Linux alike. It integrates character sprites, AI conversation, speech synthesis, screen vision, SQLite memory, and affection into a single desktop frontend, supporting Live2D / PNG dual rendering.
 
-MeaPet draws a clear boundary: character presentation, chat bubbles, TTS, screenshot authorization, and local state are managed by MeaPet. When using an Agent as the reply backend, the model, long-term memory, and internal tools are managed by the Agent.
+MeaPet PC draws a clear boundary: character presentation, chat bubbles, TTS, screenshot authorization, and local state are managed by MeaPet PC. When using an Agent as the reply backend, the model, long-term memory, and internal tools are managed by the Agent.
 
-**Mobile Version**: [mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile) (Lightweight mobile client with core features)
+## Naming
+
+**MeaPet** (written `mea-pet` as a repository name) is the name of the product as a whole. It has two platform implementations, and neither one owns that name:
+
+| Name | What it is | Where the code lives |
+|------|-----------|----------------------|
+| **MeaPet PC** | The PyQt5 desktop companion for Windows / Linux — **what this document describes** | this repository |
+| **MeaPet Android** | The mobile client for Android | [mea-pet-mobile](https://github.com/llz121517/mea-pet-mobile) |
+
+`MeaPet` is not `MeaPet PC`, and it is not `MeaPet Android`. Wherever this document talks about the desktop program, it says **MeaPet PC**.
+
+A set of **historical artifact names** falls outside this convention, and they should not be read back as product boundaries: the code package `meapet`, the PyPI distribution name `mea-pet`, the executables `MeaPet.exe` and `MeaPet.spec`, the environment variable prefixes `MEAPET_` / `MEA_PET_`, the log file `meapet_boot.log`, and the MCP tool `meapet_say`. They are artifact names of the **MeaPet PC** implementation only; renaming them would break installation, builds, and protocol contracts, so they stay as they are.
 
 **Official QQ Group**: 1128485088 (in the join request, please state: your purpose + the OS you use)
 
@@ -99,10 +110,10 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 
 Output: `dist/MeaPet/MeaPet.exe` + `dist/MeaPet/_internal/`.
 
-The `mea-pet` wheel is a Python package component for development and dependency
-distribution; it does not contain the complete desktop asset tree or a
-standalone launcher. Use the source checkout or the PyInstaller onedir bundle
-to run the full companion.
+The MeaPet PC wheel (PyPI distribution name `mea-pet`) is a Python package
+component for development and dependency distribution; it does not contain the
+complete desktop asset tree or a standalone launcher. Use the source checkout
+or the PyInstaller onedir bundle to run the full desktop companion.
 
 Portable layout (user-writable data lives under `_internal` with the bundle):
 
@@ -125,7 +136,7 @@ Do not ship a developer `config.json` that contains API keys. Only `config.examp
 
 ### Direct Model API
 
-Direct mode lets MeaPet manage character prompts, recent context, SQLite memory, and output constraints. It is the only mode that connects directly to an LLM HTTP API.
+Direct mode lets MeaPet PC manage character prompts, recent context, SQLite memory, and output constraints. It is the only mode that connects directly to an LLM HTTP API.
 
 You configure three things in the wizard: the API base URL, the model name (with optional auto-discovery via "Fetch Models"), and your API key. The saved `provider` is always `custom`. Transport is decided by `protocol` + `api_base` (Ollama local URLs auto-select `ollama_chat`; everything else defaults to OpenAI-compatible chat). URL hints only affect which environment variable is probed for the key, and MiMo/Ollama linkage for TTS/vision.
 
@@ -138,17 +149,17 @@ You configure three things in the wizard: the API base URL, the model name (with
 
 ### Agent
 
-Agent mode treats MeaPet as a pure desktop frontend:
+Agent mode treats MeaPet PC as a pure desktop frontend:
 
-- MeaPet calls the Agent to generate replies, providing mood, action, TTS language, and character state as context.
-- The Agent uses its own model, memory, and internal tools; MeaPet does not require the Agent to implement additional "memory query" capabilities.
+- MeaPet PC calls the Agent to generate replies, providing mood, action, TTS language, and character state as context.
+- The Agent uses its own model, memory, and internal tools; MeaPet PC does not require the Agent to implement additional "memory query" capabilities.
 - Internal tool names and raw parameters are not displayed in character bubbles. Safe status (start, complete, failure) enters the timeline; diagnostic details go to logs only.
 - Agent mode uses WebSocket only. Hermes connects to the native TUI Gateway exposed by `hermes serve`; OpenClaw connects to Gateway v4; a custom backend can implement Agent Link v1. HTTP/SSE model endpoints belong exclusively to direct mode.
 - Connections are reused across turns and carry bidirectional streaming, cancellation, ping/pong, and protocol-specific reconnect recovery. OpenClaw retries with the same idempotency key; Hermes resumes the stored session and reconciles history instead of blindly resubmitting a possibly executed tool turn.
-- Agent Link uses one outbound connection for chat and frontend tool calls. MeaPet publishes typed tool schemas after the handshake, so the third-party connector can register them in its own Agent loop and can proactively call `meapet_say`.
-- Agent responses must follow the MeaPet segmented output format. Malformed output raises an explicit format-repair state; no Agent path silently falls back to an HTTP model endpoint.
+- Agent Link uses one outbound connection for chat and frontend tool calls. MeaPet PC publishes typed tool schemas after the handshake, so the third-party connector can register them in its own Agent loop and can proactively call `meapet_say`.
+- Agent responses must follow the MeaPet PC segmented output format. Malformed output raises an explicit format-repair state; no Agent path silently falls back to an HTTP model endpoint.
 
-The local `session_id` identifies MeaPet's timeline scope. OpenClaw additionally persists its Gateway `session_key`; Hermes persists the server-returned `remote_session_id` and uses `session.resume` after restart or reconnect. "Clear memory" in Agent mode explicitly starts a new upstream Agent session. Old timelines remain readable.
+The local `session_id` identifies MeaPet PC's timeline scope. OpenClaw additionally persists its Gateway `session_key`; Hermes persists the server-returned `remote_session_id` and uses `session.resume` after restart or reconnect. "Clear memory" in Agent mode explicitly starts a new upstream Agent session. Old timelines remain readable.
 
 The complete custom backend contract is documented in [`docs/agent-link-v1.md`](docs/agent-link-v1.md). A generic WebSocket endpoint is not sufficient: the backend must implement its envelope, handshake, tool snapshot, request correlation, idempotency, cancellation, offline, and reconnect semantics.
 
@@ -228,7 +239,7 @@ The GPT-SoVITS project root normally needs no configuration: the app walks up fr
 
 This key has no wizard entry and can only be set in `config.json`; if the directory you give lacks `GPT_SoVITS/TTS_infer_pack/`, it is ignored and the automatic upward walk is used instead. Paths are not `~`-expanded — write a full absolute path.
 
-Speech translation uses MeaPet's built-in non-LLM machine translation service pool, rotating services on single-segment failure (max 3 total attempts). When "prefer model voice translation" is enabled, the model's returned `voice_language` and `voice_text` are checked against the configured target language — if inconsistent, they are translated to the target. A separate "translate when unsupported" toggle controls fallback for unsupported output languages. When translation ultimately fails, the voice segment is skipped and the text bubble is preserved.
+Speech translation uses MeaPet PC's built-in non-LLM machine translation service pool, rotating services on single-segment failure (max 3 total attempts). When "prefer model voice translation" is enabled, the model's returned `voice_language` and `voice_text` are checked against the configured target language — if inconsistent, they are translated to the target. A separate "translate when unsupported" toggle controls fallback for unsupported output languages. When translation ultimately fails, the voice segment is skipped and the text bubble is preserved.
 
 ## Screen Vision
 
@@ -240,11 +251,11 @@ The vision link has three modes configured in the wizard:
 | `inherit` | When the main reply model supports images, screenshots are included in the same multimodal request |
 | `relay` | An independent vision model generates a caption first, then passes it to the reply backend |
 
-`inherit` is suitable for direct models or Agents that natively support images. `relay` can select Ollama or MiMo as the vision model in direct mode. Agent mode should use the Agent's own vision capability, or disable vision — do NOT route through a separate vision model on the MeaPet side. TTS machine translation does not participate in the vision pipeline.
+`inherit` is suitable for direct models or Agents that natively support images. `relay` can select Ollama or MiMo as the vision model in direct mode. Agent mode should use the Agent's own vision capability, or disable vision — do NOT route through a separate vision model on the MeaPet PC side. TTS machine translation does not participate in the vision pipeline.
 
 Privacy rules are enforced: screen observation is off by default; each screenshot requires local confirmation, and the authorization is valid for one shot only. Confirmation defaults to full-screen but can be scoped to a region or specific application. Screenshots are passed in memory only and are never written to disk by new links. Cloud vision additionally requires explicit `watcher.allow_cloud` consent.
 
-## Companion MCP: Agent Control over MeaPet
+## Companion MCP: Agent Control over MeaPet PC
 
 For Hermes and OpenClaw, Agent mode can expose an optional standard MCP Streamable HTTP endpoint:
 
@@ -273,7 +284,7 @@ Custom Agent Link does not start this second listener. It projects the same capa
 
 ## QQ Channel (OneBot v11)
 
-MeaPet can also be a QQ bot. It implements OneBot v11 in both directions, so it plugs into NapCat or
+MeaPet PC can also be a QQ bot. It implements OneBot v11 in both directions, so it plugs into NapCat or
 SnowLuma either way round:
 
 - **Initiator** — `forward_ws` (connect out to the peer's WebSocket server) and `http_api` (call the
@@ -357,7 +368,7 @@ If a real key has ever entered a repository or public log, rotate it immediately
 
 - Defaults to retaining the last 5 timeline turns; configurable 0–100 in the wizard.
 - Timelines are isolated by direct provider / Agent type + Agent session; switching backends will not cross streams.
-- SQLite memory (direct mode) and Agent-owned memory are separate boundaries. MeaPet does not replicate the Agent's long-term memory.
+- SQLite memory (direct mode) and Agent-owned memory are separate boundaries. MeaPet PC does not replicate the Agent's long-term memory.
 - New config apply, session switches, and token rotation all invalidate old async results — late replies, TTS, or screenshots do not enter the new session.
 - Runtime data lives in `mea_memory.db`, `logs/`, `audio_cache/`, `voice_cache/`, and `voice_asr/`; none should be distributed. Shipped interaction clips are package assets under `meapet/assets/interaction_voices/`.
 - Logs record metadata such as lengths and statuses by default, rotated daily and retained for 7 days. Payload text is limited to explicit TRACK/debug diagnostics. API keys, auth headers, reasoning, internal tool parameters/results, and screenshot content must NOT be written to normal logs.
