@@ -139,6 +139,42 @@ class UiRefactorTests(unittest.TestCase):
                     _relative_luminance(palette["canvas"]),
                 )
 
+    def test_bubble_fill_follows_scheme_and_keeps_text_readable(self) -> None:
+        from pathlib import Path
+
+        import meapet.desktop.widgets as widgets_module
+        from meapet.ui_theme import PALETTES, _relative_luminance, contrast_ratio
+
+        for scheme, palette in PALETTES.items():
+            stops = (
+                palette["bubble_top"],
+                palette["bubble_mid"],
+                palette["bubble_bottom"],
+            )
+            for stop in stops:
+                with self.subTest(scheme=scheme, stop=stop):
+                    self.assertGreaterEqual(
+                        contrast_ratio(palette["text_primary"], stop), 4.5
+                    )
+            with self.subTest(scheme=scheme, ramp="顶边微亮"):
+                self.assertGreaterEqual(
+                    _relative_luminance(stops[0]), _relative_luminance(stops[2])
+                )
+
+        # 深色这三个值就是令牌化之前 widgets.py 里写死的那三个色标，逐字节钉住：
+        # 令牌化本身不许改动深色外观。
+        self.assertEqual(
+            (
+                PALETTES["dark"]["bubble_top"],
+                PALETTES["dark"]["bubble_mid"],
+                PALETTES["dark"]["bubble_bottom"],
+            ),
+            ("#272727", "#242424", "#181818"),
+        )
+
+        source = Path(widgets_module.__file__).read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r'setColorAt\([^)]*QColor\("#', source))
+
     def test_theme_mode_switches_palette_and_named_styles(self) -> None:
         from meapet.ui_theme import (
             get_active_scheme,
