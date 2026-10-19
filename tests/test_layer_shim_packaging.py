@@ -14,6 +14,10 @@
   PyInstaller 给 `__file__` 配的恰好是 `_MEIPASS`，那是它的实现细节不是本仓库的接口。
 * **候选名与 spec 收的名是同一个**：断言 `binaries` 里的 basename == `SHIM_NAME`，
   两侧任一处改名都会在这里红。
+* **PyOpenGL 的平台模块按包名**整族**收**：`collect_submodules("OpenGL.platform")` 的
+  结果必须接进 `Analysis(hiddenimports)`。这条判的是"整族收"这个**形状**，不是某个
+  写死的名字清单——构建机是不是 Wayland、装没装 PyOpenGL 都不该让它漂移（事故实况见
+  该测试自己的 docstring）。
 * **失败形态报出试过的每一条路径**：`open_shim()` 全灭时异常文本含所有候选。
 
 本文件**不能**证明什么
@@ -52,17 +56,27 @@ class _Stub:
         return iter(())
 
 
-def _run_spec(spec_dir: Path, calls: list, *, fidus_present: bool = True) -> dict:
+def _run_spec(
+    spec_dir: Path,
+    calls: list,
+    *,
+    fidus_present: bool = True,
+    submodule_requests: list | None = None,
+) -> dict:
     """执行 MeaPet.spec，返回它传给 Analysis(...) 的关键字参数。
 
     spec 顶层 `from PyInstaller.utils.hooks import collect_data_files`，而本仓库的
     测试环境不装 PyInstaller —— 连它一起塞假模块，只保 `collect_data_files` 可调用。
+    `collect_submodules` 同理，并把**被请求的包名**记进 `submodule_requests`：spec 里
+    那条 PyOpenGL 规则要判的是"整族按包名收"，不是某个写死的名字清单。
     `find_spec` 也一并接管：spec 里那条 fidus 在场性断言读的是**构建机**环境，而本
     文件要判的是规则本身，不该随测试机装没装 fidus 漂移。
     """
     src = SPEC_FILE.read_text(encoding="utf-8")
+    requests = submodule_requests if submodule_requests is not None else []
     hooks = types.ModuleType("PyInstaller.utils.hooks")
     hooks.collect_data_files = lambda pkg: []
+    hooks.collect_submodules = lambda pkg: (requests.append(pkg), [f"{pkg}.__probe__"])[1]
     utils = types.ModuleType("PyInstaller.utils")
     utils.hooks = hooks
     pkgroot = types.ModuleType("PyInstaller")
@@ -120,6 +134,31 @@ def test_spec_bundles_layer_shim_when_present():
     kwargs = _run_spec(REPO_ROOT, calls)
     srcs = _bundle_sources(kwargs["binaries"])
     assert REPO_ROOT / wayland_layer.SHIM_NAME in srcs, f"spec 没收桥接层：{srcs}"
+
+
+def test_spec_collects_every_pyopengl_platform_module():
+    """PyOpenGL 的平台模块**整族**进 hiddenimports，不按构建平台猜一个。
+
+    量到的事故（2026-10-19 本机第一份 Linux onedir，#128 六项读数的第 2 条当场红）：
+    contrib 的 `hook-OpenGL.py` 在 Linux 分支只补 `OpenGL.platform.glx`，而
+    Wayland 会话里 `OpenGL/platform/__init__.py:35-37` 把 guess 定成 "wayland"、
+    选中的是 **egl** ⇒ 冻结版在 `platform/__init__.py:52` 执行 `plugin_class()`
+    时那个类是 `None`（`PlatformPlugin.load()` 吞掉 ModuleNotFoundError 返回 None），
+    报出来是看不懂的 `TypeError: 'NoneType' object is not callable`，Live2D 静默回退
+    PNG。源码态同一条 import 是好的（`OpenGL.platform.PLATFORM` 实测为 EGLPlatform
+    实例）⇒ **这条只有冻结产物会红**，和上面桥接层那格是同一类盲区。
+    """
+    from meapet.desktop import wayland_layer
+
+    if not (REPO_ROOT / wayland_layer.SHIM_NAME).is_file():
+        pytest.skip("仓库根没有桥接层产物：spec 会在收件前 SystemExit，这条无从判")
+    requests: list = []
+    calls: list = []
+    kwargs = _run_spec(REPO_ROOT, calls, submodule_requests=requests)
+    assert "OpenGL.platform" in requests, f"spec 没按包名收 PyOpenGL 平台模块：{requests}"
+    assert "OpenGL.platform.__probe__" in kwargs["hiddenimports"], (
+        "collect_submodules 的结果没接进 Analysis(hiddenimports)：收了等于没收"
+    )
 
 
 def test_spec_fails_loud_on_linux_when_shim_missing(tmp_path):

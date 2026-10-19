@@ -5,7 +5,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
@@ -18,6 +18,26 @@ try:
     live2d_pkg_datas = collect_data_files("live2d")
 except Exception:
     live2d_pkg_datas = []
+
+# PyOpenGL 的 platform 子模块：**选了哪条路取决于跑它的那个会话，不取决于构建平台**，
+# 所以整族都得带上，不能只带"构建机那一档"。
+# 实测缺口（2026-10-19 本机第一份 Linux onedir，#128 六项读数第 2 条当场红）：
+#   contrib 的 hook-OpenGL.py 在 Linux 分支只补 `OpenGL.platform.glx`；而
+#   OpenGL/platform/__init__.py:35-37 在 `WAYLAND_DISPLAY` 在场时把 guess 定成
+#   "wayland"，PlatformPlugin 选中的是 **egl**。于是包里有 glx、没有 egl ⇒
+#   plugin.load() 抛 ModuleNotFoundError ⇒ _load() 失败后 PLATFORM 仍是 None ⇒
+#   产品侧 live2d_widget.py:250 拿到 `None()`，报的是看不懂的
+#   "TypeError: 'NoneType' object is not callable"，然后静默回退 PNG。
+#   源码态同一条 import 是好的（实测 `OpenGL.platform.PLATFORM` = EGLPlatform 实例），
+#   所以这条**只在冻结版暴露**——和上面桥接层那格是同一类盲区。
+# 用 collect_submodules 而不是手写 egl+glx 两个名字：将来 PyOpenGL 多加一档
+# （osmesa 之外再来个新的）会被自动收进来，不需要有人记得回来改这里。
+# try/except：构建机没装 PyOpenGL 时返回空，别把构建拦在一条本不该是门票的缺件上
+# （没装 PyOpenGL 的构建机本来就打不出 Live2D 那条路）。
+try:
+    pyopengl_platform_imports = collect_submodules("OpenGL.platform")
+except Exception:
+    pyopengl_platform_imports = []
 
 # layer-shell 桥接（Linux / Niri 点击穿透）。它是 ctypes 直读的裸 .so，不是 Python
 # 扩展模块，也没有任何 Python 侧 import 指向它——依赖分析**看不见**它。不写这几行，
@@ -146,7 +166,8 @@ a = Analysis(
         # misc dynamic imports
         "translators",
         "jieba",
-    ],
+    ]
+    + pyopengl_platform_imports,
     hookspath=["."],
     hooksconfig={},
     runtime_hooks=[],
