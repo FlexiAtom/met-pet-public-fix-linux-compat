@@ -342,9 +342,9 @@ class SpeechBubbleFrame(QFrame):
 
         body = self._body_rect()
         gradient = QLinearGradient(body.topLeft(), body.bottomLeft())
-        gradient.setColorAt(0.0, QColor(PALETTE["surface_elevated"]))
-        gradient.setColorAt(0.42, QColor("#242424"))
-        gradient.setColorAt(1.0, QColor("#181818"))
+        gradient.setColorAt(0.0, QColor(PALETTE["bubble_top"]))
+        gradient.setColorAt(0.42, QColor(PALETTE["bubble_mid"]))
+        gradient.setColorAt(1.0, QColor(PALETTE["bubble_bottom"]))
         painter.setPen(
             QPen(QColor(BUBBLE_INK_RING_COLOR), BUBBLE_INK_RING_WIDTH)
         )
