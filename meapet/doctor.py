@@ -387,6 +387,10 @@ def _audio_playback(config: dict) -> str:
 
     这里**真的 import 一次**绑定，因为 `find_spec` 只查得到 `.abi3.so` 在不在，查不到它
     NEEDED 的那几个 Qt5 库被裁没裁——本案那条日志就是撞在这一格上的。
+
+    但 import 成功**也不等于播得成**：GStreamer 的插件目录是靠 dladdr 反推的，冻结态里它被
+    算到 `_internal/` 上，注册表空 ⇒ `no element "identity"`，既不发 error 信号也不抛异常。
+    所以这一格把插件目录单列一条读数，别再把「绑定在场」写成「那一路可用」。
     """
     import importlib
     import importlib.util
@@ -398,9 +402,19 @@ def _audio_playback(config: dict) -> str:
     else:
         try:
             importlib.import_module("PyQt5.QtMultimedia")
-            head = "绑定=在场 底层=可加载 ⇒ Qt 那一路可用（音量档生效）"
+            head = "绑定=在场 底层=可加载"
         except Exception as exc:  # noqa: BLE001 - 取证面把不可用当读数报，不当异常抛
             head = f"绑定=在场 底层=加载失败：{type(exc).__name__}: {exc}"
+
+    gst = ""
+    if not sys.platform.startswith(("win", "darwin")):
+        from meapet.utils import resolve_gst_plugin_dir
+
+        resolved = os.environ.get("GST_PLUGIN_SYSTEM_PATH") or resolve_gst_plugin_dir()
+        gst = (
+            f" · GStreamer 插件目录={resolved}" if resolved
+            else " · GStreamer 插件目录=找不到 ⇒ Qt 那一路建不起管线"
+        )
 
     if sys.platform.startswith("win"):
         tail = "回退=os.startfile（不吃增益）"
@@ -412,8 +426,9 @@ def _audio_playback(config: dict) -> str:
         tail = f"回退=aplay {'在场(' + aplay + ')' if aplay else '缺席'}（不吃增益）"
     audio = (config or {}).get("audio") or {}
     return (
-        f"{head} · {tail} · 音量档 tts={audio.get('tts_volume_percent')}% "
-        f"sfx={audio.get('sfx_volume_percent')}%（只有 Qt 那一路读这两个数）"
+        f"{head}{gst} · {tail} · 音量档 tts={audio.get('tts_volume_percent')}% "
+        f"sfx={audio.get('sfx_volume_percent')}%（只有 Qt 那一路真起播才读这两个数；"
+        "本格不触发播放，起不起得来要耳朵或 `[audio] Qt 播放` 那行另证）"
     )
 
 

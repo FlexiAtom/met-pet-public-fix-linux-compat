@@ -154,6 +154,37 @@ def legacy_audio_cache_name(text: str, max_length: int = 120) -> str:
 
 
 # ========================
+# GStreamer 系统插件目录
+# ========================
+
+#: 各发行版的 GStreamer 系统插件目录。带 * 的两条是多架构目录
+#: （Debian/Ubuntu 的 x86_64-linux-gnu 那一档）。
+GST_PLUGIN_DIR_GLOBS = [
+    "/usr/lib/gstreamer-1.0",
+    "/usr/lib64/gstreamer-1.0",
+    "/usr/local/lib/gstreamer-1.0",
+    "/usr/lib/*/gstreamer-1.0",
+    "/lib/*/gstreamer-1.0",
+]
+
+
+def resolve_gst_plugin_dir() -> str:
+    """这台机器的 GStreamer 系统插件目录；找不到返回空串。
+
+    GStreamer 自己用 dladdr 反推这个目录，冻结态里那条路会把答案算到 `_internal/` 上
+    （那里一个插件也没有），所以要显式量一次。实测见状态根
+    `projects/meapet/working/frozen-gst-plugin-dir-relocated.md` §2。
+    """
+    import glob as _glob
+
+    for pattern in GST_PLUGIN_DIR_GLOBS:
+        for cand in sorted(_glob.glob(pattern)):
+            if os.path.isdir(cand):
+                return cand
+    return ""
+
+
+# ========================
 # Watcher 规范化 / 云端门闩
 # ========================
 
