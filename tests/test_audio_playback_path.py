@@ -179,13 +179,14 @@ class QtSilentFailureTest(_Base):
         class _Player:
             def __init__(self, parent=None):
                 self.state_changed = None if not emit_playing else _Sig()
+                self.events = []
 
             @property
             def stateChanged(self):
                 return self.state_changed
 
             def stop(self):
-                pass
+                self.events.append("stop")
 
             def setMedia(self, _content):
                 pass
@@ -194,6 +195,7 @@ class QtSilentFailureTest(_Base):
                 pass
 
             def play(self):
+                self.events.append("play")
                 if self.state_changed is not None:
                     self.state_changed.emit(audio_mod.QT_PLAYING_STATE)
 
@@ -218,6 +220,14 @@ class QtSilentFailureTest(_Base):
         self.assertIn("aplay 播放", out)
         self.assertIn("音量档 30% 未生效", out)
         self.assertNotIn("最终播放失败", out)
+
+    def test_fallback_kills_the_qt_take_so_a_late_start_cannot_double_play(self) -> None:
+        """回退之前先把这一发掐掉：Qt 若在 400ms 之后才起播，两路会叠成两遍声音。"""
+        self._install_player(emit_playing=False)
+        stub = _Stub()
+        with contextlib.redirect_stderr(io.StringIO()):
+            stub._play_audio(self.wav, audio_type="tts")
+        self.assertEqual(stub._media_player.events, ["stop", "play", "stop"])
 
     def test_seen_playing_does_not_double_play(self) -> None:
         self._install_player(emit_playing=True)

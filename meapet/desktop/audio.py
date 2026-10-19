@@ -177,6 +177,12 @@ class PetAudioMixin:
             return
         player = getattr(self, "_media_player", None)
         state = int(player.state()) if player is not None and hasattr(player, "state") else -1
+        if player is not None and hasattr(player, "stop"):
+            # 先掐掉这一发：Qt 若在 400ms 之后才姗姗起播，会和系统播放器叠成两遍
+            try:
+                player.stop()
+            except Exception:  # noqa: BLE001 - 掐不动也不能挡住回退
+                pass
         safe_print(
             f"[audio] Qt 未起播（{QT_PLAY_VERIFY_MS}ms 内 state 没进 Playing，读数 state={state}）"
             f"⇒ 这一发改走系统播放器"
