@@ -41,7 +41,12 @@ from pathlib import Path
 MEMFD_TAG = "/memfd:meapet-px"
 PANEL_TITLE = "穿透开关"
 TOGGLE_LINE = re.compile(
-    r"\[layer\] → (穿透|交互)模式(?: surface=(\d+)x(\d+) @\((-?\d+),(-?\d+)\))?")
+    r"\[layer\] → (穿透|交互)模式"
+    r"(?: surface=(\d+)x(\d+) @\((-?\d+),(-?\d+)\))?"
+    # The canvas trails the mount line since 丙 (opaque-contour mounting): the
+    # surface is whatever the current frame's alpha bounding box happens to be,
+    # while the canvas is the invariant the fit arithmetic works from.
+    r"(?: ← 画布 (\d+)x(\d+)@\((-?\d+),(-?\d+)\))?")
 RING_DEPTH_SRC = "native/layer_shell/src/ring.rs"
 
 
@@ -103,6 +108,20 @@ def focus_and_verify(window_id: int, attempts: int = 4) -> tuple[bool, str]:
     return False, f"not focused after {attempts} attempts ({detail})"
 
 
+def is_subject(cmdline: str) -> bool:
+    """Which process counts as "the pet", however it was launched.
+
+    The source tree runs `python …/pet.py`; the packaged build runs
+    `dist/MeaPet/MeaPet`, whose argv holds neither "pet.py" nor "python" --
+    matching only the source spelling makes the probe report "no subject"
+    against a perfectly live frozen app.
+    """
+    argv = cmdline.split("\0")
+    if any(arg.endswith("pet.py") for arg in argv):
+        return True
+    return bool(argv and argv[0] and Path(argv[0]).name == "MeaPet")
+
+
 def resolve_pid() -> int | None:
     for entry in os.listdir("/proc"):
         if not entry.isdigit():
@@ -110,7 +129,7 @@ def resolve_pid() -> int | None:
         pid = int(entry)
         try:
             cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
-            if "pet.py" not in cmdline:
+            if not is_subject(cmdline):
                 continue
             if "liblayer_shell_shim" in Path(f"/proc/{pid}/maps").read_text(
                     encoding="utf-8", errors="replace"):
@@ -160,8 +179,9 @@ def main() -> int:
 
     pid = resolve_pid()
     if pid is None:
-        log("ABORT: no pet.py process maps liblayer_shell_shim -- penetration mode "
-            "is not active (gap#0), nothing to toggle.")
+        log("ABORT: no pet process (source `pet.py` or packaged `MeaPet`) maps "
+            "liblayer_shell_shim -- penetration mode is not active (gap#0), nothing "
+            "to toggle.")
         return 2
     ring_depth = read_ring_depth(Path(__file__).resolve().parents[1])
     log(f"subject pid={pid} RING_DEPTH={ring_depth} cycles={args.cycles}")
@@ -200,15 +220,18 @@ def main() -> int:
             text = logpath.read_text(encoding="utf-8", errors="replace")
             after_lines = TOGGLE_LINE.findall(text)
             after = len(after_lines)
-            last = after_lines[-1] if after_lines else ("?", "", "", "", "")
+            last = after_lines[-1] if after_lines else ("?",) * 9
             mode = last[0]
             geom = "x".join(last[1:3]) + "@" + ",".join(last[3:5]) if last[1] else "-"
+            canvas = ("x".join(last[5:7]) + "@" + ",".join(last[7:9])
+                      if last[5] else "-")
             if after == before:
                 log(f"toggle {i}: keystroke produced NO new [layer] line "
                     f"(button did not receive it) -- not counted as a cycle")
                 rows.append({"cycle": i, "toggled": False, "mode": mode})
             else:
-                row = {"cycle": i, "toggled": True, "mode": mode, "geom": geom}
+                row = {"cycle": i, "toggled": True, "mode": mode, "geom": geom,
+                       "canvas": canvas}
                 row.update(census(pid))
                 rows.append(row)
             fh.write(json.dumps(rows[-1]) + "\n")
@@ -242,10 +265,20 @@ def main() -> int:
     if bad_back:
         verdicts.append(f"FAIL(第6项/I5): {len(bad_back)} interactive samples did not "
                         f"return to memfd=0 and surfaces=0")
+    # Judged on the canvas, not the mounted surface: since 丙 the mount request
+    # is the frame's OPAQUE CONTOUR, and Live2D idle animation (breath/blink)
+    # moves that box by a few px between entries.  Measured 2026-10-20 against
+    # the packaged build -- three 穿透 entries gave 347x733 / 362x733 / 352x732
+    # off one canvas 731x1024, so the old "surface geometry must be identical"
+    # line fails a healthy build.  The canvas is what must not move.
     geoms = {r.get("geom") for r in done if r.get("mode") == "穿透" and r.get("geom")}
-    print(f"surface geometry per 穿透 entry: {sorted(geoms)}")
-    if len(geoms) > 1:
-        verdicts.append(f"FAIL(第6项): position/size differs across toggles: {sorted(geoms)}")
+    canvases = {r.get("canvas") for r in done
+                if r.get("mode") == "穿透" and r.get("canvas") not in (None, "-")}
+    print(f"canvas per 穿透 entry: {sorted(canvases)}")
+    print(f"surface (opaque contour) per 穿透 entry: {sorted(geoms)}")
+    if len(canvases) > 1:
+        verdicts.append(f"FAIL(第6项): canvas position/size differs across toggles: "
+                        f"{sorted(canvases)}")
     if len({r["surfaces"] for r in live} - {1}) > 0:
         verdicts.append(f"NOTE: penetration surface count not uniformly 1: "
                         f"{sorted({r['surfaces'] for r in live})}")
