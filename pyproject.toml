@@ -57,7 +57,8 @@ vits = [
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
     "soundfile",
-    "numpy<2",
+    # 与 vits_requirements.txt 同口径：不钉 numpy 上界（理由写在那份清单的 numpy 那行上面）。
+    "numpy",
     "scipy",
     "librosa",
     "Cython",

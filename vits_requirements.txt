@@ -2,7 +2,11 @@
 torch>=2.0.0
 torchaudio>=2.0.0
 soundfile
-numpy<2
+# 2026-10-21 撤掉这里的 `numpy<2`（上游 v1.4 带来的钉子，仓库内没有本地实测理由）。撤的方向有两头读数：
+# 留着它，Windows 上选到 Python 3.13 那格会直接装不上——PyPI 上 numpy 1.26.4 的 win_amd64 轮子止于
+# cp312，2.x 才有 cp313；去掉它，本机 numpy 2.5.3 用真权重端到端合成出非静音音频（22050 Hz / 0.65 s /
+# rms 0.00859 / peak 0.0613）。
+numpy
 scipy
 librosa
 Cython

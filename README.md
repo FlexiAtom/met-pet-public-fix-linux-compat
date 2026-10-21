@@ -103,13 +103,15 @@ python -m meapet --doctor --skip-tts | grep audio_playback
 
 ### Windows 二进制包（PyInstaller onedir）
 
-请在已安装应用依赖和 PyInstaller 的虚拟环境中构建。如果发布包包含本地 VITS，还需要 `numpy<2` 和 `setuptools==69.5.1`：
+请在已安装应用依赖和 PyInstaller 的虚拟环境中构建。如果发布包包含本地 VITS，构建前再 `pip install -r vits_requirements.txt`（torch 与 `setuptools==69.5.1` 都在里面；numpy 不钉上界，理由写在清单里 numpy 那行上面）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 ```
 
 输出：`dist/MeaPet/MeaPet.exe` 和 `dist/MeaPet/_internal/`。
+
+**别在 cmd / PowerShell 里手敲带 `<` 或 `>` 的版本约束**：那两个 shell 先把它们当成输入/输出重定向，pip 根本收不到这条命令（2026-10-21 人工现量：`pip install numpy<2` 只打一行「系统找不到指定的文件。」，重打三次同一行）。要么走 `-r 清单`（pip 自己读文件，不过 shell），要么把约束整个包进引号：`pip install "numpy<2"`。
 
 ### Linux 二进制包（同一份 spec）
 

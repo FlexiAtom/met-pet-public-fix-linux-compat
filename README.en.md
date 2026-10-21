@@ -102,13 +102,15 @@ For Chinese troubleshooting steps, see [`docs/troubleshooting.zh-CN.md`](docs/tr
 
 ### Windows binary (PyInstaller onedir)
 
-Build from a venv that has app deps + PyInstaller (VITS needs `numpy<2` and `setuptools==69.5.1` if you ship local VITS):
+Build from a venv that has app deps + PyInstaller. If the bundle ships local VITS, run `pip install -r vits_requirements.txt` first (torch and `setuptools==69.5.1` are in it; numpy is deliberately unpinned — see the comment above the numpy line in that file):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 ```
 
 Output: `dist/MeaPet/MeaPet.exe` + `dist/MeaPet/_internal/`.
+
+**Never type a version constraint containing `<` or `>` straight into cmd / PowerShell.** Both shells parse those as input/output redirection first, so pip never runs at all: measured on the user's Windows machine 2026-10-21, `pip install numpy<2` printed only `系统找不到指定的文件。` ("The system cannot find the file specified.") — three times in a row, same single line. Use `-r <requirements file>` (pip reads the file itself, nothing goes through the shell), or quote the whole spec: `pip install "numpy<2"`.
 
 The MeaPet PC wheel (PyPI distribution name `mea-pet`) is a Python package
 component for development and dependency distribution; it does not contain the

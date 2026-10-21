@@ -336,7 +336,8 @@ def test_frozen_program_does_not_run_itself_as_python(monkeypatch):
 
 
 def test_install_command_refuses_dependency_resolution():
-    """放开解析会顺着索引把 numpy 抬到 2.x，撞穿 linux_requirements.txt 里那条 numpy<2。"""
+    """放开解析会顺着索引把 numpy 抬到 2.x，撞穿 linux_requirements.txt 给 3.13 之前那格
+    声明的 numpy 1.x 上界。"""
     command = fc.install_command(Path("/tmp/x.whl"))
     assert command[0] == sys.executable
     assert command[1:4] == ["-m", "pip", "install"]

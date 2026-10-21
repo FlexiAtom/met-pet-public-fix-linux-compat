@@ -256,8 +256,8 @@ def install_command(wheel: Path, *, python: str | None = None) -> Sequence[str] 
         "-m",
         "pip",
         "install",
-        # 轮子声明了 Requires-Dist: numpy>=1.24。放开解析会顺着索引把 numpy 抬到
-        # 2.x，撞穿 linux_requirements.txt 里那条 numpy<2（本地 VITS 的前提）。
+        # 轮子声明了 Requires-Dist: numpy>=1.24，放开解析会顺着索引把 numpy 抬到 2.x，撞穿
+        # linux_requirements.txt 里按 python<3.13 声明的那条 numpy 1.x 上界。
         # numpy 由 requirements 负责，这里 --no-deps；真缺了第 3 步的 import 会响亮失败。
         "--no-deps",
         "--force-reinstall",
