@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import json
+import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Mapping, Optional
@@ -544,7 +545,8 @@ class DirectProtocolClient:
         # 代理是按供应商配置的，不能用进程级共享客户端，必须自持。
         if self.config.ca_file or not self.config.verify_tls or self.config.proxy:
             if self._owned_client is None or self._owned_client.is_closed:
-                verify: object = self.config.verify_tls
+                # 信任锚一律显式给出：把布尔 True 交给 httpx 会落回随包的 certifi，
+                # 而 certifi 的新鲜度取决于构建机——CA 被紧急拉黑时它就是那一格滞后。
                 if self.config.ca_file:
                     ca_path = Path(self.config.ca_file).expanduser()
                     if not ca_path.is_file():
@@ -552,7 +554,13 @@ class DirectProtocolClient:
                             "configuration",
                             "模型接口 CA 证书文件不存在。",
                         )
-                    verify = str(ca_path)
+                    verify: ssl.SSLContext | bool = ssl.create_default_context(
+                        cafile=str(ca_path)
+                    )
+                elif self.config.verify_tls:
+                    verify = ssl.create_default_context()
+                else:
+                    verify = False
                 kwargs: dict[str, object] = {}
                 if self.config.proxy:
                     kwargs["proxy"] = self.config.proxy

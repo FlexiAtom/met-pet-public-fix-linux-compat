@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import sys
 import unittest
 from unittest import mock
@@ -653,6 +654,74 @@ class TestDirectProtocolClient(unittest.IsolatedAsyncioTestCase):
                 base_url="https://models.example.test/v1",
             )
         self.assertEqual(raised.exception.category, "protocol")
+
+
+class TestDirectProtocolTrustAnchor(unittest.IsolatedAsyncioTestCase):
+    """自持客户端那一支的信任锚必须显式给出。
+
+    把布尔 True 或路径字符串交给 httpx，它会退回随包的 certifi（0.28 起
+    `verify=<str>` 还会报 DeprecationWarning）；certifi 的新鲜度取决于构建机，
+    CA 被紧急拉黑时那一格就是滞后源。
+    """
+
+    async def _owned_verify(self, **overrides):
+        from meapet.direct.client import DirectProtocolClient, DirectProtocolConfig
+
+        captured: dict[str, object] = {}
+
+        class _Recorder:
+            is_closed = False
+
+            def __init__(self, *args, **kwargs):
+                captured.update(kwargs)
+
+        adapter = DirectProtocolClient(
+            DirectProtocolConfig(
+                protocol="openai_chat",
+                base_url="https://models.example.test/v1",
+                timeout_seconds=5,
+                **overrides,
+            )
+        )
+        with mock.patch.object(httpx, "AsyncClient", _Recorder):
+            await adapter._get_client()
+        return captured["verify"]
+
+    async def test_proxy_only_falls_to_os_trust_store_not_certifi(self):
+        verify = await self._owned_verify(proxy="http://127.0.0.1:7890")
+        self.assertIsInstance(verify, ssl.SSLContext)
+        self.assertTrue(verify.check_hostname)
+        self.assertEqual(verify.verify_mode, ssl.CERT_REQUIRED)
+
+    async def test_ca_file_hands_a_context_not_a_path_string(self):
+        import certifi
+
+        verify = await self._owned_verify(ca_file=certifi.where())
+        self.assertIsInstance(verify, ssl.SSLContext)
+        self.assertEqual(verify.verify_mode, ssl.CERT_REQUIRED)
+
+    async def test_verify_tls_false_still_means_off(self):
+        self.assertIs(await self._owned_verify(verify_tls=False), False)
+
+    async def test_owned_client_construction_never_reads_bundled_certifi(self):
+        import certifi
+
+        from meapet.direct.client import DirectProtocolClient, DirectProtocolConfig
+
+        adapter = DirectProtocolClient(
+            DirectProtocolConfig(
+                protocol="openai_chat",
+                base_url="https://models.example.test/v1",
+                timeout_seconds=5,
+                proxy="http://127.0.0.1:7890",
+            )
+        )
+        self.addAsyncCleanup(adapter.close)
+        with mock.patch.object(
+            certifi, "where", side_effect=AssertionError("落到随包 certifi 锚")
+        ):
+            client = await adapter._get_client()
+        self.assertIsInstance(client, httpx.AsyncClient)
 
 
 if __name__ == "__main__":
