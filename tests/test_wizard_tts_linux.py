@@ -256,6 +256,10 @@ def test_folder_search_accepts_both_runtime_layouts(tmp_path):
 
 
 def test_posix_interpreter_backfills_to_the_pack_folder(tmp_path):
+    # 这一格钉的是 POSIX 整理包的 `runtime/bin/python` 形状；Windows 上同一个包的解释器
+    # 是 `runtime\python.exe`，拿 POSIX 形状去断言等于换了个产品问法。
+    if os.name != "posix":
+        pytest.skip("POSIX 整理包的 runtime/bin/python 形状只在 POSIX 上有意义")
     pack = tmp_path / "GPT-SoVITS-v2pro" / "GPT-SoVITS-v2pro-20250604"
     posix = pack / "runtime" / "bin" / "python"
     posix.parent.mkdir(parents=True)

@@ -171,9 +171,12 @@ class OnStandbyRightClickTests(unittest.TestCase):
 
 class BackendAutoDetectionTests(unittest.TestCase):
     def test_wayland_via_env(self):
+        # 会话环境变量兜底只在 Linux 分支上走到：win32 在第一格就返回了。
+        # 钉住平台，让这条在任何宿主上都测它本来要测的那一格。
         os.environ["XDG_SESSION_TYPE"] = "wayland"
         try:
-            self.assertEqual(click_through_mod.platform_backend_name(), "wayland")
+            with mock.patch.object(click_through_mod.sys, "platform", "linux"):
+                self.assertEqual(click_through_mod.platform_backend_name(), "wayland")
         finally:
             del os.environ["XDG_SESSION_TYPE"]
 

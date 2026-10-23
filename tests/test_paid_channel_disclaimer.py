@@ -184,10 +184,16 @@ class AboutDialogTest(unittest.TestCase):
         self.assertGreaterEqual(grown.width(), 360, "设计基准宽度都没保住，差值断言会自证成立")
 
         wrapped_height = notice.height()
+        # 免责句带一个"换行高度下限"（见 dialogs.py：Windows 字体度量下 QVBoxLayout 会
+        # 按 heightForWidth − 1 分配，末行底被切 1 px）。量单行时必须先撤下限，否则两边
+        # 都被钉成同一个下限，这条判据就自己失效了。
+        floor = notice.minimumHeight()
+        notice.setMinimumHeight(0)
         notice.setWordWrap(False)
         _app.processEvents()
         one_line_height = notice.height()
         notice.setWordWrap(True)
+        notice.setMinimumHeight(floor)
         _app.processEvents()
         self.assertGreater(
             wrapped_height, one_line_height, f"换行没生效，仍占 {one_line_height} px 高"

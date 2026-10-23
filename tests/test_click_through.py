@@ -64,13 +64,15 @@ class PlatformBackendNameTests(unittest.TestCase):
         """丙 承重格：Qt 跑在 xcb 上（窗口挂 XWayland）时，不得因为
         ``XDG_SESSION_TYPE=wayland`` 就报 wayland——那会让 layer-shell 穿透请求
         打到一个桌宠并不存在的 surface 上（旧行为实测：Qt 插件=xcb 而本函数=wayland）。"""
-        with mock.patch("meapet.desktop.click_through._qt_platform_name", return_value="xcb"), \
+        with mock.patch("meapet.desktop.click_through.sys.platform", "linux"), \
+                mock.patch("meapet.desktop.click_through._qt_platform_name", return_value="xcb"), \
                 mock.patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}):
             self.assertEqual(platform_backend_name(None), "x11")
 
     def test_env_fallback_when_no_qt_app(self) -> None:
         """没有 QApplication（CLI / 单测）时才允许用会话环境变量兜底。"""
-        with mock.patch("meapet.desktop.click_through._qt_platform_name", return_value=""), \
+        with mock.patch("meapet.desktop.click_through.sys.platform", "linux"), \
+                mock.patch("meapet.desktop.click_through._qt_platform_name", return_value=""), \
                 mock.patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}):
             self.assertEqual(platform_backend_name(None), "wayland")
 
