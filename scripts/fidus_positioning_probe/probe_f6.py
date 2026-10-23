@@ -16,8 +16,12 @@ import statistics
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-REPO = "/home/flexiatom/work/met-pet-public-fix-linux-compat"
+# 仓库根默认取本文件所在树（scripts/<probe>/<file>.py 上溯三级）；
+# 这里曾写死作者机器的绝对路径，换机器即 import 失败，故改为可覆盖：
+#   PP_REPO=/path/to/mea-pet-public python probe_f6.py
+REPO = os.environ.get("PP_REPO") or str(Path(__file__).resolve().parents[2])
 TMP = os.environ.get("PP_TMP", "/tmp/meapet-pos")
 sys.path.insert(0, REPO)
 os.makedirs(TMP, exist_ok=True)

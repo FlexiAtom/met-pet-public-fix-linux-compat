@@ -1257,6 +1257,10 @@ class AboutDialog(QDialog):
         # 不设这个就会被关于页撑到 573 px 宽：word-wrap label 的 sizeHint 按单行算（实测 1040 px），
         # 而 resize_dialog_to_content 取的是 sizeHint 与设计基准的最大值。
         notice.setMaximumWidth(300)
+        # Windows 的「Microsoft YaHei UI」度量下，QVBoxLayout 会按 heightForWidth − 1 分配
+        # 这块（实测 42 对 43，末行底 1 px 被切）；Linux 的 Noto 恰好吃满，所以 CI 一直
+        # 没抓到。按上限宽度把 wrap 后的高度钉成下限：布局只剩"够不够"，没有"少一像素"。
+        notice.setMinimumHeight(notice.heightForWidth(notice.maximumWidth()))
         notice.setAccessibleName("付费渠道免责提示")
         layout.addWidget(notice)
 

@@ -404,6 +404,13 @@ def test_probe_reports_failed_for_an_addressable_but_unloadable_torch(tmp_path):
         "PATH": os.environ.get("PATH", ""),
         "HOME": os.environ.get("HOME", ""),
     }
+    # env 是**刻意**最小化的（否则假 torch 会被真 site-packages 盖掉）。但 Windows 上
+    # `Path.home()` 读的是 USERPROFILE，缺它 `import meapet.paths` 直接 RuntimeError
+    # "Could not determine home directory"——那是本用例在 Windows 上的红因，与探针无关。
+    for _var in ("USERPROFILE", "TEMP", "TMP", "SYSTEMDRIVE", "APPDATA",
+                 "LOCALAPPDATA", "USERNAME", "COMSPEC", "PATHEXT"):
+        if os.environ.get(_var):
+            env[_var] = os.environ[_var]
     proc = subprocess.run(
         [sys.executable, "-c", code],
         env=env,

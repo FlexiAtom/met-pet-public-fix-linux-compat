@@ -100,6 +100,14 @@ def _require_machine_inputs() -> None:
         本地机器缺状态根（方案被挪走 / 未采纳 Athena）⇒ 抛带绝对路径与恢复动作的 RuntimeError，
         故意不 skip（skip 会把响亮失败变成静默通过）。两条都不会"无声通过"。
     """
+    # 状态根是 Athena（Linux 开发机）的输入，被测产物是 `.so`：非 Linux 主机上它
+    # **不可能存在**，与"方案被挪走"是两回事——这里按平台跳过，别把平台差异报成
+    # 环境不足。Linux 本地仍走下面那条响亮失败的分支。
+    if sys.platform != "linux":
+        pytest.skip(
+            f"layer-shell 桥接层是 Linux 产物，Athena 状态根（{SPEC_MD}）只存在于 Linux 开发机；"
+            "非 Linux 主机上 §7.1↔构建脚本↔产物的一致性判据无从执行。"
+        )
     missing = [p for p in (SPEC_MD, BUILD_SH) if not p.exists()]
     if not missing:
         return

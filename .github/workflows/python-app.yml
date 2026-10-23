@@ -107,3 +107,48 @@ jobs:
         # -ra: show skip/xfail reasons; --tb=short keeps logs readable in Actions
         xvfb-run -a python -X faulthandler -m pytest -q --tb=short
 
+  # Windows 是产品主场（PyInstaller onedir、启动桌宠.bat），但 Linux 专属的判据
+  # （layer-shell / Athena 状态根、POSIX 打包布局、Qt 平台插件闸门）必须在用例里显式
+  # 划界 —— 而不是"本机红没人看见"。这个 job 就是那条界线的守门人。
+  test-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+      fail-fast: false
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install Python dependencies
+      timeout-minutes: 10
+      run: |
+        python -m pip install --upgrade pip
+        # win32 extra 带 pywin32；numpy 是 fidus_position 的模块级依赖，pyproject 只在
+        # linux/vits extras 里声明，所以和 Linux job 一样单独装（1.x 对 3.12 有轮子）。
+        pip install -e ".[win32]"
+        pip install ruff pytest "numpy>=1.21,<2.0"
+
+    - name: Lint with ruff
+      run: python -m ruff check meapet wizard scripts tests
+
+    - name: Syntax check with compileall
+      run: python -m compileall -q meapet wizard
+
+    # 单一 pass，offscreen 平台插件（PyQt5 的 Windows 轮子里带 qoffscreen.dll）。
+    # 与 Linux 的 Xvfb 那一趟同语义：不建真窗口，只验布局与判据。
+    - name: Test with pytest (offscreen)
+      timeout-minutes: 20
+      env:
+        PYTHONDEVMODE: "1"
+        QT_QPA_PLATFORM: "offscreen"
+      run: |
+        # -ra: show skip/xfail reasons; --tb=short keeps logs readable in Actions
+        python -X faulthandler -m pytest -q --tb=short
+
+

@@ -131,6 +131,12 @@ class TestGate(unittest.TestCase):
         self.lines: list[str] = []
         self.win_plat = os.path.join(self.win, "platforms")
         self.tgt_plat = os.path.join(self.tgt, "platforms")
+        # 闸门只在 sys.platform == "linux" 时进门；判据本身与宿主无关。
+        # 钉成 linux，这 7 条判据断言在 Windows 上也跑真的——否则拿到的是
+        # skip_platform，测的变成"进门那一步"，判据本身没人验。
+        self._platform = mock.patch.object(qpa_guard.sys, "platform", "linux")
+        self._platform.start()
+        self.addCleanup(self._platform.stop)
 
     def _run(self, env: dict, loadable: set, seen: Optional[list] = None) -> dict:
         probe, probe_seen = _prober(loadable)
